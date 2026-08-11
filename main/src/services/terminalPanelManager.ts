@@ -40,6 +40,7 @@ import { detectAgentState } from './agentStatus/manifestEngine';
 import { getManifestForAgent } from './agentStatus/manifests';
 import type { AgentDetectionResult, AgentState, PanelAgentStatusEvent } from '../../../shared/types/agentStatus';
 import type { PaneEventArgument } from '../core/eventSink';
+import { stripInheritedAgentSession } from './panels/agentSessionEnv';
 
 const OUTPUT_BATCH_INTERVAL = 32; // ms (~30fps) — wider window reduces TUI flicker
 const OUTPUT_BATCH_INTERVAL_HIDDEN = 250; // ms — background / hidden cadence to cut IPC wake-up cost
@@ -1199,7 +1200,7 @@ export class TerminalPanelManager extends EventEmitter {
 
     // The ptyHost RPC DTO requires `Record<string, string>`, so both the legacy
     // `pty.spawn` path and the ptyHost path get the same undefined-free shape.
-    const inheritedEnv = interactiveTerminalEnv();
+    const inheritedEnv = stripInheritedAgentSession(interactiveTerminalEnv());
     // A Pane launched from an orchestrator must not inherit the parent's role.
     delete inheritedEnv.PANE_ORCHESTRATION_SESSION_ID;
     const baseSpawnEnv = {
