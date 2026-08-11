@@ -197,6 +197,8 @@ const GIT_STATUS_CHANNELS = [
   'sessions:get-executions',
   'sessions:get-execution-diff',
   'sessions:get-git-graph',
+  'projects:get-git-graph',
+  'projects:get-commit-detail',
   'git:file-status',
   'sessions:git-diff',
   'sessions:get-diff-manifest',
