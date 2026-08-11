@@ -1,3 +1,4 @@
+import { MAX_FILES_PER_COMMIT, type GitCommitFileChange, type GitCommitFilesResult, type GitFileChangeStatus } from '../../../shared/types/git';
 import type { Logger } from '../utils/logger';
 import type { AnalyticsManager } from './analyticsManager';
 import { CommandRunner } from '../utils/commandRunner';
@@ -13,8 +14,8 @@ import type {
 } from '../../../shared/types/gitDiff';
 import {
   mergeSummaries,
-  parseNameStatusZ,
-  parseNumstatZ,
+  parseNameStatusZ as parseScopeNameStatusZ,
+  parseNumstatZ as parseScopeNumstatZ,
   parseUnmergedFilesZ,
   resolveScope,
   type ScopeResolutionDependencies,
@@ -66,6 +67,34 @@ export interface GitDiffDependencies {
 }
 
 const DEFAULT_DIFF_MAX_BUFFER = 50 * 1024 * 1024;
+
+export const WORKING_TREE_REF = 'index';
+function legacyFileStatus(code: string): GitFileChangeStatus {
+  switch (code[0]) {
+    case 'A': return 'added'; case 'M': return 'modified'; case 'D': return 'deleted';
+    case 'R': return 'renamed'; case 'C': return 'copied'; case 'T': return 'typechange';
+    case 'U': return 'unmerged'; default: return 'unknown';
+  }
+}
+export function parseNumstatZ(raw: string) {
+  return parseScopeNumstatZ(raw).map(file => ({ oldPath: file.previousPath ?? file.path, path: file.path, additions: file.additions, deletions: file.deletions, isBinary: file.additions === null || file.deletions === null }));
+}
+export function parseNameStatusZ(raw: string) {
+  return parseScopeNameStatusZ(raw).map(file => ({ oldPath: file.previousPath ?? file.path, path: file.path, status: legacyFileStatus(file.status), ...(file.status.length > 1 && !Number.isNaN(Number.parseInt(file.status.slice(1), 10)) ? { similarity: Number.parseInt(file.status.slice(1), 10) } : {}) }));
+}
+export function mergeFileChanges(numstat: ReturnType<typeof parseNumstatZ>, names: ReturnType<typeof parseNameStatusZ>): GitCommitFileChange[] {
+  const byPath = new Map(names.map(file => [file.path, file]));
+  return numstat.map(file => { const name = byPath.get(file.path); return { ...file, oldPath: name?.oldPath ?? file.oldPath, status: name?.status ?? 'modified', ...(name?.similarity === undefined ? {} : { similarity: name.similarity }) }; });
+}
+export function parseUntrackedPathsZ(raw: string): string[] {
+  const parts = raw.split('\0'), files: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const record = parts[i]; if (!record || record.length < 4) continue;
+    if (record[0] === 'R' || record[0] === 'C') i++;
+    if (record.startsWith('?? ')) files.push(record.slice(3));
+  }
+  return files;
+}
 
 export class GitDiffManager {
   constructor(
@@ -130,10 +159,10 @@ export class GitDiffManager {
     ]);
     const files = mergeSummaries(
       [
-        ...parseNameStatusZ(names.stdout),
+        ...parseScopeNameStatusZ(names.stdout),
         ...parseUnmergedFilesZ(unmerged.stdout).map(path => ({ status: 'U', path })),
       ],
-      parseNumstatZ(stats.stdout),
+      parseScopeNumstatZ(stats.stdout),
       untracked.stdout.split('\0').filter(Boolean),
     );
     return {
@@ -182,7 +211,7 @@ export class GitDiffManager {
         worktreePath,
         options,
       );
-      const isActualSource = parseNameStatusZ(candidateNames.stdout).some(record =>
+      const isActualSource = parseScopeNameStatusZ(candidateNames.stdout).some(record =>
         (record.status.startsWith('R') || record.status.startsWith('C'))
         && record.path === request.path
         && record.previousPath === request.previousPath,
@@ -206,7 +235,7 @@ export class GitDiffManager {
         : Promise.resolve({ stdout: validatedNamesOutput, stderr: '', exitCode: 0 }),
       runner.execFile('git', ['diff', '-z', '-M', '--numstat', ...range, '--', ...paths], worktreePath, options),
     ]);
-    let files = mergeSummaries(parseNameStatusZ(names.stdout), parseNumstatZ(stats.stdout), []);
+    let files = mergeSummaries(parseScopeNameStatusZ(names.stdout), parseScopeNumstatZ(stats.stdout), []);
 
     if (!patch && files.length === 0 && resolved.target.kind === 'working-tree') {
       const listed = await runner.execFile('git', ['ls-files', '-z', '--others', '--exclude-standard', '--', request.path], worktreePath, options);
@@ -812,4 +841,36 @@ export class GitDiffManager {
     
     return diffOutput;
   }
+  /** Patch-free, bounded file details; current manifest/path APIs remain separate. */
+  async getCommitFileChanges(worktreePath: string, ref: string, runner: CommandRunner): Promise<GitCommitFilesResult> {
+    const empty: GitCommitFilesResult = { ref, files: [], totalFiles: 0, truncated: false, isMergeAgainstFirstParent: false };
+    const working = ref === WORKING_TREE_REF || ref === 'UNCOMMITTED';
+    if (!working && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(ref)) return empty;
+    try {
+      let isMerge = false;
+      if (!working) {
+        const parents = (await runner.execFile('git', ['rev-list', '--parents', '-n', '1', ref, '--'], worktreePath)).stdout.trim().split(/\s+/).slice(1);
+        isMerge = parents.length > 1;
+      }
+      const prefix = working ? ['diff'] : ['show', '--format='];
+      const suffix = working ? ['HEAD', '--'] : [...(isMerge ? ['-m', '--first-parent'] : []), ref, '--'];
+      const [numstat, names] = await Promise.all([
+        runner.execFile('git', [...prefix, '--numstat', '-M', '-z', ...suffix], worktreePath),
+        runner.execFile('git', [...prefix, '--name-status', '-M', '-z', ...suffix], worktreePath),
+      ]);
+      const files = mergeFileChanges(parseNumstatZ(numstat.stdout), parseNameStatusZ(names.stdout));
+      if (working) {
+        try {
+          const status = await runner.execFile('git', ['status', '--porcelain', '-z'], worktreePath);
+          const known = new Set(files.map(file => file.path));
+          for (const path of parseUntrackedPathsZ(status.stdout)) if (!known.has(path)) { known.add(path); files.push({ path, oldPath: path, status: 'added', additions: null, deletions: null, isBinary: false }); }
+        } catch { /* A disappearing working tree must not erase its tracked list. */ }
+      }
+      return { ref: working ? WORKING_TREE_REF : ref, files: files.slice(0, MAX_FILES_PER_COMMIT), totalFiles: files.length, truncated: files.length > MAX_FILES_PER_COMMIT, isMergeAgainstFirstParent: isMerge };
+    } catch (cause) {
+      this.logger?.error('Failed to list commit files', cause instanceof Error ? cause : undefined);
+      return empty;
+    }
+  }
+
 }
