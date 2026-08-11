@@ -431,6 +431,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       invokeIpc('export:share-image', data, filename),
   },
 
+  // Pull requests, opened from a session's branch
+  pullRequests: {
+    getDraft: (sessionId: string): Promise<IPCResponse> => invokeIpc('pr:get-draft', sessionId),
+    create: (request: unknown): Promise<IPCResponse> => invokeIpc('pr:create', request),
+    getChecks: (sessionId: string, repo: string, number: number): Promise<IPCResponse> => invokeIpc('pr:get-checks', sessionId, repo, number),
+    listBaseBranches: (sessionId: string, repo: string): Promise<IPCResponse> => invokeIpc('pr:list-base-branches', sessionId, repo),
+    getChanges: (sessionId: string, baseBranch?: string): Promise<IPCResponse> => invokeIpc('pr:get-changes', sessionId, baseBranch),
+    getDiff: (sessionId: string, baseBranch?: string): Promise<IPCResponse> => invokeIpc('pr:get-diff', sessionId, baseBranch),
+    getStatus: (sessionId: string, repo: string, number: number): Promise<IPCResponse> => invokeIpc('pr:get-status', sessionId, repo, number),
+  },
   // Session management
   sessions: {
     getAll: (): Promise<IPCResponse> => invokeIpc('sessions:get-all'),

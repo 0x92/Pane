@@ -52,6 +52,17 @@ import type {
 import type { UsageIndexStatus, UsageReport, UsageReportRequest } from '../../../shared/types/usage';
 import type { LeaderboardResponse, LeaderboardStatus, LeaderboardSubmitResult } from '../../../shared/types/leaderboard';
 import type { GitCommitFilesResult } from '../../../shared/types/git';
+import type {
+  CreatePullRequestRequest,
+  CreatePullRequestResult,
+  BaseBranchOptions,
+  PullRequestChanges,
+  PullRequestChecksResult,
+  PullRequestDiff,
+  PullRequestDraft,
+  PullRequestStatus,
+} from '../../../shared/types/pullRequest';
+import type { GitDiffResult } from './diff';
 import type { CreateSessionRequest } from './session';
 import type { DetectedProjectConfig } from '../../../shared/types/projectConfig';
 import type { RunpanePaneFocusRequestedEvent } from '../../../shared/types/runpaneOrchestration';
@@ -184,6 +195,16 @@ interface ElectronAPI {
     shareImage: (data: string, filename: string) => Promise<IPCResponse<{ method: 'share' | 'clipboard' }>>;
   };
 
+  // Pull requests, opened from a session's branch
+  pullRequests: {
+    getDraft: (sessionId: string) => Promise<IPCResponse<PullRequestDraft>>;
+    create: (request: CreatePullRequestRequest) => Promise<IPCResponse<CreatePullRequestResult>>;
+    getChecks: (sessionId: string, repo: string, number: number) => Promise<IPCResponse<PullRequestChecksResult>>;
+    listBaseBranches: (sessionId: string, repo: string) => Promise<IPCResponse<BaseBranchOptions>>;
+    getChanges: (sessionId: string, baseBranch?: string) => Promise<IPCResponse<PullRequestChanges>>;
+    getDiff: (sessionId: string, baseBranch?: string) => Promise<IPCResponse<PullRequestDiff>>;
+    getStatus: (sessionId: string, repo: string, number: number) => Promise<IPCResponse<PullRequestStatus | null>>;
+  };
   // Session management
   sessions: {
     getAll: () => Promise<IPCResponse>;
