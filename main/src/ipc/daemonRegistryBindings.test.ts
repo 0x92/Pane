@@ -394,6 +394,16 @@ describe('daemon registry IPC bindings', () => {
     expect(ipcMain.boundChannels.sort()).toEqual([...USAGE_CHANNELS].sort());
   });
 
+  it('binds daemon-owned pull request channels through the shared registry', () => {
+    const registry = new PaneCommandRegistry();
+    const ipcMain = createIpcMainStub();
+
+    registerPullRequestHandlers(ipcMain, createServicesStub(), registry);
+
+    expect(registry.listChannels()).toEqual([...PULL_REQUEST_CHANNELS].sort());
+    expect(ipcMain.boundChannels.sort()).toEqual([...PULL_REQUEST_CHANNELS].sort());
+  });
+
   it('binds daemon-owned prompt channels through the shared registry', () => {
     const registry = new PaneCommandRegistry();
     const ipcMain = createIpcMainStub();
