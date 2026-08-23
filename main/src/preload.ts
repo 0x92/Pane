@@ -39,6 +39,7 @@ import type { SubmitFeedbackRequest } from '../../shared/types/feedback';
 import type { RunpanePaneFocusRequestedEvent } from '../../shared/types/runpaneOrchestration';
 import type { PaneLinkTarget } from '../../shared/types/paneLinks';
 import type { ArchiveProgressSnapshot } from '../../shared/types/archiveProgress';
+import type { RepoGitGraphRequest } from '../../shared/types/gitGraph';
 import type {
   PanePermissionRequest as PermissionRequest,
   PanePermissionResponse as PermissionResponse,
@@ -562,7 +563,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     resolveRunScript: (sessionId: string): Promise<IPCResponse> => invokeIpc('projects:resolve-run-script', sessionId),
     /** Repository-wide commit graph across every branch and tag. */
-    getGitGraph: (request: { projectId: number; limit?: number; remoteScope?: string; focusRef?: string }): Promise<IPCResponse> => invokeIpc('projects:get-git-graph', request),
+    getGitGraph: (request: RepoGitGraphRequest): Promise<IPCResponse> => invokeIpc('projects:get-git-graph', request),
     /** Full patch for one commit, resolved against the project checkout. */
     getCommitDetail: (projectId: number, commitHash: string): Promise<IPCResponse> => invokeIpc('projects:get-commit-detail', projectId, commitHash),
   },
