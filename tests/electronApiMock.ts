@@ -2,6 +2,13 @@ import type { Page } from '@playwright/test';
 import type { PaneChatAgent } from '../shared/types/paneChat';
 import type { PanePermissionRequest, PanePermissionResponse } from '../shared/types/permissions';
 import type {
+  BaseBranchOptions,
+  PullRequestChanges,
+  PullRequestDiff,
+  PullRequestDraft,
+  PullRequestStatus,
+} from '../shared/types/pullRequest';
+import type {
   RemoteDaemonClientRecord,
   RemoteDaemonConfig,
   RemoteDaemonHostConfig,
@@ -60,6 +67,11 @@ type ElectronApiMockOptions = {
   initialLayout?: JsonObject | null;
   initialCommitDiff?: JsonObject | null;
   initialCommitFiles?: JsonObject[];
+  pullRequestDraft?: PullRequestDraft;
+  pullRequestBranches?: BaseBranchOptions;
+  pullRequestChanges?: PullRequestChanges;
+  pullRequestDiff?: PullRequestDiff;
+  pullRequestStatus?: PullRequestStatus | null;
   initialTerminalStates?: Record<string, JsonObject>;
   initialAgentUsage?: JsonObject;
   initialUsageReport?: JsonObject;
@@ -706,6 +718,13 @@ export async function installElectronApiMock(page: Page, options: ElectronApiMoc
           configState.defaultOrchestratorAgent = agent === 'codex' || agent === 'cursor' ? agent : 'claude';
           return success(createPaneChatState());
         },
+      }),
+      pullRequests: namespace({
+        getDraft: () => success(clone(mockOptions.pullRequestDraft ?? null)),
+        listBaseBranches: () => success(clone(mockOptions.pullRequestBranches ?? { all: [], local: [] })),
+        getChanges: () => success(clone(mockOptions.pullRequestChanges ?? null)),
+        getDiff: () => success(clone(mockOptions.pullRequestDiff ?? null)),
+        getStatus: () => success(clone(mockOptions.pullRequestStatus ?? null)),
       }),
       panels: namespace({
         getSessionPanels: (sessionId: string) => success(
