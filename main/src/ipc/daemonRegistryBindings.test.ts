@@ -16,7 +16,6 @@ import { registerScriptHandlers } from './script';
 import { registerSessionHandlers } from './session';
 import { registerVoiceHandlers } from './voice';
 import { registerScheduleHandlers } from './schedule';
-import { registerUsageHandlers } from './usage';
 import type { AppServices } from './types';
 import { isDaemonOwnedChannel } from '../../../shared/types/daemon';
 
