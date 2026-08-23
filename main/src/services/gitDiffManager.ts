@@ -1,6 +1,7 @@
+import { parseNumstatZ, parseNameStatusZ, mergeFileChanges, splitNulSeparated } from './gitDiffParsers';
 import { createReadStream } from 'fs';
 import { linuxToUNCPath, posixJoin, type WSLContext } from '../utils/wslUtils';
-import { MAX_FILES_PER_COMMIT, WORKING_TREE_REF, type GitCommitFileChange, type GitCommitFilesResult, type GitFileChangeStatus } from '../../../shared/types/git';
+import { MAX_FILES_PER_COMMIT, WORKING_TREE_REF, type GitCommitFileChange, type GitCommitFilesResult } from '../../../shared/types/git';
 import type { Logger } from '../utils/logger';
 import type { AnalyticsManager } from './analyticsManager';
 import { CommandRunner } from '../utils/commandRunner';
@@ -69,24 +70,6 @@ export interface GitDiffDependencies {
 }
 
 const DEFAULT_DIFF_MAX_BUFFER = 50 * 1024 * 1024;
-
-function legacyFileStatus(code: string): GitFileChangeStatus {
-  switch (code[0]) {
-    case 'A': return 'added'; case 'M': return 'modified'; case 'D': return 'deleted';
-    case 'R': return 'renamed'; case 'C': return 'copied'; case 'T': return 'typechange';
-    case 'U': return 'unmerged'; default: return 'unknown';
-  }
-}
-export function parseNumstatZ(raw: string) {
-  return parseScopeNumstatZ(raw).map(file => ({ oldPath: file.previousPath ?? file.path, path: file.path, additions: file.additions, deletions: file.deletions, isBinary: file.additions === null || file.deletions === null }));
-}
-export function parseNameStatusZ(raw: string) {
-  return parseScopeNameStatusZ(raw).map(file => ({ oldPath: file.previousPath ?? file.path, path: file.path, status: legacyFileStatus(file.status) }));
-}
-export function mergeFileChanges(numstat: ReturnType<typeof parseNumstatZ>, names: ReturnType<typeof parseNameStatusZ>): GitCommitFileChange[] {
-  const byPath = new Map(names.map(file => [file.path, file]));
-  return numstat.map(file => { const name = byPath.get(file.path); return { ...file, oldPath: name?.oldPath ?? file.oldPath, status: name?.status ?? 'modified' }; });
-}
 export function parseUntrackedPathsZ(raw: string): string[] {
   const parts = raw.split('\0'), files: string[] = [];
   for (let i = 0; i < parts.length; i++) {
@@ -115,18 +98,6 @@ const MAX_UNTRACKED_INLINE_FILE_BYTES = 1024 * 1024;
 
 /** A working-tree diff can be large; don't truncate it at Node's 1MB default. */
 const MAX_DIFF_BUFFER_BYTES = 64 * 1024 * 1024;
-
-/**
- * Split NUL-separated git output.
- *
- * Git only quotes and escapes a path when it has to delimit it with a newline;
- * under `-z` the bytes come through exactly as they are on disk. Nothing is
- * trimmed here for the same reason — a leading or trailing space is part of the
- * name, not padding.
- */
-export function splitNulSeparated(raw: string): string[] {
-  return raw.split('\0').filter(entry => entry.length > 0);
-}
 
 /**
  * The path Node's `fs` needs for a file git named relative to the worktree.

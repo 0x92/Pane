@@ -1,3 +1,4 @@
+import { splitNulSeparated } from './gitDiffParsers';
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readdir } from 'fs/promises';
 import { execFileSync } from 'child_process';
@@ -6,7 +7,6 @@ import { join } from 'path';
 import {
   GitDiffManager,
   MAX_UNTRACKED_INLINE_FILES,
-  splitNulSeparated,
   untrackedFilePath,
 } from './gitDiffManager';
 import { CommandRunner } from '../utils/commandRunner';
