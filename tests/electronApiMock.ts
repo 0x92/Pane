@@ -57,6 +57,7 @@ type ElectronApiMockOptions = {
   gitCommands?: JsonObject;
   /** Seeded split layout for the session under test (panels:get-layout). */
   initialLayout?: JsonObject | null;
+  initialCommitDiff?: JsonObject | null;
   initialCommitFiles?: JsonObject[];
   initialTerminalStates?: Record<string, JsonObject>;
   initialAgentUsage?: JsonObject;
@@ -866,6 +867,7 @@ export async function installElectronApiMock(page: Page, options: ElectronApiMoc
           gitStageAndCommitCalls.push({ sessionId, message });
           return success();
         },
+        getCommitDiffByHash: () => success(clone(mockOptions.initialCommitDiff ?? null)),
         getCommitFiles: (_sessionId: string, ref: string) => success({
           ref,
           files: clone(mockOptions.initialCommitFiles ?? []),
