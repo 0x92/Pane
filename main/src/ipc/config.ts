@@ -7,8 +7,9 @@ import type { RemotePwaAffordances } from '../../../shared/types/remoteDaemon';
 import type { VoiceTranscriptionMode } from '../../../shared/types/voiceTranscription';
 import { ShellDetector } from '../utils/shellDetector';
 import { syncAutoStartOnBoot } from '../utils/autoStart';
-import { ensureProjectAgentContext } from '../services/agentContextManager';
+import { applyManagedAgentsMdSetting } from '../services/agentContextManager';
 import { syncPaneMcpForApp } from '../services/paneMcpRegistration';
+import { isPaneHomeSkillEnabled, syncPaneHomeSkill } from '../services/paneHomeSkill';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 import { AppearanceValidationError } from '../../../shared/types/appearance';
 
@@ -61,8 +62,14 @@ export function registerConfigHandlers(
         && updates.agentContext.registerMcp !== (oldConfig.agentContext?.registerMcp !== false))
         || (updates.agentContext?.mcpToolsets !== undefined
           && updates.agentContext.mcpToolsets.join(',') !== (oldConfig.agentContext?.mcpToolsets ?? []).join(','));
+      const homeSkillChanged = updates.agentContext?.homeSkill !== undefined
+        && updates.agentContext.homeSkill !== isPaneHomeSkillEnabled(oldConfig);
 
-      const updatedConfig = await configManager.updateConfig(updates);
+      let updatedConfig = await configManager.updateConfig(
+        managedAgentsMdChanged && updates.agentContext?.managedAgentsMd === false
+          ? { ...updates, agentContext: { ...updates.agentContext, cleanupPending: true } }
+          : updates,
+      );
 
       if (updates.autoStartOnBoot !== undefined) {
         syncAutoStartOnBoot(app, updates.autoStartOnBoot !== false);
@@ -74,15 +81,21 @@ export function registerConfigHandlers(
         console.log('[Config] Claude executable path changed, cleared availability cache');
       }
 
-      if (managedAgentsMdChanged && configManager.getConfig().agentContext?.managedAgentsMd !== false) {
-        const activeProject = sessionManager.getActiveProject();
-        if (activeProject) {
-          try {
-            await ensureProjectAgentContext(activeProject, configManager.getConfig());
-          } catch (error) {
-            console.warn('[Config] Failed to update Pane agent context after setting change:', error);
-          }
+      if (managedAgentsMdChanged) {
+        const cleanupSucceeded = await applyManagedAgentsMdSetting(configManager.getConfig(), {
+          all: () => databaseService.getAllProjects(),
+          active: () => sessionManager.getActiveProject(),
+        });
+        if (updates.agentContext?.managedAgentsMd === false && cleanupSucceeded) {
+          updatedConfig = await configManager.updateConfig({ agentContext: { cleanupPending: false } });
         }
+      }
+
+      if (homeSkillChanged) {
+        const distros = databaseService.getAllProjects()
+          .flatMap(project => project.wsl_enabled && project.wsl_distribution ? [project.wsl_distribution] : []);
+        await syncPaneHomeSkill(configManager.getConfig(), undefined, distros)
+          .catch(error => console.warn('[Config] Failed to update the Pane home skill after setting change:', error));
       }
 
       if (registerMcpChanged) {
