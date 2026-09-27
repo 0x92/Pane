@@ -39,6 +39,13 @@ describe('ConfigManager appearance persistence', () => {
     expect(manager.getConfig().analytics?.enabled).toBe(false);
   });
 
+  it('keeps writing AGENTS.md and turns on MCP registration for existing installs', async () => {
+    await fs.writeFile(configPath, JSON.stringify({ agentContext: { managedAgentsMd: true } }));
+    const manager = new ConfigManager();
+    await manager.initialize();
+    expect(manager.getConfig().agentContext).toEqual({ managedAgentsMd: true, registerMcp: true });
+  });
+
   it('migrates a legacy theme once', async () => {
     await fs.writeFile(configPath, JSON.stringify({ theme: 'forge' }));
     const manager = new ConfigManager();

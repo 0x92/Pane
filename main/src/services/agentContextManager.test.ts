@@ -34,22 +34,25 @@ describe('agentContextManager', () => {
     }
   });
 
-  it('creates AGENTS.md with a managed Pane block by default', async () => {
+  it('creates AGENTS.md with a short CLI and MCP pointer by default', async () => {
     const projectPath = await createTempProject();
 
-    const result = await ensureProjectAgentContext({ path: projectPath }, enabledConfig());
+    const result = await ensureProjectAgentContext({ path: projectPath }, {});
 
     expect(result.changed).toBe(true);
     expect(result.filePath).toBe(path.join(projectPath, 'AGENTS.md'));
     const content = await fs.readFile(path.join(projectPath, 'AGENTS.md'), 'utf8');
     expect(content).toContain(PANE_AGENT_CONTEXT_START);
+    expect(content).toContain('npm i -g runpane');
+    expect(content).toContain('npx --yes runpane@latest');
     expect(content).toContain('runpane doctor --json');
-    expect(content).toContain('runpane agent-context');
-    expect(content).toContain('Default to context-safe validation');
-    expect(content).toContain('runpane watch --follow');
-    expect(content).toContain('Prefer `runpane panels submit` for normal text plus Enter');
-    expect(content).toContain('Set-Location $env:TEMP');
-    expect(content).toContain('broken Windows shim');
+    expect(content).toContain('runpane agent-context --json');
+    expect(content).toContain('claude mcp add --scope user pane -- npx --yes runpane@latest mcp');
+    expect(content).toContain('[mcp_servers.pane]');
+    expect(content).toContain('claude mcp list');
+    expect(content).toContain('codex mcp list');
+    expect(content).not.toContain('Typical workflow: register the saved base repository once');
+    expect(content).not.toContain('Skill routing reference:');
     expect(content).toContain(PANE_AGENT_CONTEXT_END);
   });
 
@@ -90,13 +93,14 @@ describe('agentContextManager', () => {
     expect(content).toContain('# User Top');
     expect(content).toContain('# User Bottom');
     expect(content).not.toContain('old managed content');
+    expect(content).toContain('runpane doctor --json');
     expect(content.match(/pane-agent-context:start/g)).toHaveLength(1);
   });
 
-  it('removes the Pane-owned block when managed AGENTS is disabled', async () => {
+  it('neither writes nor removes a block while the setting is off', async () => {
     const projectPath = await createTempProject();
     const agentsPath = path.join(projectPath, 'AGENTS.md');
-    await fs.writeFile(agentsPath, [
+    const agentsWithBlock = [
       '# User Top',
       '',
       PANE_AGENT_CONTEXT_START,
@@ -105,26 +109,17 @@ describe('agentContextManager', () => {
       '',
       '# User Bottom',
       ''
-    ].join('\n'), 'utf8');
+    ].join('\n');
+    await fs.writeFile(agentsPath, agentsWithBlock, 'utf8');
+    const emptyProjectPath = await createTempProject();
 
-    const result = await ensureProjectAgentContext({ path: projectPath }, disabledConfig());
+    const existing = await ensureProjectAgentContext({ path: projectPath }, disabledConfig());
+    const fresh = await ensureProjectAgentContext({ path: emptyProjectPath }, disabledConfig());
 
-    expect(result).toMatchObject({ changed: true, removed: true, filePath: agentsPath });
-    const content = await fs.readFile(agentsPath, 'utf8');
-    expect(content).toContain('# User Top');
-    expect(content).toContain('# User Bottom');
-    expect(content).not.toContain(PANE_AGENT_CONTEXT_START);
-  });
-
-  it('keeps an otherwise empty AGENTS.md file when disabling', async () => {
-    const projectPath = await createTempProject();
-    const agentsPath = path.join(projectPath, 'AGENTS.md');
-
-    await ensureProjectAgentContext({ path: projectPath }, enabledConfig());
-    await ensureProjectAgentContext({ path: projectPath }, disabledConfig());
-
-    await expect(fs.access(agentsPath)).resolves.toBeUndefined();
-    await expect(fs.readFile(agentsPath, 'utf8')).resolves.toBe('');
+    expect(existing).toMatchObject({ changed: false, skipped: 'disabled' });
+    expect(fresh).toMatchObject({ changed: false, skipped: 'disabled' });
+    await expect(fs.readFile(agentsPath, 'utf8')).resolves.toBe(agentsWithBlock);
+    await expect(fs.readdir(emptyProjectPath)).resolves.toEqual([]);
   });
 
   it('does not follow symlinked AGENTS.md files', async () => {

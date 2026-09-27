@@ -90,7 +90,8 @@ export class ConfigManager extends EventEmitter {
       },
       analytics: defaultAnalyticsConfig(),
       agentContext: {
-        managedAgentsMd: true
+        managedAgentsMd: true,
+        registerMcp: true
       },
       remoteDaemon: createDefaultRemoteDaemonConfig(),
       keyboardShortcutsEnabled: true,
@@ -203,6 +204,11 @@ export class ConfigManager extends EventEmitter {
       };
 
       let shouldPersistMigration = normalizedAppearance.migrated;
+      if (loadedConfig.agentContext?.registerMcp === undefined) {
+        this.config.agentContext = { ...this.config.agentContext, registerMcp: true };
+        shouldPersistMigration = true;
+        console.log('[ConfigManager] Pane now registers its MCP server with Claude Code and Codex.');
+      }
       if (this.config.analytics?.posthogHost === LEGACY_POSTHOG_HOST) {
         this.config.analytics.posthogHost = DEFAULT_POSTHOG_HOST;
         shouldPersistMigration = true;

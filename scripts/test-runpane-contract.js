@@ -599,6 +599,14 @@ function compareParserParity() {
       selfTest: parsed.selfTest ?? false,
       report: parsed.report ?? false,
       bodyFile: parsed.bodyFile ?? null,
+      message: parsed.message ?? null,
+      query: parsed.query ?? null,
+      doc: parsed.doc ?? null,
+      url: parsed.url ?? null,
+      folder: parsed.folder ?? null,
+      keys: parsed.keys ?? null,
+      toolsets: parsed.toolsets ?? null,
+      readOnly: parsed.readOnly ?? false,
       remoteSetupArgs: parsed.remoteSetupArgs
     };
   });
@@ -680,6 +688,14 @@ for args in samples:
         "selfTest": parsed.self_test,
         "report": parsed.report,
         "bodyFile": parsed.body_file,
+        "message": parsed.message,
+        "query": parsed.query,
+        "doc": parsed.doc,
+        "url": parsed.url,
+        "folder": parsed.folder,
+        "keys": parsed.keys,
+        "toolsets": parsed.toolsets,
+        "readOnly": parsed.read_only,
         "remoteSetupArgs": parsed.remote_setup_args,
     })
 print(json.dumps(normalized))
@@ -2209,31 +2225,19 @@ function compareAgentContextParity() {
   const managedBlock = nodeBrief.source === 'runpane-contract'
     ? require(path.join(rootDir, 'packages', 'runpane', 'dist', 'generated', 'contract.js')).RUNPANE_CONTRACT.agentContext.managedBlock.join('\n')
     : '';
-  assert.ok(managedBlock.includes('Typical workflow: register the saved base repository once'));
-  assert.ok(managedBlock.includes('one Pane (Pane session) per feature/PR'));
-  assert.ok(managedBlock.includes('clean up its managed worktree when applicable'));
-  assert.ok(managedBlock.includes('created by [runpane.com](https://runpane.com)'));
-  assert.ok(managedBlock.includes('[Pane repository](https://github.com/dcouple/Pane)'));
-  assert.ok(managedBlock.includes('Do not delete or overwrite this block'));
-  assert.ok(managedBlock.includes('Default happy path when the user asks you to use Pane or RunPane'));
-  assert.ok(managedBlock.includes('resolve the saved base repository'));
-  assert.ok(managedBlock.includes('runpane panes create --repo <repo> --name <name> --agent <agent> --prompt'));
-  assert.ok(managedBlock.includes('equivalent `--tool-command <command>` form'));
-  assert.ok(!managedBlock.includes('with `runpane panes create --source agent --no-focus --wait-ready --yes --json`'));
-  assert.ok(managedBlock.includes('Skill routing reference:'));
-  assert.ok(managedBlock.includes('<PANE_DIR>/skills/pane-chat/skills/'));
-  assert.ok(managedBlock.includes('<PANE_DIR>/skills/pane-chat/pane-orchestrator/SKILL.md'));
-  assert.ok(!managedBlock.includes('runpane-orchestrator.md'));
-  assert.ok(!managedBlock.includes('.sources/dcouple-skills'));
-  assert.ok(managedBlock.includes('Choose the phase from the request'));
-  assert.ok(managedBlock.includes('main/src/services/skillCacheManager.ts'));
-  assert.ok(managedBlock.includes('main/src/services/paneChatBundle/'));
-  assert.ok(managedBlock.includes('main/src/services/paneChatManager.ts'));
-  assert.ok(managedBlock.includes('tiny bootstrap prompt that tells the selected Pane Chat agent to read it'));
-  assert.ok(managedBlock.includes('Do not hardcode a specific assistant brand'));
-  assert.ok(managedBlock.includes('Pane agent or custom tool command the user selected'));
-  assert.ok(managedBlock.includes('runpane watch --follow'));
-  assert.ok(managedBlock.includes('For ongoing supervision'));
+  assert.ok(managedBlock.includes('npm i -g runpane'));
+  assert.ok(managedBlock.includes('npx --yes runpane@latest'));
+  assert.ok(managedBlock.includes('runpane doctor --json'));
+  assert.ok(managedBlock.includes('runpane agent-context --json'));
+  assert.ok(managedBlock.includes('claude mcp add --scope user pane -- npx --yes runpane@latest mcp'));
+  assert.ok(managedBlock.includes('[mcp_servers.pane]'));
+  assert.ok(managedBlock.includes('command = "npx"'));
+  assert.ok(managedBlock.includes('runpane@latest'));
+  assert.ok(managedBlock.includes('claude mcp list'));
+  assert.ok(managedBlock.includes('codex mcp list'));
+  assert.ok(!managedBlock.includes('Typical workflow: register the saved base repository once'));
+  assert.ok(!managedBlock.includes('Skill routing reference:'));
+  assert.ok(!managedBlock.includes('main/src/services/skillCacheManager.ts'));
 
   const nodeDottedDetail = JSON.parse(runNode(['agent-context', '--command', 'panes.create', '--json']));
   const pyDottedDetail = JSON.parse(runPython(['agent-context', '--command', 'panes.create', '--json']));

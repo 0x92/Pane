@@ -117,7 +117,7 @@ describe('config IPC handlers', () => {
     }
   });
 
-  it('removes managed AGENTS blocks from all saved projects when disabled', async () => {
+  it('leaves existing AGENTS.md blocks when publishing is turned off', async () => {
     const activeProject = await createTempProject(1);
     const inactiveProject = await createTempProject(2);
     const activeAgentsPath = path.join(activeProject.path, 'AGENTS.md');
@@ -145,9 +145,8 @@ describe('config IPC handlers', () => {
     const activeContent = await fs.readFile(activeAgentsPath, 'utf8');
     const inactiveContent = await fs.readFile(inactiveAgentsPath, 'utf8');
     expect(activeContent).toContain('Keep this line.');
-    expect(activeContent).not.toContain(PANE_AGENT_CONTEXT_START);
-    expect(inactiveContent).toBe('');
-    await expect(fs.access(inactiveAgentsPath)).resolves.toBeUndefined();
+    expect(activeContent).toContain(PANE_AGENT_CONTEXT_START);
+    expect(inactiveContent).toContain(PANE_AGENT_CONTEXT_START);
   });
 
   it('returns the specific appearance validation error envelope', async () => {

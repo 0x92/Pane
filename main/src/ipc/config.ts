@@ -8,6 +8,7 @@ import type { VoiceTranscriptionMode } from '../../../shared/types/voiceTranscri
 import { ShellDetector } from '../utils/shellDetector';
 import { syncAutoStartOnBoot } from '../utils/autoStart';
 import { ensureProjectAgentContext } from '../services/agentContextManager';
+import { syncPaneMcpForApp } from '../services/paneMcpRegistration';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 import { AppearanceValidationError } from '../../../shared/types/appearance';
 
@@ -56,6 +57,10 @@ export function registerConfigHandlers(
                                updates.claudeExecutablePath !== oldConfig.claudeExecutablePath;
       const managedAgentsMdChanged = updates.agentContext?.managedAgentsMd !== undefined
         && updates.agentContext.managedAgentsMd !== oldConfig.agentContext?.managedAgentsMd;
+      const registerMcpChanged = (updates.agentContext?.registerMcp !== undefined
+        && updates.agentContext.registerMcp !== (oldConfig.agentContext?.registerMcp !== false))
+        || (updates.agentContext?.mcpToolsets !== undefined
+          && updates.agentContext.mcpToolsets.join(',') !== (oldConfig.agentContext?.mcpToolsets ?? []).join(','));
 
       const updatedConfig = await configManager.updateConfig(updates);
 
@@ -69,20 +74,23 @@ export function registerConfigHandlers(
         console.log('[Config] Claude executable path changed, cleared availability cache');
       }
 
-      if (managedAgentsMdChanged) {
-        const nextConfig = configManager.getConfig();
+      if (managedAgentsMdChanged && configManager.getConfig().agentContext?.managedAgentsMd !== false) {
         const activeProject = sessionManager.getActiveProject();
-        const projects = nextConfig.agentContext?.managedAgentsMd === false
-          ? databaseService.getAllProjects()
-          : activeProject ? [activeProject] : [];
-
-        for (const project of projects) {
+        if (activeProject) {
           try {
-            await ensureProjectAgentContext(project, nextConfig);
+            await ensureProjectAgentContext(activeProject, configManager.getConfig());
           } catch (error) {
             console.warn('[Config] Failed to update Pane agent context after setting change:', error);
           }
         }
+      }
+
+      if (registerMcpChanged) {
+        syncPaneMcpForApp({
+          isPackaged: app.isPackaged,
+          config: configManager.getConfig(),
+          getProjects: () => databaseService.getAllProjects(),
+        });
       }
 
       // Apply UI scale live
