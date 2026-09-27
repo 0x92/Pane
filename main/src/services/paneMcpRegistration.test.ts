@@ -163,6 +163,61 @@ describe('syncMcpRegistration', () => {
     expect(await fs.readFile(realPath, 'utf8')).toContain('[mcp_servers.pane]');
   });
 
+  it('adds Cursor with stdio, preserves other settings, updates toolsets, and removes only Pane', async () => {
+    const configPath = path.join(await tempDir(), 'mcp.json');
+    const original = { inputs: [{ id: 'token' }], mcpServers: { docs: { url: 'https://example.test/mcp' } } };
+    await fs.writeFile(configPath, JSON.stringify(original));
+    const target: McpRegistrationTarget = { label: 'test', server, cursor: { configPath } };
+    const readConfig = async () => JSON.parse(await fs.readFile(configPath, 'utf8'));
+
+    expect(await syncMcpRegistration(target, true)).toEqual([{ client: 'Cursor', action: 'added' }]);
+    expect(await readConfig()).toEqual({ ...original, mcpServers: { ...original.mcpServers, pane: { type: 'stdio', ...server } } });
+    const firstWrite = await fs.readFile(configPath, 'utf8');
+    expect(await syncMcpRegistration(target, true)).toEqual([{ client: 'Cursor', action: 'unchanged' }]);
+    expect(await fs.readFile(configPath, 'utf8')).toBe(firstWrite);
+
+    const updatedServer = { ...server, args: [...server.args, '--toolsets', 'all'], env: { ...server.env, PANE_DIR: '/tmp/pane' } };
+    expect(await syncMcpRegistration({ ...target, server: updatedServer }, true)).toEqual([{ client: 'Cursor', action: 'updated' }]);
+    expect((await readConfig()).mcpServers.pane).toEqual({ type: 'stdio', ...updatedServer });
+    expect(await syncMcpRegistration({ ...target, server: updatedServer }, false)).toEqual([{ client: 'Cursor', action: 'removed' }]);
+    expect(await readConfig()).toEqual(original);
+  });
+
+  it('creates Cursor config and follows a symlinked mcp.json', async () => {
+    const dir = await tempDir();
+    const emptyPath = path.join(dir, 'empty.json');
+    await fs.writeFile(emptyPath, '  \n');
+    expect(await syncMcpRegistration({ label: 'test', server, cursor: { configPath: emptyPath } }, true)).toEqual([{ client: 'Cursor', action: 'added' }]);
+    expect(JSON.parse(await fs.readFile(emptyPath, 'utf8')).mcpServers.pane).toEqual({ type: 'stdio', ...server });
+
+    const configPath = path.join(dir, '.cursor', 'mcp.json');
+    const target: McpRegistrationTarget = { label: 'test', server, cursor: { configPath } };
+    expect(await syncMcpRegistration(target, true)).toEqual([{ client: 'Cursor', action: 'added' }]);
+    expect(JSON.parse(await fs.readFile(configPath, 'utf8')).mcpServers.pane).toEqual({ type: 'stdio', ...server });
+
+    const realPath = path.join(dir, 'dotfiles-mcp.json');
+    await fs.rename(configPath, realPath);
+    await fs.symlink(realPath, configPath);
+    expect(await syncMcpRegistration({ ...target, server: { ...server, command: '/new/Pane' } }, true)).toEqual([{ client: 'Cursor', action: 'updated' }]);
+    expect((await fs.lstat(configPath)).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(await fs.readFile(realPath, 'utf8')).mcpServers.pane.command).toBe('/new/Pane');
+  });
+
+  it('leaves hand-added and invalid Cursor configs unchanged', async () => {
+    const configPath = path.join(await tempDir(), 'mcp.json');
+    for (const content of [
+      JSON.stringify({ mcpServers: { pane: { command: 'npx', args: ['--yes', 'runpane@latest', 'mcp'] } } }),
+      '{ "mcpServers":',
+      JSON.stringify({ mcpServers: [] }),
+    ]) {
+      await fs.writeFile(configPath, content);
+      const target: McpRegistrationTarget = { label: 'test', server, cursor: { configPath } };
+      expect((await syncMcpRegistration(target, true))[0].action).toBe('skipped');
+      expect((await syncMcpRegistration(target, false))[0].action).toBe('skipped');
+      expect(await fs.readFile(configPath, 'utf8')).toBe(content);
+    }
+  });
+
   it('registers with Claude Code once, repairs a moved app, and unregisters', async () => {
     const configPath = path.join(await tempDir(), '.claude.json');
     const other = { type: 'http', url: 'https://example.test/mcp' };

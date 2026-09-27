@@ -207,7 +207,7 @@ export class ConfigManager extends EventEmitter {
       if (loadedConfig.agentContext?.registerMcp === undefined) {
         this.config.agentContext = { ...this.config.agentContext, registerMcp: true };
         shouldPersistMigration = true;
-        console.log('[ConfigManager] Pane now registers its MCP server with Claude Code and Codex.');
+        console.log('[ConfigManager] Pane now registers its MCP server with Claude Code, Codex, and Cursor.');
       }
       if (this.config.analytics?.posthogHost === LEGACY_POSTHOG_HOST) {
         this.config.analytics.posthogHost = DEFAULT_POSTHOG_HOST;

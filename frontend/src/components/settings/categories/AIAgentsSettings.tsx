@@ -61,12 +61,12 @@ export function AIAgentsSettings({ persistence, onDirtyChange }: AIAgentsSetting
         </SettingRow>
         <SettingRow
           settingId="mcp-registration"
-          label="Register Pane tools with Claude Code and Codex"
-          description="Adds a pane MCP server to your user-level Claude Code and Codex config, so agents in every repository can list, create, and drive Panes. Turning this off removes the entry."
+          label="Register Pane tools with Claude Code, Codex, and Cursor"
+          description="Adds a pane MCP server to your user-level Claude Code, Codex, and Cursor configs, so agents in every repository can list, create, and drive Panes. Turning this off removes Pane's entry."
           saveState={persistence.saveStates['mcp-registration']}
         >
           <ImmediateToggle
-            label="Register Pane tools with Claude Code and Codex"
+            label="Register Pane tools with Claude Code, Codex, and Cursor"
             value={config.agentContext?.registerMcp !== false}
             onSave={(value) => persistence.saveConfig('mcp-registration', { agentContext: { registerMcp: value } })}
           />

@@ -8,21 +8,22 @@ The Pane desktop app registers the server for you. On launch, Pane adds a `pane`
 
 - **Claude Code**: via `claude mcp add pane --scope user …`, which writes `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`).
 - **Codex**: a `[mcp_servers.pane]` table in `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`).
+- **Cursor**: a `mcpServers.pane` entry in `~/.cursor/mcp.json`. Pane detects Cursor from `~/.cursor`, `cursor`, or `agent` on PATH.
 
-Pane registers only with the CLIs that are installed, and it manages only the entry it wrote:
+Pane registers only when it detects the corresponding client, and it manages only the entry it wrote:
 
 - It leaves other MCP servers and settings alone and never writes a second `pane` entry.
 - It rewrites its own entry when the app moves or updates.
-- A `pane` entry you added yourself (for example with `npx runpane mcp`) is left untouched, including when you turn the setting off. For Claude Code, Pane's entry is the one that runs `<Pane data dir>/mcp/runpane/dist/cli.js`. For Codex, it's the `[mcp_servers.pane]` table carrying the `# Managed by Pane` comment.
-- Pane edits `config.toml` as text, so your comments and formatting survive. It then parses the result and writes nothing unless the only change is Pane's own entry. Writes are atomic and follow a symlinked config.
+- A `pane` entry you added yourself (for example with `npx runpane mcp`) is left untouched, including when you turn the setting off. For Claude Code, Pane's entry is the one that runs `<Pane data dir>/mcp/runpane/dist/cli.js`. For Codex, it's the `[mcp_servers.pane]` table carrying the `# Managed by Pane` comment. For Cursor, it is the entry whose first argument is Pane's bundled runpane copy.
+- Pane edits `config.toml` as text, so your comments and formatting survive. It then parses the result and writes nothing unless the only change is Pane's own entry. Cursor JSON is parsed before editing; invalid JSON is left untouched. Writes are atomic and follow a symlinked config.
 
 On Windows, Pane also registers inside each WSL distro that has a saved WSL repository. Agents there run the Windows Pane binary through WSL interop.
 
 The registered command is the Pane executable in Node mode (`ELECTRON_RUN_AS_NODE=1`) running a copy of the runpane CLI at `<Pane data dir>/mcp/runpane/dist/cli.js`. No Node.js or npm install is needed. Only packaged builds register; a development build never touches your agent config.
 
-To turn this off, open **Settings → AI & Agents** and switch off **Register Pane tools with Claude Code and Codex**. Pane then removes its entry from each config.
+To turn this off, open **Settings → AI & Agents** and switch off **Register Pane tools with Claude Code, Codex, and Cursor**. Pane then removes its entry from each config.
 
-Restart a running `claude` or `codex` session to pick up a new registration. Check it with `claude mcp list` or `codex mcp list`.
+Restart a running `claude` or `codex` session to pick up a new registration. In Cursor, start a new chat or use **Developer: Reload Window**. Check with `claude mcp list`, `codex mcp list`, or `agent mcp list`. Cursor CLI may require `agent mcp enable pane` to add the server to its local approved list; Pane leaves that trust decision to you.
 
 ## Toolsets
 
@@ -67,7 +68,7 @@ codex mcp add pane -- npx --yes runpane@latest mcp
 Cursor (`~/.cursor/mcp.json`):
 
 ```json
-{ "mcpServers": { "pane": { "command": "npx", "args": ["--yes", "runpane@latest", "mcp"] } } }
+{ "mcpServers": { "pane": { "type": "stdio", "command": "npx", "args": ["--yes", "runpane@latest", "mcp"] } } }
 ```
 
 VS Code (`.vscode/mcp.json`, or run **MCP: Add Server**):
@@ -88,11 +89,11 @@ Automated tests cover the registration and link logic on every OS. Check these b
 
 **macOS, Windows, and Linux**
 
-1. Install and launch Pane, with Claude Code and Codex installed.
-2. Run `claude mcp list` and `codex mcp list`. Each shows `pane` as connected.
+1. Install and launch Pane, with Claude Code, Codex, and Cursor installed.
+2. Run `claude mcp list`, `codex mcp list`, and `agent mcp list`. Each lists `pane`. If Cursor asks for approval, run `agent mcp enable pane`; it should report ready with 15 core tools.
 3. In a fresh `claude` session, ask "Use Pane to list my repos". It calls `repos_list`.
-4. Quit and relaunch Pane. The Claude and Codex configs are unchanged.
-5. Turn off **Settings → AI & Agents → Register Pane tools with Claude Code and Codex**. `pane` is gone from both lists, and the other entries are unchanged.
+4. Quit and relaunch Pane. The Claude, Codex, and Cursor configs are unchanged.
+5. Turn off **Settings → AI & Agents → Register Pane tools with Claude Code, Codex, and Cursor**. `pane` is gone from all three configs, and the other entries are unchanged.
 
 **pane:// links**
 
@@ -108,8 +109,8 @@ Automated tests cover the registration and link logic on every OS. Check these b
 
 **Windows with WSL**
 
-1. Save a repository that lives in a WSL distro, with Claude Code and Codex installed inside that distro.
-2. Relaunch Pane. Inside the distro, `claude mcp list` and `codex mcp list` show `pane`, whose command is `/mnt/c/.../Pane.exe`.
+1. Save a repository that lives in a WSL distro, with Claude Code, Codex, and Cursor installed inside that distro.
+2. Relaunch Pane. Inside the distro, `claude mcp list`, `codex mcp list`, and `agent mcp list` show `pane`, whose command is `/mnt/c/.../Pane.exe`.
 3. From a `claude` session inside the distro, ask "Use Pane to list my repos". The call reaches the Windows Pane.
 4. Turn the setting off. `pane` is gone from the distro's configs too.
 
@@ -157,6 +158,6 @@ Mutating tools keep the CLI's confirmation rule. Every command whose usage inclu
 
 ## AGENTS.md block
 
-Pane still writes a short managed `<!-- pane-agent-context -->` block into each active repository's `AGENTS.md`. The block points agents at the RunPane CLI (`npm i -g runpane`, then `runpane doctor --json`) and at the `pane` MCP server, including Claude Code and Codex config. The full command catalog lives in MCP tools and `runpane agent-context`, not in the file.
+Pane still writes a short managed `<!-- pane-agent-context -->` block into each active repository's `AGENTS.md`. The block points agents at the RunPane CLI (`npm i -g runpane`, then `runpane doctor --json`) and at the `pane` MCP server, including Claude Code, Codex, and Cursor config. The full command catalog lives in MCP tools and `runpane agent-context`, not in the file.
 
 Turning **Publish Pane instructions to AGENTS.md** off stops Pane from updating the block. It does not delete existing blocks.

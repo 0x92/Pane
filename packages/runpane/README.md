@@ -33,7 +33,7 @@ Tailscale network first. No tunnel flags are needed in the wizard.
 
 `runpane mcp` runs a stdio MCP server whose tools mirror the `runpane`
 commands, generated from the CLI contract. The Pane desktop app registers it
-with Claude Code and Codex automatically. To register it yourself:
+with Claude Code, Codex, and Cursor automatically. To register it yourself:
 
 ```bash
 claude mcp add --scope user pane -- npx --yes runpane@latest mcp

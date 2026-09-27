@@ -112,7 +112,7 @@ export interface AppConfig {
   agentContext?: {
     /** Write Pane's short managed block into repositories' AGENTS.md. */
     managedAgentsMd?: boolean;
-    /** Register Pane's MCP server with the user-level Claude Code and Codex configs. */
+    /** Register Pane's MCP server with the user-level Claude Code, Codex, and Cursor configs. */
     registerMcp?: boolean;
     /** Toolsets the registered server serves (`runpane mcp --toolsets`); core when absent. */
     mcpToolsets?: string[];
