@@ -451,6 +451,7 @@ Combined PRs (for review, stacked):
 |---|---|---|---|
 | Part 1: Session watch | #829, #833, #835 | `runpane/combined-session-watch` (#844) | `main` |
 | Part 2: agent delivery and reports | #831, #836, #837, #839 | `runpane/combined-agent-delivery` (#845) | #844 |
+| Part 3: create/adopt, archive cleanup, named locks | #830, #832, #834 | `runpane/combined-pane-lifecycle` (#846) | #845 |
 
 Suggested merge order:
 1. #780, #771 and #818 first.
