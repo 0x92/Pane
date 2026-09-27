@@ -266,6 +266,8 @@ export type RunpaneToolSpec = RunpaneAgentToolSpec | RunpaneCommandToolSpec;
 export interface RunpanePaneCreateItem {
   name: string;
   worktreeName?: string;
+  /** Exact new branch name for the Pane's worktree; defaults to the worktree name. */
+  branch?: string;
   baseBranch?: string;
   sessionPrompt?: string;
   pinned?: boolean;
@@ -302,6 +304,8 @@ export interface RunpanePaneAdoptRequest {
   repo: RunpaneRepoSelector;
   panes: RunpanePaneAdoptItem[];
   dryRun?: boolean;
+  waitReady?: boolean;
+  readyTimeoutMs?: number;
   noFocus?: boolean;
   focus?: boolean;
   source?: RunpanePanelCreateSource;
