@@ -25,6 +25,7 @@ import { PaneChatManager } from '../services/paneChatManager';
 import { OrchestrationSessionManager } from '../services/orchestrationSessionManager';
 import { TaskQueue } from '../services/taskQueue';
 import { registerIpcHandlers } from '../ipc';
+import { isLockOwnerLive } from '../ipc/runpane';
 import { PaneDaemonServer } from './server';
 import { PaneRemoteHttpApiServer } from './httpApiServer';
 import { PaneRemoteTransportController } from './remoteTransportController';
@@ -44,6 +45,8 @@ import { panelManager } from '../services/panelManager';
 import { terminalPanelManager } from '../services/terminalPanelManager';
 import { WorkspaceJournal } from '../services/workspaceJournal';
 import { SessionPrMonitor } from '../services/sessionPrMonitor';
+import { NamedLockService } from '../services/namedLockService';
+import { NamedLockStore } from '../services/namedLockStore';
 import { WorkspaceStateReader } from '../services/workspaceStateReader';
 import { WorkspaceCursorStore } from '../services/workspaceCursorStore';
 import { extractWorkspaceHeldInput } from '../services/workspaceHeldInput';
@@ -306,6 +309,10 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
   const workspaceCursorStore = new WorkspaceCursorStore(
     path.join(getAppDirectory(), 'workspace-cursors.json'),
   );
+  const namedLockService = new NamedLockService(new NamedLockStore(path.join(getAppDirectory(), 'locks.json')), {
+    isOwnerLive: owner => isLockOwnerLive({ sessionManager }, owner),
+    log: (message, error) => logger.warn(message, error),
+  });
 
   const daemonServices: DaemonHostServices = {
     configManager,
@@ -332,6 +339,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
     workspaceJournal,
     workspaceStateReader,
     workspaceCursorStore,
+    namedLockService,
   };
 
   const services: AppServices = {
@@ -364,7 +372,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
     });
   }
 
-  const daemonSinks: PaneEventSink[] = [workspaceJournal];
+  const daemonSinks: PaneEventSink[] = [workspaceJournal, namedLockService];
   if (paneDaemonServer) {
     daemonSinks.push(paneDaemonServer.getEventSink());
   }
@@ -419,6 +427,8 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
     },
     permissionIpcServer,
     async shutdown(): Promise<void> {
+      // Before terminals stop: their exits during shutdown must not release locks.
+      namedLockService.dispose();
       resourceMonitorService.stop();
       await spotlightManager.disableAll();
       await sessionManager.cleanup();
