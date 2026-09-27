@@ -2320,6 +2320,8 @@ function compareAgentContextParity() {
   assert.ok(managedBlock.includes('runpane@latest'));
   assert.ok(managedBlock.includes('claude mcp list'));
   assert.ok(managedBlock.includes('codex mcp list'));
+  assert.ok(managedBlock.includes('agent mcp list'));
+  assert.ok(managedBlock.includes('agent mcp enable pane'));
   assert.ok(!managedBlock.includes('Typical workflow: register the saved base repository once'));
   assert.ok(!managedBlock.includes('Skill routing reference:'));
   assert.ok(!managedBlock.includes('main/src/services/skillCacheManager.ts'));

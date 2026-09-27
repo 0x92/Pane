@@ -51,6 +51,8 @@ describe('agentContextManager', () => {
     expect(content).toContain('[mcp_servers.pane]');
     expect(content).toContain('claude mcp list');
     expect(content).toContain('codex mcp list');
+    expect(content).toContain('agent mcp list');
+    expect(content).toContain('agent mcp enable pane');
     expect(content).not.toContain('Typical workflow: register the saved base repository once');
     expect(content).not.toContain('Skill routing reference:');
     expect(content).toContain(PANE_AGENT_CONTEXT_END);

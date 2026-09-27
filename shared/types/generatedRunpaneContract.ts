@@ -1997,7 +1997,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane mcp [--toolsets <name,...>] [--read-only]",
         "",
         "Runs the Pane MCP server over stdio. Each runpane command with a JSON result becomes a tool that returns the same JSON as `runpane <command> --json`. Commands that need --yes take `yes: true` instead.",
-        "Pane registers this server with Claude Code and Codex automatically (Settings > AI & Agents). To register it by hand:",
+        "Pane registers this server with Claude Code, Codex, and Cursor automatically (Settings > AI & Agents). To register it by hand:",
         "  claude mcp add --scope user pane -- npx --yes runpane@latest mcp",
         "  codex mcp add pane -- npx --yes runpane@latest mcp",
         "",
@@ -8066,7 +8066,7 @@ export const RUNPANE_CONTRACT = {
       "mcp": {
         "name": "mcp",
         "summary": "Run the Pane MCP server over stdio so coding agents can call runpane commands as tools.",
-        "details": "Use this to register Pane with an MCP client. Pane registers it with Claude Code and Codex automatically; each tool mirrors one runpane command and returns its --json result.",
+        "details": "Use this to register Pane with an MCP client. Pane registers it with Claude Code, Codex, and Cursor automatically; each tool mirrors one runpane command and returns its --json result.",
         "requiresPaneDaemon": false,
         "mutates": false,
         "arguments": [
@@ -10522,7 +10522,7 @@ export const RUNPANE_CONTRACT = {
       "",
       "CLI: `npm i -g runpane` (or `npx --yes runpane@latest`), then `runpane doctor --json`. Full command reference: `runpane agent-context --json`.",
       "",
-      "MCP: packaged Pane registers a stdio server named `pane` with Claude Code and Codex. Check the connection with `claude mcp list` or `codex mcp list`. If tools are missing, add it in the agent's MCP settings: Claude Code `claude mcp add --scope user pane -- npx --yes runpane@latest mcp`; Codex (`~/.codex/config.toml`) table `[mcp_servers.pane]` with `command = \"npx\"` and `args = [\"--yes\", \"runpane@latest\", \"mcp\"]`; any other stdio client uses the same command and args."
+      "MCP: packaged Pane registers a stdio server named `pane` with Claude Code, Codex, and Cursor. Check the connection with `claude mcp list`, `codex mcp list`, or `agent mcp list`. Cursor may ask you to enable `pane` with `agent mcp enable pane`. If tools are missing, add it in the agent's MCP settings: Claude Code `claude mcp add --scope user pane -- npx --yes runpane@latest mcp`; Codex (`~/.codex/config.toml`) table `[mcp_servers.pane]` with `command = \"npx\"` and `args = [\"--yes\", \"runpane@latest\", \"mcp\"]`; Cursor (`~/.cursor/mcp.json`) uses `mcpServers.pane` with the same `npx` command and args; any other stdio client uses them too."
     ]
   }
 } as const;
