@@ -367,6 +367,15 @@ interface PaneArchiveRequest {
   force?: boolean;
   source?: 'user' | 'agent';
   dryRun?: boolean;
+  removeWorktree?: boolean;
+}
+
+interface PaneArchiveBulkRequest {
+  sessionId: string;
+  merged: true;
+  source?: 'user' | 'agent';
+  dryRun?: boolean;
+  removeWorktree?: boolean;
 }
 
 interface PanePinRequest {
@@ -421,19 +430,26 @@ interface PaneArchiveSafetyCheck {
   unpushedCommitDetails?: Array<{ sha: string; subject: string }>;
   reason?: 'external-worktree' | 'main-repo' | 'missing-project-context' | 'git-error';
   worktreeWillRemain?: true;
+  upstreamGone?: boolean;
+  mergedViaPr?: { number: number; headOid: string };
 }
+
+type PaneArchiveBlockCode = 'uncommitted-changes' | 'unpushed-commits' | 'uncommitted-and-unpushed' | 'status-unknown';
 
 interface PaneArchiveBlockedResult {
   ok: false;
   generation?: number;
   paneId: string;
   blocked: {
-    code: 'uncommitted-changes' | 'unpushed-commits' | 'uncommitted-and-unpushed' | 'status-unknown';
+    code: PaneArchiveBlockCode;
     message: string;
     safetyCheck: PaneArchiveSafetyCheck;
   };
   nextCommand: string;
 }
+
+/** Older Pane daemons report `completed` and `timeout`; current ones report `removed` and `queued`. */
+type WorktreeCleanupState = 'removed' | 'queued' | 'failed' | 'not-applicable' | 'completed' | 'timeout';
 
 interface PaneArchiveSuccessResult {
   ok: boolean;
@@ -441,9 +457,32 @@ interface PaneArchiveSuccessResult {
   paneId: string;
   archived: true;
   forced: boolean;
-  worktreeCleanup: 'completed' | 'failed' | 'timeout' | 'not-applicable';
+  worktreeCleanup: WorktreeCleanupState;
   worktreePath?: string;
   safetyCheck: PaneArchiveSafetyCheck;
+}
+
+interface PaneArchiveBulkItem {
+  paneId: string;
+  name?: string;
+  outcome: 'archived' | 'would-archive' | 'skipped' | 'failed';
+  skipped?: { code: PaneArchiveBlockCode | 'missing-pane' | 'already-archived' | 'main-repo'; message: string };
+  error?: string;
+  safetyCheck?: PaneArchiveSafetyCheck;
+  worktreeCleanup?: WorktreeCleanupState;
+  worktreePath?: string;
+}
+
+interface PaneArchiveBulkResult {
+  ok: boolean;
+  sessionId: string;
+  merged: true;
+  dryRun?: true;
+  removeWorktree: boolean;
+  archived: number;
+  skipped: number;
+  failed: number;
+  items: PaneArchiveBulkItem[];
 }
 
 interface PaneArchiveDryRunResult {
@@ -907,6 +946,11 @@ const archiveSafetySchema: BoundarySchema<PaneArchiveSafetyCheck> = boundary.obj
   }))),
   reason: boundary.optional(boundary.enumeration('external-worktree', 'main-repo', 'missing-project-context', 'git-error')),
   worktreeWillRemain: boundary.optional(boundary.literal(true)),
+  upstreamGone: boundary.optional(boundary.boolean),
+  mergedViaPr: boundary.optional(boundary.object({
+    number: boundary.number,
+    headOid: boundary.string,
+  })),
 });
 const agentReportSchema: BoundarySchema<AgentReport> = boundary.object({
   state: boundary.enumeration('ready', 'blocked', 'failed', 'done'),
@@ -945,6 +989,8 @@ const panelLastMessageResultSchema: BoundarySchema<PanelLastMessageResult> = bou
     message: boundary.string,
   }),
 );
+const archiveBlockCodeSchema = boundary.enumeration('uncommitted-changes', 'unpushed-commits', 'uncommitted-and-unpushed', 'status-unknown');
+const worktreeCleanupSchema = boundary.enumeration('removed', 'queued', 'failed', 'not-applicable', 'completed', 'timeout');
 const panelSummarySchema: BoundarySchema<PanelSummary> = boundary.object({
   id: boundary.string,
   panelId: boundary.string,
@@ -1210,7 +1256,7 @@ const paneArchiveResultSchema: BoundarySchema<PaneArchiveResult> = boundary.unio
     generation: boundary.optional(boundary.number),
     paneId: boundary.string,
     blocked: boundary.object({
-      code: boundary.enumeration('uncommitted-changes', 'unpushed-commits', 'uncommitted-and-unpushed', 'status-unknown'),
+      code: archiveBlockCodeSchema,
       message: boundary.string,
       safetyCheck: archiveSafetySchema,
     }),
@@ -1224,7 +1270,7 @@ const paneArchiveResultSchema: BoundarySchema<PaneArchiveResult> = boundary.unio
     forced: boundary.boolean,
     safetyCheck: archiveSafetySchema,
     blocked: boundary.optional(boundary.object({
-      code: boundary.enumeration('uncommitted-changes', 'unpushed-commits', 'uncommitted-and-unpushed', 'status-unknown'),
+      code: archiveBlockCodeSchema,
       message: boundary.string,
       safetyCheck: archiveSafetySchema,
     })),
@@ -1235,11 +1281,42 @@ const paneArchiveResultSchema: BoundarySchema<PaneArchiveResult> = boundary.unio
     paneId: boundary.string,
     archived: boundary.literal(true),
     forced: boundary.boolean,
-    worktreeCleanup: boundary.enumeration('completed', 'failed', 'timeout', 'not-applicable'),
+    worktreeCleanup: worktreeCleanupSchema,
     worktreePath: boundary.optional(boundary.string),
     safetyCheck: archiveSafetySchema,
   }),
 );
+const paneArchiveBulkResultSchema: BoundarySchema<PaneArchiveBulkResult> = boundary.object({
+  ok: boundary.boolean,
+  sessionId: boundary.string,
+  merged: boundary.literal(true),
+  dryRun: boundary.optional(boundary.literal(true)),
+  removeWorktree: boundary.boolean,
+  archived: boundary.number,
+  skipped: boundary.number,
+  failed: boundary.number,
+  items: boundary.array(boundary.object({
+    paneId: boundary.string,
+    name: boundary.optional(boundary.string),
+    outcome: boundary.enumeration('archived', 'would-archive', 'skipped', 'failed'),
+    skipped: boundary.optional(boundary.object({
+      code: boundary.enumeration(
+        'uncommitted-changes',
+        'unpushed-commits',
+        'uncommitted-and-unpushed',
+        'status-unknown',
+        'missing-pane',
+        'already-archived',
+        'main-repo',
+      ),
+      message: boundary.string,
+    })),
+    error: boundary.optional(boundary.string),
+    safetyCheck: boundary.optional(archiveSafetySchema),
+    worktreeCleanup: boundary.optional(worktreeCleanupSchema),
+    worktreePath: boundary.optional(boundary.string),
+  })),
+});
 const panePinResultSchema: BoundarySchema<PanePinResult> = boundary.object({
   ok: boundary.literal(true),
   generation: boundary.optional(boundary.number),
@@ -1981,8 +2058,11 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
 }
 
 export async function runPanesArchive(parsed: ParsedArgs): Promise<number> {
+  if (parsed.sessionId) {
+    return runPanesArchiveSession(parsed, parsed.sessionId);
+  }
   if (!parsed.paneId) {
-    throw new Error('runpane panes archive requires --pane.');
+    throw new Error('runpane panes archive requires --pane (or --session with --merged).');
   }
 
   const request: PaneArchiveRequest = {
@@ -1991,8 +2071,9 @@ export async function runPanesArchive(parsed: ParsedArgs): Promise<number> {
   if (parsed.force) request.force = true;
   if (parsed.source === 'user' || parsed.source === 'agent') request.source = parsed.source;
   if (parsed.dryRun) request.dryRun = true;
+  if (parsed.removeWorktree) request.removeWorktree = true;
 
-  await confirmPaneArchive(parsed, request);
+  await confirmPaneArchive(parsed, `Archive pane ${request.paneId}${request.force ? ' (including any uncommitted or unpushed work)' : ''}`);
 
   const result = await invokeDaemon('runpane:panes:archive', [request], paneArchiveResultSchema, {
     paneDir: parsed.paneDir,
@@ -2003,6 +2084,32 @@ export async function runPanesArchive(parsed: ParsedArgs): Promise<number> {
     printJson(result);
   } else {
     printPaneArchiveResult(result);
+  }
+
+  return result.ok ? 0 : 1;
+}
+
+async function runPanesArchiveSession(parsed: ParsedArgs, sessionId: string): Promise<number> {
+  if (!parsed.merged) {
+    throw new Error('runpane panes archive --session requires --merged.');
+  }
+  const request: PaneArchiveBulkRequest = { sessionId, merged: true };
+  if (parsed.source === 'user' || parsed.source === 'agent') request.source = parsed.source;
+  if (parsed.dryRun) request.dryRun = true;
+  if (parsed.removeWorktree) request.removeWorktree = true;
+
+  await confirmPaneArchive(parsed, `Archive every merged or pushed Pane in Session ${sessionId}`);
+
+  const result = await invokeDaemon('runpane:panes:archive', [request], paneArchiveBulkResultSchema, {
+    paneDir: parsed.paneDir,
+    // Each Pane refreshes its upstream and may wait for its worktree removal.
+    timeoutMs: 600_000,
+  });
+
+  if (parsed.json) {
+    printJson(result);
+  } else {
+    printPaneArchiveBulkResult(result);
   }
 
   return result.ok ? 0 : 1;
@@ -2690,7 +2797,7 @@ async function confirmPaneAdopt(parsed: ParsedArgs, request: PaneAdoptRequest): 
   }
 }
 
-async function confirmPaneArchive(parsed: ParsedArgs, request: PaneArchiveRequest): Promise<void> {
+async function confirmPaneArchive(parsed: ParsedArgs, question: string): Promise<void> {
   if (parsed.dryRun || parsed.yes) {
     return;
   }
@@ -2701,8 +2808,7 @@ async function confirmPaneArchive(parsed: ParsedArgs, request: PaneArchiveReques
 
   const rl = createInterface({ input, output });
   try {
-    const suffix = request.force ? ' (including any uncommitted or unpushed work)' : '';
-    const answer = (await rl.question(`Archive pane ${request.paneId}${suffix}? [y/N] `)).trim().toLowerCase();
+    const answer = (await rl.question(`${question}? [y/N] `)).trim().toLowerCase();
     if (answer !== 'y' && answer !== 'yes') {
       throw new Error('Cancelled.');
     }
@@ -3010,6 +3116,26 @@ function printPaneArchiveResult(result: PaneArchiveResult): void {
 
   console.log(`Archived pane ${result.paneId}${result.forced ? ' (forced)' : ''}. Worktree cleanup: ${result.worktreeCleanup}.`);
   printArchiveSkipReason(result.safetyCheck);
+  if (result.safetyCheck.mergedViaPr) {
+    console.log(`Merged via PR #${result.safetyCheck.mergedViaPr.number} (head ${result.safetyCheck.mergedViaPr.headOid}).`);
+  }
+}
+
+function printPaneArchiveBulkResult(result: PaneArchiveBulkResult): void {
+  const verb = result.dryRun ? 'Would archive' : 'Archived';
+  console.log(`${verb} ${result.archived} Pane(s) in Session ${result.sessionId}; skipped ${result.skipped}; failed ${result.failed}.`);
+  for (const item of result.items) {
+    const label = item.name ? `${item.name} (${item.paneId})` : item.paneId;
+    if (item.outcome === 'skipped') {
+      console.log(`  skipped ${label}: ${item.skipped?.code ?? 'unknown'} - ${item.skipped?.message ?? ''}`);
+    } else if (item.outcome === 'failed') {
+      console.error(`  failed ${label}: ${item.error ?? 'unknown error'}`);
+    } else {
+      const merged = item.safetyCheck?.mergedViaPr ? ` merged via PR #${item.safetyCheck.mergedViaPr.number}` : '';
+      const cleanup = item.worktreeCleanup ? ` worktree ${item.worktreeCleanup}` : '';
+      console.log(`  ${item.outcome} ${label}${merged}${cleanup}`);
+    }
+  }
 }
 
 function printArchiveSkipReason(
@@ -3026,7 +3152,10 @@ function printArchiveCommitEvidence(
 ): void {
   printArchiveSkipReason(safetyCheck, print);
   if (safetyCheck.upstream) {
-    print(`Upstream: ${safetyCheck.upstream}${safetyCheck.upstreamRefreshed ? ' (refreshed)' : ''}`);
+    print(`Upstream: ${safetyCheck.upstream}${safetyCheck.upstreamRefreshed ? ' (refreshed)' : ''}${safetyCheck.upstreamGone ? ' (gone from the remote)' : ''}`);
+  }
+  if (safetyCheck.mergedViaPr) {
+    print(`Merged via PR #${safetyCheck.mergedViaPr.number} (head ${safetyCheck.mergedViaPr.headOid})`);
   }
   for (const commit of safetyCheck.unpushedCommitDetails ?? []) {
     print(`Unpushed: ${commit.sha} ${commit.subject}`);

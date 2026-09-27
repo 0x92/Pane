@@ -151,6 +151,8 @@ class ParsedArgs:
     no_associate: bool = False
     composer_strategy: Optional[str] = None
     force: bool = False
+    remove_worktree: bool = False
+    merged: bool = False
     watch_as: Optional[str] = None
     watch_since: Optional[int] = None
     watch_from: Optional[str] = None
@@ -484,6 +486,8 @@ def parse_args(argv: List[str]) -> ParsedArgs:
         parsed.target = "client"
 
     parse_flags(args, parsed)
+    if parsed.command == "panes archive":
+        validate_panes_archive_args(parsed)
     if parsed.command == "watch" and parsed.follow and parsed.timeout_ms == 0:
         raise ValueError("--timeout-ms must be greater than 0 with --follow.")
     if parsed.command == "watch" and parsed.session_id is not None and parsed.watch_pane_ids:
@@ -516,6 +520,19 @@ def validate_report_args(parsed: ParsedArgs) -> None:
         raise ValueError("runpane report accepts either --summary or --summary-file, not both.")
     if parsed.report_state == "blocked" and not (parsed.question or "").strip():
         raise ValueError('runpane report --state blocked requires --question "<what you need answered>".')
+
+
+def validate_panes_archive_args(parsed: ParsedArgs) -> None:
+    if parsed.pane_id and parsed.session_id:
+        raise ValueError("runpane panes archive accepts either --pane or --session, not both.")
+    if parsed.merged and not parsed.session_id:
+        raise ValueError("--merged requires --session.")
+    if parsed.session_id and not parsed.merged:
+        raise ValueError("runpane panes archive --session requires --merged.")
+    if parsed.session_id and parsed.force:
+        raise ValueError(
+            "runpane panes archive --session does not accept --force; archive one Pane with --pane to discard its work."
+        )
 
 
 def parse_non_negative_int_flag(flag: str, value: str) -> int:
@@ -648,6 +665,12 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
         return
     if flag == "--as-file-pointer":
         parsed.as_file_pointer = True
+        return
+    if flag == "--remove-worktree":
+        parsed.remove_worktree = True
+        return
+    if flag == "--merged":
+        parsed.merged = True
         return
     if flag == "--follow":
         parsed.follow = True

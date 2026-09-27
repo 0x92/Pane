@@ -61,6 +61,8 @@ export interface ParsedArgs {
   noAssociate?: boolean;
   composerStrategy?: string;
   force?: boolean;
+  removeWorktree?: boolean;
+  merged?: boolean;
   launch?: boolean;
   watchAs?: string;
   watchSince?: number;
@@ -214,6 +216,9 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
   if (parsed.command === 'watch' && parsed.allManaged && parsed.watchPaneIds?.length) {
     throw new Error('runpane watch accepts either --all-managed or --pane, not both.');
   }
+  if (parsed.command === 'panes archive') {
+    validatePanesArchiveArgs(parsed);
+  }
   if (parsed.command === 'watch' && parsed.json && parsed.watchFormat === 'lines') {
     throw new Error('runpane watch accepts either --json or --format lines, not both.');
   }
@@ -237,6 +242,21 @@ function validateReportArgs(parsed: ParsedArgs): void {
   }
   if (parsed.reportState === 'blocked' && !parsed.question?.trim()) {
     throw new Error('runpane report --state blocked requires --question "<what you need answered>".');
+  }
+}
+
+function validatePanesArchiveArgs(parsed: ParsedArgs): void {
+  if (parsed.paneId && parsed.sessionId) {
+    throw new Error('runpane panes archive accepts either --pane or --session, not both.');
+  }
+  if (parsed.merged && !parsed.sessionId) {
+    throw new Error('--merged requires --session.');
+  }
+  if (parsed.sessionId && !parsed.merged) {
+    throw new Error('runpane panes archive --session requires --merged.');
+  }
+  if (parsed.sessionId && parsed.force) {
+    throw new Error('runpane panes archive --session does not accept --force; archive one Pane with --pane to discard its work.');
   }
 }
 
@@ -382,6 +402,14 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
   }
   if (flag === '--force') {
     parsed.force = true;
+    return;
+  }
+  if (flag === '--remove-worktree') {
+    parsed.removeWorktree = true;
+    return;
+  }
+  if (flag === '--merged') {
+    parsed.merged = true;
     return;
   }
   if (flag === '--launch') {
