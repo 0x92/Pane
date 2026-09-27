@@ -7,7 +7,7 @@ Pane release artifact only when you run `runpane install` or `runpane update`.
 
 ## Quick Start
 
-Run the guided setup (Node 20.12 or newer):
+Run the guided setup (Node 20 or newer):
 
 ```bash
 npx --yes runpane@latest

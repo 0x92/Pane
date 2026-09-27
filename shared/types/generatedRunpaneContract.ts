@@ -10,7 +10,7 @@ export const RUNPANE_CONTRACT = {
     "Work starts only when a user runs `runpane ...`."
   ],
   "compatibility": {
-    "node": ">=20.12.0",
+    "node": ">=20.0.0",
     "python": ">=3.8"
   },
   "terminology": {

@@ -21,7 +21,7 @@ Work starts only when a user runs `runpane ...`.
 
 ## Compatibility Floors
 
-The npm wrapper should run on Node.js `>=20.12.0` and newer. The root Electron app
+The npm wrapper should run on Node.js `>=20.0.0` and newer. The root Electron app
 may require a newer Node.js version for development and packaging.
 
 The PyPI wrapper should run on Python `>=3.8` and newer. Keep runtime dependencies
