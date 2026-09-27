@@ -96,6 +96,8 @@ For a new Pane, work starts only after the association exists:
   association command fails too.
 - \`runpane panes create\` branches from the repository default; pass
   \`--base-branch <ref>\` when work must start from another branch.
+- For an exact new branch, use \`panes create --base <ref> --branch <name>\`
+  instead of \`git worktree add\` plus \`panes adopt\`.
 
 The association lasts through working, idle, and completed states. Archiving
 is a separate follow-up (#654).
