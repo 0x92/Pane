@@ -217,6 +217,8 @@ interface PaneAdoptRequest {
     launch?: boolean;
   }>;
   dryRun?: boolean;
+  waitReady?: boolean;
+  readyTimeoutMs?: number;
   noFocus?: boolean;
   focus?: boolean;
   source?: 'user' | 'agent';
@@ -226,6 +228,7 @@ interface PaneAdoptRequest {
 interface PaneCreateItem {
   name: string;
   worktreeName?: string;
+  branch?: string;
   baseBranch?: string;
   sessionPrompt?: string;
   pinned?: boolean;
@@ -780,6 +783,7 @@ interface PaneToolInput {
 interface PaneCreateItemInput {
   name: string;
   worktreeName?: string;
+  branch?: string;
   baseBranch?: string;
   sessionPrompt?: string;
   pinned?: boolean;
@@ -1480,6 +1484,7 @@ const paneCreateRequestInputSchema: BoundarySchema<PaneCreateRequestInput> = bou
   panes: boundary.array(boundary.object({
     name: boundary.string,
     worktreeName: boundary.optional(boundary.string),
+    branch: boundary.optional(boundary.string),
     baseBranch: boundary.optional(boundary.string),
     sessionPrompt: boundary.optional(boundary.string),
     pinned: boundary.optional(boundary.boolean),
@@ -1508,6 +1513,8 @@ const paneAdoptRequestInputSchema: BoundarySchema<PaneAdoptRequestInput> = bound
     launch: boundary.optional(boundary.boolean),
   })),
   dryRun: boundary.optional(boundary.boolean),
+  waitReady: boundary.optional(boundary.boolean),
+  readyTimeoutMs: boundary.optional(boundary.number),
   noFocus: boundary.optional(boundary.boolean),
   focus: boundary.optional(boundary.boolean),
   source: boundary.optional(boundary.enumeration('user', 'agent')),
@@ -1938,6 +1945,9 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
     if (!parsed.repo || !parsed.repoPath || !parsed.name) {
       throw new Error('runpane panes adopt requires --repo, --path, and --name.');
     }
+    if (!parsed.launch && (parsed.initialInput !== undefined || parsed.initialInputFile !== undefined || parsed.waitReady)) {
+      throw new Error('runpane panes adopt only sends a prompt or waits for readiness with --launch. Add --launch to start the agent now.');
+    }
     const tool = await buildToolSpec(parsed, 'panes adopt');
     request = {
     repo: parsed.repo,
@@ -1952,6 +1962,8 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
       launch: parsed.launch || undefined,
     }],
     dryRun: parsed.dryRun || undefined,
+    waitReady: parsed.waitReady || undefined,
+    readyTimeoutMs: parsed.readyTimeoutMs,
     noFocus: parsed.noFocus || undefined,
     focus: parsed.focus || undefined,
     source: parsed.source === 'user' || parsed.source === 'agent' ? parsed.source : undefined,
@@ -1961,7 +1973,7 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
   await confirmPaneAdopt(parsed, request);
   const result = await invokeDaemon('runpane:panes:adopt', [request], paneCreateResultSchema, {
     paneDir: parsed.paneDir,
-    timeoutMs: 120_000,
+    timeoutMs: 120_000 + (request.waitReady ? (request.readyTimeoutMs ?? 30_000) : 0),
   });
   if (parsed.json) printJson(result);
   else printPaneCreateResult(result);
@@ -2520,6 +2532,7 @@ export async function buildPaneCreateRequest(parsed: ParsedArgs): Promise<PaneCr
     panes: [{
       name: parsed.name,
       worktreeName: parsed.worktreeName,
+      branch: parsed.branch,
       baseBranch: parsed.baseBranch,
       pinned: resolvePinnedOverride(parsed) ?? true,
       tool,
@@ -2632,7 +2645,7 @@ async function buildToolSpec(parsed: ParsedArgs, command = 'panes create'): Prom
 
 function resolveInitialInput(parsed: ParsedArgs): string | undefined {
   if (parsed.initialInput && parsed.initialInputFile) {
-    throw new Error('Use either --initial-input/--prompt or --initial-input-file, not both.');
+    throw new Error('Use either --initial-input/--prompt or --initial-input-file/--prompt-file, not both.');
   }
 
   if (parsed.initialInputFile) {
@@ -3144,6 +3157,7 @@ function parsePaneCreateItemPayload(value: PaneCreateItemInput, index: number): 
   return {
     name: value.name,
     worktreeName: value.worktreeName,
+    branch: value.branch,
     baseBranch: value.baseBranch,
     sessionPrompt: value.sessionPrompt,
     pinned: value.pinned,
