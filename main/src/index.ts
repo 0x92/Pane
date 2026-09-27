@@ -1,3 +1,5 @@
+// Answer --version before any import below logs or touches the database.
+import './versionQuery';
 // Load ReadableStream polyfill before any other imports
 import './polyfills/readablestream';
 
