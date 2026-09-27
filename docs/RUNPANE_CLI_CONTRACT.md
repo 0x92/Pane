@@ -263,8 +263,6 @@ Brief tools:
 - `panels wait`: Wait for terminal initialized, ready, idle, or text state with compact output.
 - `watch`: Wait for workspace transitions (READY, BLOCKED, IDLE, STUCK, NEW, GONE, EXIT) from the daemon journal without polling; responsive by default, with opt-in cadence flags for expensive consumers.
 
-Pane terminals recognize `pane://open?pane=<pane-id>&panel=<panel-id>` links in CLI output. Cmd-click on macOS or Ctrl-click on Windows/Linux opens the target Pane and optional panel within the app; the panel parameter may be omitted.
-
 Managed AGENTS.md block body:
 
 ```md
