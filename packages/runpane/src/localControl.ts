@@ -142,6 +142,8 @@ interface OrchestrationPaneOverview {
     prTitle?: string;
     prState?: string;
   };
+  /** The newest `runpane report` among the Pane's panels, with the panel that sent it. */
+  report?: AgentReport & { panelId: string };
 }
 
 interface RunpaneSessionOverviewResult {
@@ -994,7 +996,7 @@ const archiveSafetySchema: BoundarySchema<PaneArchiveSafetyCheck> = boundary.obj
     headOid: boundary.string,
   })),
 });
-const agentReportSchema: BoundarySchema<AgentReport> = boundary.object({
+const agentReportFields = {
   state: boundary.enumeration('ready', 'blocked', 'failed', 'done'),
   pr: boundary.optional(boundary.number),
   head: boundary.optional(boundary.string),
@@ -1003,7 +1005,8 @@ const agentReportSchema: BoundarySchema<AgentReport> = boundary.object({
   summaryPath: boundary.optional(boundary.string),
   question: boundary.optional(boundary.string),
   reportedAt: boundary.string,
-});
+};
+const agentReportSchema: BoundarySchema<AgentReport> = boundary.object(agentReportFields);
 const reportResultSchema: BoundarySchema<ReportResult> = boundary.object({
   ok: boundary.literal(true),
   generation: boundary.optional(boundary.number),
@@ -1163,6 +1166,7 @@ const orchestrationPaneOverviewSchema: BoundarySchema<OrchestrationPaneOverview>
     prTitle: boundary.optional(boundary.string),
     prState: boundary.optional(boundary.string),
   })),
+  report: boundary.optional(boundary.object({ ...agentReportFields, panelId: boundary.nonEmptyString })),
 });
 const lockOwnerSchema: BoundarySchema<LockOwner> = boundary.object({
   kind: boundary.enumeration('pane', 'external'),
@@ -1835,6 +1839,9 @@ export async function runSessionsOverview(parsed: ParsedArgs): Promise<number> {
   for (const pane of result.panes) {
     const details = pane.missing ? 'missing' : pane.archived ? 'archived' : pane.panels.map(panel => `${panel.title}=${panel.state}`).join(', ') || 'no terminal panels';
     console.log(`  ${pane.name}: ${details}`);
+    if (pane.report) {
+      console.log(`    report ${describeReport(pane.report)} (panel ${pane.report.panelId}, ${pane.report.reportedAt})`);
+    }
   }
   for (const lock of result.locks ?? []) {
     console.log(`  lock ${formatLockLine(lock)}`);

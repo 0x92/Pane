@@ -135,6 +135,9 @@ def run_sessions_overview(parsed: Any) -> int:
                 for panel in pane.get("panels", [])
             ) or "no terminal panels"
         print(f"  {pane.get('name')}: {details}")
+        report = pane.get("report")
+        if report:
+            print(f"    report {describe_report(report)} (panel {report.get('panelId')}, {report.get('reportedAt')})")
     for lock in result.get("locks") or []:
         print(f"  lock {format_lock_line(lock)}")
     return 0
