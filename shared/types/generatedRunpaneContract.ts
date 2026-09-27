@@ -298,7 +298,8 @@ export const RUNPANE_CONTRACT = {
       "name": "panes create",
       "summary": "Create user-visible Panes (Pane sessions) backed by Pane-managed worktrees for feature/PR work and open terminal-backed tool tabs.",
       "usage": [
-        "runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [--source user|agent] [--focus|--no-focus] [options] [--pane-dir <path>]",
+        "runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--base-branch <branch>] [options] [--pane-dir <path>]",
+        "runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--source user|agent] [--focus|--no-focus] [--base-branch <branch>] [options] [--pane-dir <path>]",
         "runpane panes create --from-json <path|-> [--yes] [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
@@ -315,7 +316,8 @@ export const RUNPANE_CONTRACT = {
       "name": "panes adopt",
       "summary": "Adopt an existing externally managed git worktree as a Pane without changing the worktree.",
       "usage": [
-        "runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [--resume <id>] [--folder <name>] [--launch] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]"
+        "runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [--resume <id>] [--folder <name>] [--launch] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]",
+        "runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--folder <name>] [--launch] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "additive": true,
@@ -412,7 +414,7 @@ export const RUNPANE_CONTRACT = {
       "summary": "Create a terminal-backed tool panel inside an existing Pane session.",
       "usage": [
         "runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--wait-ready] --yes [--json] [--pane-dir <path>]",
-        "runpane panels create --pane <pane-id> --tool-command <command> [--title <title>] [--focus|--no-focus] --yes [--json] [--pane-dir <path>]"
+        "runpane panels create --pane <pane-id> --tool-command <command> [--agent <codex|claude|cursor>] [--title <title>] [--focus|--no-focus] [--wait-ready] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "additive": true,
@@ -1245,7 +1247,7 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--agent",
         "value": "<codex|claude|cursor>",
-        "description": "Built-in agent terminal template to open."
+        "description": "Built-in agent terminal template to open. With --tool-command, the agent that command runs."
       },
       {
         "name": "--tool-command",
@@ -1750,6 +1752,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Lists Pane sessions. Pass --repo to limit results to one saved repository.",
         "",
+        "status is running while any terminal panel is live. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
+        "",
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
@@ -1829,6 +1833,7 @@ export const RUNPANE_CONTRACT = {
       "panes create": [
         "Usage:",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [options]",
+        "  runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--base-branch <branch>] [options]",
         "  runpane panes create --from-json <path|-> [--yes] [--json]",
         "",
         "Creates user-visible Panes (Pane sessions) for feature/PR work in a saved repository and opens a terminal-backed tool tab. Pane creates and owns the worktree/branch for each new Pane.",
@@ -1838,7 +1843,7 @@ export const RUNPANE_CONTRACT = {
         "  --name <name>                  Pane/session name",
         "  --worktree-name <name>         Worktree name; defaults to --name",
         "  --base-branch <branch>         Base branch for the worktree",
-        "  --agent <codex|claude|cursor>         Built-in terminal template",
+        "  --agent <codex|claude|cursor>  Built-in terminal template; with --tool-command, the agent it runs",
         "  --tool-command <command>       Custom terminal command",
         "  --title <title>                Terminal tab title",
         "  --initial-input <text>         Text sent after the command is ready",
@@ -1863,10 +1868,13 @@ export const RUNPANE_CONTRACT = {
       "panes adopt": [
         "Usage:",
         "  runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [options]",
+        "  runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [options]",
         "",
         "Adopts an existing externally managed git worktree without creating, syncing, or deleting it.",
         "",
-        "Options: --resume <id> stages the agent resume command; --launch runs it immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews."
+        "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
+        "",
+        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
       ],
       "panes archive": [
         "Usage:",
@@ -1960,6 +1968,8 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels list --pane <pane-id> [--json]",
         "",
         "Lists tool panels in a Pane session.",
+        "",
+        "agentDetection says how Pane knows agentType: declared, command, process, or screen. launchCommand is the command the panel was launched with.",
         "",
         "Options:",
         "  --pane <pane-id>               Pane/session id",
@@ -2056,6 +2066,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Sends text to a terminal panel and normalizes the final terminal Enter to CR. Use this for ordinary prompt answers and shell commands.",
         "",
+        "For a Claude or Codex panel with no composer on screen, nothing is sent: the result is ok: false with blocked.kind composer-unknown.",
+        "",
         "Options:",
         "  --panel <panel-id>             Terminal panel id",
         "  --text <text>                  Text to submit before Enter",
@@ -2084,11 +2096,11 @@ export const RUNPANE_CONTRACT = {
         "",
         "Usage:",
         "  runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--title <title>] [--initial-input <text>] [--no-focus] [--wait-ready] --yes [--json]",
-        "  runpane panels create --pane <pane-id> --tool-command <command> [--title <title>] [--no-focus] --yes [--json]",
+        "  runpane panels create --pane <pane-id> --tool-command <command> [--agent <codex|claude|cursor>] [--title <title>] [--no-focus] [--wait-ready] --yes [--json]",
         "",
         "Options:",
         "  --pane <pane-id>              Existing Pane session to add the panel to.",
-        "  --agent <codex|claude|cursor>        Built-in agent command template to launch.",
+        "  --agent <codex|claude|cursor> Built-in agent command template, or with --tool-command the agent it runs.",
         "  --tool-command <command>      Custom terminal command to launch.",
         "  --title <title>               Panel title override.",
         "  --initial-input, --prompt     Initial input to send after the tool starts.",
@@ -2109,7 +2121,7 @@ export const RUNPANE_CONTRACT = {
         "",
         "Options:",
         "  --panel <panel-id>            Terminal panel id.",
-        "  --strategy <strategy>         Defaults to auto; Codex sends Ctrl+Enter and other panels send Enter.",
+        "  --strategy <strategy>         Defaults to auto; Codex sends Ctrl+Enter and other panels send Enter. auto sends one more Enter if the text is still in the composer.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
       ],
@@ -2703,6 +2715,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Lists Pane sessions. Pass --repo to limit results to one saved repository.",
         "",
+        "status is running while any terminal panel is live. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
+        "",
         "Options:",
         "  --repo <selector>",
         "  --pane-dir <path>",
@@ -2782,6 +2796,7 @@ export const RUNPANE_CONTRACT = {
       "panes create": [
         "Usage:",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [options]",
+        "  python -m runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--base-branch <branch>] [options]",
         "  runpane panes create --from-json <path|-> [--yes] [--json]",
         "",
         "Creates user-visible Panes (Pane sessions) for feature/PR work in a saved repository and opens a terminal-backed tool tab. Pane creates and owns the worktree/branch for each new Pane.",
@@ -2791,7 +2806,7 @@ export const RUNPANE_CONTRACT = {
         "  --name <name>                  Pane/session name",
         "  --worktree-name <name>         Worktree name; defaults to --name",
         "  --base-branch <branch>         Base branch for the worktree",
-        "  --agent <codex|claude|cursor>         Built-in terminal template",
+        "  --agent <codex|claude|cursor>  Built-in terminal template; with --tool-command, the agent it runs",
         "  --tool-command <command>       Custom terminal command",
         "  --title <title>                Terminal tab title",
         "  --initial-input <text>         Text sent after the command is ready",
@@ -2816,10 +2831,13 @@ export const RUNPANE_CONTRACT = {
       "panes adopt": [
         "Usage:",
         "  runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [options]",
+        "  runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [options]",
         "",
         "Adopts an existing externally managed git worktree without creating, syncing, or deleting it.",
         "",
-        "Options: --resume <id> stages the agent resume command; --launch runs it immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews."
+        "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
+        "",
+        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
       ],
       "panes archive": [
         "Usage:",
@@ -2914,6 +2932,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Lists tool panels in a Pane session.",
         "",
+        "agentDetection says how Pane knows agentType: declared, command, process, or screen. launchCommand is the command the panel was launched with.",
+        "",
         "Options:",
         "  --pane <pane-id>",
         "  --pane-dir <path>",
@@ -3001,6 +3021,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Sends text to a terminal panel and normalizes the final terminal Enter to CR. Use this for ordinary prompt answers and shell commands.",
         "",
+        "For a Claude or Codex panel with no composer on screen, nothing is sent: the result is ok: false with blocked.kind composer-unknown.",
+        "",
         "Options:",
         "  --panel <panel-id>             Terminal panel id",
         "  --text <text>                  Text to submit before Enter",
@@ -3029,11 +3051,11 @@ export const RUNPANE_CONTRACT = {
         "",
         "Usage:",
         "  python -m runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--title <title>] [--initial-input <text>] [--no-focus] [--wait-ready] --yes [--json]",
-        "  python -m runpane panels create --pane <pane-id> --tool-command <command> [--title <title>] [--no-focus] --yes [--json]",
+        "  python -m runpane panels create --pane <pane-id> --tool-command <command> [--agent <codex|claude|cursor>] [--title <title>] [--no-focus] [--wait-ready] --yes [--json]",
         "",
         "Options:",
         "  --pane <pane-id>              Existing Pane session to add the panel to.",
-        "  --agent <codex|claude|cursor>        Built-in agent command template to launch.",
+        "  --agent <codex|claude|cursor> Built-in agent command template, or with --tool-command the agent it runs.",
         "  --tool-command <command>      Custom terminal command to launch.",
         "  --title <title>               Panel title override.",
         "  --initial-input, --prompt     Initial input to send after the tool starts.",
@@ -3054,7 +3076,7 @@ export const RUNPANE_CONTRACT = {
         "",
         "Options:",
         "  --panel <panel-id>            Terminal panel id.",
-        "  --strategy <strategy>         Defaults to auto; Codex sends Ctrl+Enter and other panels send Enter.",
+        "  --strategy <strategy>         Defaults to auto; Codex sends Ctrl+Enter and other panels send Enter. auto sends one more Enter if the text is still in the composer.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
       ],
@@ -4148,6 +4170,35 @@ export const RUNPANE_CONTRACT = {
         "--json",
         "--pane-dir",
         "/tmp/pane"
+      ],
+      [
+        "panels",
+        "create",
+        "--pane",
+        "pane-1",
+        "--agent",
+        "codex",
+        "--tool-command",
+        "wrapper codex-run",
+        "--wait-ready",
+        "--yes",
+        "--json"
+      ],
+      [
+        "panes",
+        "create",
+        "--repo",
+        "active",
+        "--name",
+        "farm",
+        "--tool-command",
+        "agent-farm run free-range",
+        "--agent",
+        "claude",
+        "--prompt",
+        "Plan",
+        "--yes",
+        "--json"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -4821,6 +4872,13 @@ export const RUNPANE_CONTRACT = {
                       "command": {
                         "type": "string"
                       },
+                      "agentType": {
+                        "enum": [
+                          "codex",
+                          "claude",
+                          "cursor"
+                        ]
+                      },
                       "title": {
                         "type": "string"
                       },
@@ -5288,6 +5346,14 @@ export const RUNPANE_CONTRACT = {
                 "enum": [
                   "active",
                   "idle"
+                ]
+              },
+              "agentState": {
+                "enum": [
+                  "ready",
+                  "working",
+                  "blocked",
+                  "none"
                 ]
               },
               "ownership": {
@@ -6451,6 +6517,17 @@ export const RUNPANE_CONTRACT = {
               "agentType": {
                 "type": "string"
               },
+              "agentDetection": {
+                "enum": [
+                  "declared",
+                  "command",
+                  "process",
+                  "screen"
+                ]
+              },
+              "launchCommand": {
+                "type": "string"
+              },
               "isCliPanel": {
                 "type": "boolean"
               },
@@ -7364,6 +7441,7 @@ export const RUNPANE_CONTRACT = {
                 "codex-update",
                 "agent-prompt",
                 "submission_unverified",
+                "composer-unknown",
                 "unknown"
               ]
             },
@@ -8462,7 +8540,8 @@ export const RUNPANE_CONTRACT = {
           "paneListResult"
         ],
         "notes": [
-          "Without --repo, this lists sessions across saved Pane repositories."
+          "Without --repo, this lists sessions across saved Pane repositories.",
+          "`status` is `running` while any terminal panel is live, otherwise the stored lifecycle value. `agentState` is the most urgent state of the live agent panels: `blocked`, `working`, `ready`, or `none`. `agentStatus` (`active`/`idle`) is kept for older clients."
         ]
       },
       "panes cost": {
@@ -8544,7 +8623,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--agent",
             "value": "<codex|claude|cursor>",
             "required": false,
-            "description": "Built-in agent terminal template to open."
+            "description": "Built-in agent terminal template to open. With --tool-command, the agent that command runs."
           },
           {
             "name": "--tool-command",
@@ -8665,7 +8744,8 @@ export const RUNPANE_CONTRACT = {
           "For Windows PowerShell command chaining, use a custom terminal command like `powershell -NoProfile -Command \"cmd1; if ($LASTEXITCODE) { exit $LASTEXITCODE }; cmd2\"`.",
           "From WSL with Windows Pane, invoke through PowerShell and select the saved WSL repo by name or id, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane panes create --repo \"WSL Pane\" --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json'`.",
           "Use --wait-ready when an agent needs to verify that an agent terminal started instead of only creating a pane.",
-          "If readiness returns blocked, inspect blocked.suggestedCommand rather than guessing which prompt to answer."
+          "If readiness returns blocked, inspect blocked.suggestedCommand rather than guessing which prompt to answer.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
         ]
       },
       "panes adopt": {
@@ -8696,8 +8776,14 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--agent",
             "value": "<codex|claude|cursor>",
-            "required": true,
-            "description": "Agent whose terminal to create."
+            "required": false,
+            "description": "Agent whose terminal to create; with --tool-command, the agent that command runs."
+          },
+          {
+            "name": "--tool-command",
+            "value": "<command>",
+            "required": false,
+            "description": "Custom command to stage or launch instead of a built-in agent, such as a wrapper that runs one."
           },
           {
             "name": "--resume",
@@ -8749,14 +8835,19 @@ export const RUNPANE_CONTRACT = {
           }
         ],
         "examples": [
-          "runpane panes adopt --repo active --path /path/to/worktree --name imported --agent codex --resume <id> --yes --json"
+          "runpane panes adopt --repo active --path /path/to/worktree --name imported --agent codex --resume <id> --yes --json",
+          "runpane panes adopt --repo active --path /path/to/worktree --name imported --tool-command \"agent-farm run free-range\" --agent claude --launch --yes --json"
         ],
         "jsonSchemas": [
           "paneCreateResult"
         ],
         "notes": [
           "The resume command is staged without Enter unless --launch is passed.",
-          "Pane never removes an externally owned worktree."
+          "Pane never removes an externally owned worktree.",
+          "One of --agent or --tool-command is required.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen.",
+          "--resume needs a built-in agent command; a wrapper command resumes its own way.",
+          "The adopted Pane reports `status: running` in `panes list` while its terminal is live."
         ]
       },
       "panes archive": {
@@ -9062,7 +9153,8 @@ export const RUNPANE_CONTRACT = {
           "panelListResult"
         ],
         "notes": [
-          "The ids returned here are stable inputs for `panels output` and `panels input`."
+          "The ids returned here are stable inputs for `panels output` and `panels input`.",
+          "`agentType` is the agent Pane treats the panel as; `agentDetection` says how it knows (`declared`, `command`, `process`, or `screen`), and `launchCommand` is the command the panel was launched with."
         ]
       },
       "panels output": {
@@ -9265,7 +9357,7 @@ export const RUNPANE_CONTRACT = {
       "panels submit": {
         "name": "panels submit",
         "summary": "Send and submit text to a terminal panel, including idle agent composers.",
-        "details": "Use this for ordinary interactive submissions. For Claude, Pane waits for the composer to appear and show the staged text, then sends Enter on its own and verifies that the composer cleared; Claude keeps an Enter that arrives together with the text as a newline. For an idle Codex composer, Pane stages the text, waits for Codex paste handling, sends the Codex submit sequence, and verifies that the turn started when visible evidence is available. Other terminals receive a normalized CR Enter. Exact byte workflows remain on `panels input`.",
+        "details": "Use this for ordinary interactive submissions. For Claude, Pane waits for the composer to appear and show the staged text, then sends Enter on its own and verifies that the composer cleared; Claude keeps an Enter that arrives together with the text as a newline. For an idle Codex composer, Pane stages the text, waits for Codex paste handling, sends the Codex submit sequence, and verifies that the turn started when visible evidence is available. Wrapper-launched agents are handled the same way once Pane knows the agent (declared, from the foreground process, or from the screen). A Claude or Codex panel with no composer on screen gets nothing: the result is `ok: false` with `blocked.kind: composer-unknown`. Other terminals receive a normalized CR Enter. Exact byte workflows remain on `panels input`.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -9315,7 +9407,8 @@ export const RUNPANE_CONTRACT = {
         "notes": [
           "The response includes sequenceName, verifiedSubmitted, and nextCommand. If ok is false, inspect blocked and do not assume the turn started.",
           "Do not follow `panels submit` with `panels submit-composer`; Claude and idle Codex composer submission is handled atomically.",
-          "Use `panels input` for Ctrl-C, escape sequences, or any workflow requiring exact bytes."
+          "Use `panels input` for Ctrl-C, escape sequences, or any workflow requiring exact bytes.",
+          "On `blocked.kind: composer-unknown`, nothing was typed. Check `panels screen`; if the agent is at a prompt Pane does not recognise, use `panels input`."
         ]
       },
       "panels wait": {
@@ -9396,7 +9489,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--agent",
             "value": "<codex|claude|cursor>",
             "required": false,
-            "description": "Built-in agent command template to launch."
+            "description": "Built-in agent command template to launch. With --tool-command, the agent that command runs."
           },
           {
             "name": "--tool-command",
@@ -9468,7 +9561,8 @@ export const RUNPANE_CONTRACT = {
         ],
         "examples": [
           "runpane panels create --pane <pane-id> --agent <agent> --source agent --no-focus --wait-ready --yes --json",
-          "runpane panels create --pane <pane-id> --tool-command <command> --title <title> --source agent --no-focus --wait-ready --yes --json"
+          "runpane panels create --pane <pane-id> --tool-command <command> --title <title> --source agent --no-focus --wait-ready --yes --json",
+          "runpane panels create --pane <pane-id> --tool-command \"agent-farm run free-range\" --agent claude --source agent --no-focus --wait-ready --yes --json"
         ],
         "jsonSchemas": [
           "panelCreateRequest",
@@ -9478,7 +9572,8 @@ export const RUNPANE_CONTRACT = {
           "Use this for same-pane reviewer loops after PR creation/testing.",
           "Panels share the existing Pane's worktree and branch.",
           "`panels create` is for visible helper/reviewer tabs, not the agent's default private delegation mechanism.",
-          "For agent-created panels, prefer --source agent or --no-focus to avoid stealing focus from the user or implementation tab."
+          "For agent-created panels, prefer --source agent or --no-focus to avoid stealing focus from the user or implementation tab.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
         ]
       },
       "panels submit-composer": {
@@ -9528,7 +9623,8 @@ export const RUNPANE_CONTRACT = {
         "notes": [
           "Use `panels input` or `panels submit` to write prompt text first; this command only submits the current composer.",
           "Use --strategy auto for agent workflows; explicit strategies are diagnostic escape hatches.",
-          "The JSON result includes sequenceName and verifiedSubmitted. If ok is false, follow blocked.suggestedCommand instead of assuming submission happened."
+          "The JSON result includes sequenceName and verifiedSubmitted. If ok is false, follow blocked.suggestedCommand instead of assuming submission happened.",
+          "With `--strategy auto`, if the staged text is still visible in the composer after the first attempt, Pane sends one plain Enter and checks again. It never sends a second Enter to an empty composer."
         ]
       },
       "workspace state": {
