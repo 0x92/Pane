@@ -2644,6 +2644,9 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'panel.exited',
   'pane.associated',
   'pane.detached',
+  'pr.conflicted',
+  'pr.checks',
+  'pr.merged',
 );
 
 function parseWorkspaceKinds(value: PaneCommandValue): RunpaneWorkspaceEntryKind[] | undefined {
