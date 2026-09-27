@@ -308,6 +308,17 @@ describe('WorkspaceJournal', () => {
       expect(journal.readAfter(0, { sessionId, kinds: ['agent.ready'] }).entries).toEqual([]);
     });
 
+    it('delivers a member worker report to Session watchers, and still keeps it from kinds-less consumers', () => {
+      const { journal } = sessionJournal();
+      const report = { state: 'ready' as const, pr: 747, reportedAt: '2026-09-27T18:00:00.000Z' };
+      journal.appendPaneEntry('one', { kind: 'agent.report', panelId: 'p1', agentType: 'claude', source: 'agent', report });
+      journal.appendPaneEntry('two', { kind: 'agent.report', panelId: 'p2', agentType: 'claude', source: 'agent', report });
+
+      expect(journal.readAfter(0, {}).entries).toEqual([]);
+      expect(journal.readAfter(0, { sessionId }).entries).toMatchObject([{ kind: 'agent.report', paneId: 'one', report }]);
+      expect(journal.readAfter(0, { sessionId, kinds: ['agent.ready'] }).entries).toEqual([]);
+    });
+
     it('keys a Session scope by the Session rather than its Panes', () => {
       expect(workspaceFilterKey({ sessionId })).toBe(workspaceFilterKey({ sessionId }));
       expect(workspaceFilterKey({ sessionId })).not.toBe(workspaceFilterKey({ sessionId: 'other' }));

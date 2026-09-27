@@ -528,7 +528,7 @@ When a pane finishes something a human will read, have it run the
    writes the prompt to a private file and submits one line pointing at it.
    End every worker prompt with: "When finished or blocked, run
    \`runpane report --state <ready|blocked|failed|done> --pr <number> --head <sha> --summary-file <path>\`
-   (add \`--question \"<question>\"\` when blocked)."
+   (add \`--question "<question>"\` when blocked)."
 5. Keep the Session's own agent, profile, and tool configuration as they are.
 
 Never edit project implementation files from the Session. A Session can stay
