@@ -445,6 +445,13 @@ PRs touch the same files, though:
 | PR9 work items | deferred (D6) | | |
 | PR10 PR events | #835 | `runpane/pr-watch-events` | #833 |
 
+Combined PRs (for review, stacked):
+
+| Combined PR | Replaces | Branch | Base |
+|---|---|---|---|
+| Part 1: Session watch | #829, #833, #835 | `runpane/combined-session-watch` (#844) | `main` |
+| Part 2: agent delivery and reports | #831, #836, #837, #839 | `runpane/combined-agent-delivery` (#845) | #844 |
+
 Suggested merge order:
 1. #780, #771 and #818 first.
 2. Then #829 → #833 → #835.
