@@ -10,7 +10,7 @@ export const RUNPANE_CONTRACT = {
     "Work starts only when a user runs `runpane ...`."
   ],
   "compatibility": {
-    "node": ">=20.0.0",
+    "node": ">=20.12.0",
     "python": ">=3.8"
   },
   "terminology": {
@@ -3482,7 +3482,7 @@ export const RUNPANE_CONTRACT = {
       "runpane <command> --help"
     ],
     "commandDescriptions": [
-      "`runpane` with no arguments and `runpane setup` open an interactive wizard when stdin and stdout are TTYs. In non-interactive shells or CI, both forms must print help, common commands, and agent discovery hints, then exit successfully instead of waiting for input.",
+      "`runpane` with no arguments and `runpane setup` open an interactive wizard when stdin and stdout are TTYs. The remote-host wizard asks only for a name, then runs interactive Tailscale setup with automatic port selection; explicit install daemon flags remain available for SSH and manual URLs. In non-interactive shells or CI, both forms must print help, common commands, and agent discovery hints, then exit successfully instead of waiting for input.",
       "`runpane install` is an alias for `runpane install client`.",
       "`runpane install client` downloads the selected Pane desktop artifact and installs, opens, or launches it for the current platform.",
       "`runpane install daemon` downloads or installs Pane, resolves a stable Pane executable path, and spawns `<pane executable> --remote-setup <forwarded remote setup args>`.",

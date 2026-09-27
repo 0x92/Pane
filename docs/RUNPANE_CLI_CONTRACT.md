@@ -21,7 +21,7 @@ Work starts only when a user runs `runpane ...`.
 
 ## Compatibility Floors
 
-The npm wrapper should run on Node.js `>=20.0.0` and newer. The root Electron app
+The npm wrapper should run on Node.js `>=20.12.0` and newer. The root Electron app
 may require a newer Node.js version for development and packaging.
 
 The PyPI wrapper should run on Python `>=3.8` and newer. Keep runtime dependencies
@@ -135,7 +135,7 @@ runpane help
 runpane <command> --help
 ```
 
-`runpane` with no arguments and `runpane setup` open an interactive wizard when stdin and stdout are TTYs. In non-interactive shells or CI, both forms must print help, common commands, and agent discovery hints, then exit successfully instead of waiting for input.
+`runpane` with no arguments and `runpane setup` open an interactive wizard when stdin and stdout are TTYs. The remote-host wizard asks only for a name, then runs interactive Tailscale setup with automatic port selection; explicit install daemon flags remain available for SSH and manual URLs. In non-interactive shells or CI, both forms must print help, common commands, and agent discovery hints, then exit successfully instead of waiting for input.
 
 `runpane install` is an alias for `runpane install client`.
 

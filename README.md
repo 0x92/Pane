@@ -148,22 +148,33 @@ The easiest setup path is in the app:
 4. On another desktop, open Pane, go to `Settings > Remote Pane`, paste the code, and connect.
 5. On a phone or tablet, open [runpane.com/app](https://runpane.com/app/), paste the same code, and connect.
 
-For a headless VM or server, use `runpane`:
+For a headless VM or server, run the guided setup in its terminal:
 
 ```bash
-npx --yes runpane@latest install daemon --label "My Server"
+npx --yes runpane@latest
+```
+
+Choose **Set up a remote host**, give it a name, and follow the
+Tailscale login prompts. Paste the printed connection code into Pane or
+[runpane.com/app](https://runpane.com/app/) on another device signed into the same
+Tailscale network.
+
+To skip the menu and run interactive remote setup directly:
+
+```bash
+npx --yes runpane@latest install daemon --interactive-tailscale-setup --auto-listen-port
 ```
 
 pnpm:
 
 ```bash
-pnpm dlx runpane@latest install daemon --label "My Server"
+pnpm dlx runpane@latest
 ```
 
 Python tools:
 
 ```bash
-pipx run runpane install daemon --label "My Server"
+pipx run runpane
 ```
 
 Use SSH instead of Tailscale:
@@ -278,7 +289,11 @@ npx --yes runpane@latest
 ```
 
 The wizard can install Pane on this machine, configure this machine as a remote
-host, update Pane, or run diagnostics.
+host, update Pane, or run diagnostics. For remote access, choose **Set up a remote
+host**, accept or enter a name, and follow the Tailscale login
+prompts. Copy the connection code into Pane on your other device or
+[runpane.com/app](https://runpane.com/app/). Sign that device into the same
+Tailscale network first. No tunnel flags are needed in the wizard.
 
 ### Package Manager Commands
 

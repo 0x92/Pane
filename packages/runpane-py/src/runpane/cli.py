@@ -392,30 +392,14 @@ def run_interactive_wizard(telemetry_context: WrapperTelemetryContext) -> int:
     label = input(f"Remote host label [{default_label}]: ").strip() or default_label
 
     print()
-    print("Connection method:")
-    print("1) auto")
-    print("2) tailscale")
-    print("3) ssh")
-    print("4) manual")
-    print()
-    print("Use auto unless you already know you want Tailscale, SSH, or a manual URL.")
-    print()
-
-    tunnel = ask_choice("Choose a connection method [1]: ", {
-        "": "auto",
-        "1": "auto",
-        "auto": "auto",
-        "2": "tailscale",
-        "tailscale": "tailscale",
-        "3": "ssh",
-        "ssh": "ssh",
-        "4": "manual",
-        "manual": "manual",
-    })
-
-    remote_setup_args = ["--label", label]
-    if tunnel != "auto":
-        remote_setup_args.extend(["--prefer-tunnel", tunnel])
+    print("Pane will install Tailscale if needed and guide you through signing in.")
+    print("For SSH or a manual URL, use runpane install daemon --help.")
+    remote_setup_args = [
+        "--label", label,
+        "--prefer-tunnel", "tailscale",
+        "--interactive-tailscale-setup",
+        "--auto-listen-port",
+    ]
 
     print()
     print("Setting up this machine as a Pane remote host...")
