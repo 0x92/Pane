@@ -485,7 +485,7 @@ export const RUNPANE_CONTRACT = {
       "name": "panels submit",
       "summary": "Send and submit text to a terminal panel, including idle agent composers.",
       "usage": [
-        "runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json] [--pane-dir <path>]"
+        "runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "toolsets": [
@@ -974,7 +974,7 @@ export const RUNPANE_CONTRACT = {
       "name": "agents send",
       "summary": "Send a follow-up message to an agent and confirm it was submitted.",
       "usage": [
-        "runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> --yes [--json] [--pane-dir <path>]"
+        "runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> [--as-file-pointer] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "wrappers": [
@@ -1471,6 +1471,10 @@ export const RUNPANE_CONTRACT = {
         "description": "Run an adopted pane's agent resume command immediately instead of staging it."
       },
       {
+        "name": "--as-file-pointer",
+        "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+      },
+      {
         "name": "--follow",
         "description": "Continue waiting for workspace events until interrupted."
       },
@@ -1838,6 +1842,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Creates user-visible Panes (Pane sessions) for feature/PR work in a saved repository and opens a terminal-backed tool tab. Pane creates and owns the worktree/branch for each new Pane.",
         "",
+        "A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
+        "",
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
         "  --name <name>                  Pane/session name",
@@ -1849,6 +1855,7 @@ export const RUNPANE_CONTRACT = {
         "  --initial-input <text>         Text sent after the command is ready",
         "  --prompt <text>                Alias for --initial-input",
         "  --initial-input-file <path|->  Read initial input from a file or stdin",
+        "  --as-file-pointer              Send `Read and follow <prompt file>` instead of the prompt",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
         "  --wait-ready                   Wait for terminal readiness before returning",
@@ -2062,16 +2069,21 @@ export const RUNPANE_CONTRACT = {
       ],
       "panels submit": [
         "Usage:",
-        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
+        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] --yes [--json]",
         "",
         "Sends text to a terminal panel and normalizes the final terminal Enter to CR. Use this for ordinary prompt answers and shell commands.",
         "",
         "For a Claude or Codex panel with no composer on screen, nothing is sent: the result is ok: false with blocked.kind composer-unknown.",
         "",
+        "Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and Enter goes as its own write once the paste has settled, even while the agent is working.",
+        "",
+        "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
+        "",
         "Options:",
         "  --panel <panel-id>             Terminal panel id",
         "  --text <text>                  Text to submit before Enter",
         "  --input-file <path|->          Read text from a file or stdin before Enter",
+        "  --as-file-pointer              Write the text to a prompt file and submit `Read and follow <path>`",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output",
         "  --yes                          Skip confirmation for this mutating command"
@@ -2105,6 +2117,7 @@ export const RUNPANE_CONTRACT = {
         "  --title <title>               Panel title override.",
         "  --initial-input, --prompt     Initial input to send after the tool starts.",
         "  --initial-input-file <path|-> Read initial input from a file or stdin.",
+        "  --as-file-pointer             Send `Read and follow <prompt file>` instead of the prompt.",
         "  --no-focus                    Create the panel in the background.",
         "  --focus                       Explicitly focus the created panel.",
         "  --source <user|agent>         Mark the mutation source; agent implies background creation.",
@@ -2487,7 +2500,7 @@ export const RUNPANE_CONTRACT = {
       ],
       "agents send": [
         "Usage:",
-        "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> --yes [--json] [--pane-dir <path>]",
+        "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> [--as-file-pointer] --yes [--json] [--pane-dir <path>]",
         "",
         "Send a follow-up message to an agent and confirm it was submitted.",
         "",
@@ -2495,6 +2508,7 @@ export const RUNPANE_CONTRACT = {
         "  --pane <pane-id>                Pane id; its agent panel is used.",
         "  --panel <panel-id>              Panel id.",
         "  --text <message>                The message to submit.",
+        "  --as-file-pointer               Write the message to a prompt file and send `Read and follow <path>`.",
         "  --yes                           Confirm this change; required in non-interactive shells.",
         "  --json                          Print machine-readable output.",
         "  --pane-dir <path>               Connect to a specific Pane data directory."
@@ -2801,6 +2815,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Creates user-visible Panes (Pane sessions) for feature/PR work in a saved repository and opens a terminal-backed tool tab. Pane creates and owns the worktree/branch for each new Pane.",
         "",
+        "A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
+        "",
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
         "  --name <name>                  Pane/session name",
@@ -2812,6 +2828,7 @@ export const RUNPANE_CONTRACT = {
         "  --initial-input <text>         Text sent after the command is ready",
         "  --prompt <text>                Alias for --initial-input",
         "  --initial-input-file <path|->  Read initial input from a file or stdin",
+        "  --as-file-pointer              Send `Read and follow <prompt file>` instead of the prompt",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
         "  --wait-ready                   Wait for terminal readiness before returning",
@@ -3017,16 +3034,21 @@ export const RUNPANE_CONTRACT = {
       ],
       "panels submit": [
         "Usage:",
-        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
+        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] --yes [--json]",
         "",
         "Sends text to a terminal panel and normalizes the final terminal Enter to CR. Use this for ordinary prompt answers and shell commands.",
         "",
         "For a Claude or Codex panel with no composer on screen, nothing is sent: the result is ok: false with blocked.kind composer-unknown.",
         "",
+        "Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and Enter goes as its own write once the paste has settled, even while the agent is working.",
+        "",
+        "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
+        "",
         "Options:",
         "  --panel <panel-id>             Terminal panel id",
         "  --text <text>                  Text to submit before Enter",
         "  --input-file <path|->          Read text from a file or stdin before Enter",
+        "  --as-file-pointer              Write the text to a prompt file and submit `Read and follow <path>`",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output",
         "  --yes                          Skip confirmation for this mutating command"
@@ -3060,6 +3082,7 @@ export const RUNPANE_CONTRACT = {
         "  --title <title>               Panel title override.",
         "  --initial-input, --prompt     Initial input to send after the tool starts.",
         "  --initial-input-file <path|-> Read initial input from a file or stdin.",
+        "  --as-file-pointer             Send `Read and follow <prompt file>` instead of the prompt.",
         "  --no-focus                    Create the panel in the background.",
         "  --focus                       Explicitly focus the created panel.",
         "  --source <user|agent>         Mark the mutation source; agent implies background creation.",
@@ -3419,7 +3442,7 @@ export const RUNPANE_CONTRACT = {
       ],
       "agents send": [
         "Usage:",
-        "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> --yes [--json] [--pane-dir <path>]",
+        "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> [--as-file-pointer] --yes [--json] [--pane-dir <path>]",
         "",
         "`runpane agents send` ships in the npm package and the Pane app, not in the Python package.",
         "Run it with Node instead: npx --yes runpane@latest agents send"
@@ -4199,6 +4222,33 @@ export const RUNPANE_CONTRACT = {
         "Plan",
         "--yes",
         "--json"
+      ],
+      [
+        "panels",
+        "submit",
+        "--panel",
+        "panel-1",
+        "--input-file",
+        "brief.md",
+        "--as-file-pointer",
+        "--yes",
+        "--json"
+      ],
+      [
+        "panes",
+        "create",
+        "--repo",
+        "active",
+        "--name",
+        "long",
+        "--agent",
+        "claude",
+        "--initial-input-file",
+        "brief.md",
+        "--as-file-pointer",
+        "--dry-run",
+        "--yes",
+        "--json"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -4859,6 +4909,9 @@ export const RUNPANE_CONTRACT = {
                       },
                       "initialInput": {
                         "type": "string"
+                      },
+                      "initialInputAsFilePointer": {
+                        "type": "boolean"
                       }
                     },
                     "additionalProperties": false
@@ -4884,6 +4937,9 @@ export const RUNPANE_CONTRACT = {
                       },
                       "initialInput": {
                         "type": "string"
+                      },
+                      "initialInputAsFilePointer": {
+                        "type": "boolean"
                       }
                     },
                     "additionalProperties": false
@@ -5222,6 +5278,12 @@ export const RUNPANE_CONTRACT = {
                       }
                     },
                     "additionalProperties": false
+                  },
+                  "promptFile": {
+                    "type": "string"
+                  },
+                  "warnings": {
+                    "$ref": "#/jsonSchemas/panelSubmitResult/properties/warnings"
                   }
                 },
                 "additionalProperties": false
@@ -6904,6 +6966,9 @@ export const RUNPANE_CONTRACT = {
         },
         "input": {
           "type": "string"
+        },
+        "asFilePointer": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -6952,6 +7017,33 @@ export const RUNPANE_CONTRACT = {
         },
         "blocked": {
           "$ref": "#/jsonSchemas/panelSubmitComposerResult/properties/blocked"
+        },
+        "promptFile": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "leading-bang-runs-shell",
+                  "leading-hash-memory",
+                  "leading-slash-command",
+                  "leading-at-mention"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
         },
         "nextCommand": {
           "type": "string"
@@ -7358,6 +7450,12 @@ export const RUNPANE_CONTRACT = {
             }
           },
           "additionalProperties": false
+        },
+        "promptFile": {
+          "type": "string"
+        },
+        "warnings": {
+          "$ref": "#/jsonSchemas/panelSubmitResult/properties/warnings"
         },
         "nextCommand": {
           "type": "string"
@@ -7799,6 +7897,12 @@ export const RUNPANE_CONTRACT = {
         },
         "blocked": {
           "type": "string"
+        },
+        "promptFile": {
+          "type": "string"
+        },
+        "warnings": {
+          "$ref": "#/jsonSchemas/panelSubmitResult/properties/warnings"
         },
         "next": {
           "type": "string"
@@ -8644,6 +8748,11 @@ export const RUNPANE_CONTRACT = {
             "description": "Read initial input from a file or stdin."
           },
           {
+            "name": "--as-file-pointer",
+            "required": false,
+            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+          },
+          {
             "name": "--from-json",
             "value": "<path|->",
             "required": false,
@@ -8722,7 +8831,8 @@ export const RUNPANE_CONTRACT = {
         "examples": [
           "runpane panes create --repo active --name issue-257 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json",
           "runpane panes create --from-json panes.json --yes --json",
-          "runpane panes create --repo active --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json"
+          "runpane panes create --repo active --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json",
+          "runpane panes create --repo active --name issue-123 --agent claude --initial-input-file brief.md --as-file-pointer --source agent --no-focus --wait-ready --yes --json"
         ],
         "jsonSchemas": [
           "paneCreateRequest",
@@ -8735,7 +8845,9 @@ export const RUNPANE_CONTRACT = {
           "Use `panels create` instead when a reviewer/helper should share an existing Pane's worktree.",
           "Agent-created Panes should pass `--source agent --no-focus --wait-ready --yes --json` unless the user explicitly wants focus moved. `panes create` pins the new Pane by default, so a follow-up `panes pin` call is unnecessary; pass `--no-pinned` for throwaway shells or bulk imports. `--pinned` is still accepted and is now a no-op. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.",
           "The built-in agent templates come from the runpane contract; custom terminal commands can pass agent-specific flags when requested by the user.",
-          "Use --initial-input-file for multi-line prompts or shell-sensitive initial input.",
+          "Use --initial-input-file for multi-line prompts or shell-sensitive initial input. A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
+          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts.",
+          "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
           "With --wait-ready, verifiedSubmitted is earned from delivery evidence; routing initial input alone does not imply verified submission.",
           "If initialInput.blocked.kind is submission_unverified, do not submit again automatically. Inspect initialInput.staged and attempts, then run nextCommand to resolve the ambiguous composer state.",
           "When the JSON result includes nextCommand, run it to validate that the terminal produced output before reporting success.",
@@ -9357,7 +9469,7 @@ export const RUNPANE_CONTRACT = {
       "panels submit": {
         "name": "panels submit",
         "summary": "Send and submit text to a terminal panel, including idle agent composers.",
-        "details": "Use this for ordinary interactive submissions. For Claude, Pane waits for the composer to appear and show the staged text, then sends Enter on its own and verifies that the composer cleared; Claude keeps an Enter that arrives together with the text as a newline. For an idle Codex composer, Pane stages the text, waits for Codex paste handling, sends the Codex submit sequence, and verifies that the turn started when visible evidence is available. Wrapper-launched agents are handled the same way once Pane knows the agent (declared, from the foreground process, or from the screen). A Claude or Codex panel with no composer on screen gets nothing: the result is `ok: false` with `blocked.kind: composer-unknown`. Other terminals receive a normalized CR Enter. Exact byte workflows remain on `panels input`.",
+        "details": "Use this for ordinary interactive submissions. For Claude, Pane waits for the composer to appear and show the staged text, then sends Enter on its own and verifies that the composer cleared; Claude keeps an Enter that arrives together with the text as a newline. For an idle Codex composer, Pane stages the text, waits for Codex paste handling, sends the Codex submit sequence, and verifies that the turn started when visible evidence is available. Wrapper-launched agents are handled the same way once Pane knows the agent (declared, from the foreground process, or from the screen). A Claude or Codex panel with no composer on screen gets nothing: the result is `ok: false` with `blocked.kind: composer-unknown`. Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and Enter goes as its own write once the paste has settled, even while the agent is working. Other terminals receive a normalized CR Enter. Exact byte workflows remain on `panels input`.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -9380,6 +9492,11 @@ export const RUNPANE_CONTRACT = {
             "description": "Read text from a file or stdin before Enter."
           },
           {
+            "name": "--as-file-pointer",
+            "required": false,
+            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+          },
+          {
             "name": "--yes",
             "required": false,
             "description": "Skip confirmation for this mutating command."
@@ -9398,7 +9515,8 @@ export const RUNPANE_CONTRACT = {
         ],
         "examples": [
           "runpane panels submit --panel <panel-id> --text \"2\" --yes --json",
-          "printf \"echo hello\" | runpane panels submit --panel <panel-id> --input-file - --yes --json"
+          "printf \"echo hello\" | runpane panels submit --panel <panel-id> --input-file - --yes --json",
+          "runpane panels submit --panel <panel-id> --input-file brief.md --as-file-pointer --yes --json"
         ],
         "jsonSchemas": [
           "panelSubmitRequest",
@@ -9408,7 +9526,9 @@ export const RUNPANE_CONTRACT = {
           "The response includes sequenceName, verifiedSubmitted, and nextCommand. If ok is false, inspect blocked and do not assume the turn started.",
           "Do not follow `panels submit` with `panels submit-composer`; Claude and idle Codex composer submission is handled atomically.",
           "Use `panels input` for Ctrl-C, escape sequences, or any workflow requiring exact bytes.",
-          "On `blocked.kind: composer-unknown`, nothing was typed. Check `panels screen`; if the agent is at a prompt Pane does not recognise, use `panels input`."
+          "On `blocked.kind: composer-unknown`, nothing was typed. Check `panels screen`; if the agent is at a prompt Pane does not recognise, use `panels input`.",
+          "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
+          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts."
         ]
       },
       "panels wait": {
@@ -9514,6 +9634,11 @@ export const RUNPANE_CONTRACT = {
             "value": "<path|->",
             "required": false,
             "description": "Read initial input from a file or stdin."
+          },
+          {
+            "name": "--as-file-pointer",
+            "required": false,
+            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
           },
           {
             "name": "--source",
@@ -10835,6 +10960,11 @@ export const RUNPANE_CONTRACT = {
             "description": "The message to submit."
           },
           {
+            "name": "--as-file-pointer",
+            "required": false,
+            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+          },
+          {
             "name": "--yes",
             "required": false,
             "description": "Confirm this change; required in non-interactive shells."
@@ -10852,14 +10982,16 @@ export const RUNPANE_CONTRACT = {
           }
         ],
         "examples": [
-          "runpane agents send --pane <pane-id> --text \"Also add a test\" --yes --json"
+          "runpane agents send --pane <pane-id> --text \"Also add a test\" --yes --json",
+          "runpane agents send --pane <pane-id> --text \"$(cat review-notes.md)\" --as-file-pointer --yes --json"
         ],
         "jsonSchemas": [
           "agentSendResult"
         ],
         "notes": [
           "`delivered` is true only when Pane saw the message leave the composer.",
-          "It types the text and presses Enter, so it is for messages, not keys. To answer a menu, use `runpane panels input --panel <panel-id> --keys down,enter --yes`, then check the screen with `runpane agents status`."
+          "It types the text and presses Enter, so it is for messages, not keys. To answer a menu, use `runpane panels input --panel <panel-id> --keys down,enter --yes`, then check the screen with `runpane agents status`.",
+          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts."
         ]
       },
       "sessions list": {
