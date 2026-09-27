@@ -86,8 +86,14 @@ async function withStubDaemon(paneDir, results, action) {
         const frame = JSON.parse(buffer.slice(0, index));
         buffer = buffer.slice(index + 1);
         if (frame.type !== 'request') continue;
-        requests.push({ channel: frame.channel, args: frame.args, socket });
         const answer = results[frame.channel];
+        // invokeDaemon always opens with an explicit event filter. Tests assert
+        // the command traffic, so keep that handshake off the recorded list.
+        if (answer === undefined && frame.channel === 'daemon:events') {
+          socket.write(`${JSON.stringify({ type: 'response', id: frame.id, ok: true, result: { included: frame.args?.[0]?.include ?? [] } })}\n`);
+          continue;
+        }
+        requests.push({ channel: frame.channel, args: frame.args, socket });
         if (answer === HOLD) continue;
         const result = answer instanceof Function ? answer(frame.args) : answer;
         socket.write(`${JSON.stringify({ type: 'response', id: frame.id, ok: true, result })}\n`);
