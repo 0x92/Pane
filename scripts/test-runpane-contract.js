@@ -1308,6 +1308,90 @@ print(artifact["name"])
   assert.strictEqual(pythonArtifact, 'Pane-2.2.8-Windows-x64.zip');
 }
 
+async function checkGuidedRemoteSetup() {
+  const promptsPath = path.join(rootDir, 'packages/runpane/dist/setupPrompts.js');
+  const originalPrompts = require(promptsPath);
+  const installers = require(path.join(rootDir, 'packages/runpane/dist/installers.js'));
+  const originalResolve = installers.resolveExistingPanePath;
+  const originalSpawn = installers.spawnPane;
+  const originalCI = process.env.CI;
+  const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+  try {
+    delete process.env.CI;
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    for (const argv of [[], ['setup']]) {
+      for (const cancelAt of [null, 'action', 'name']) {
+        let finished = false;
+        let spawned = false;
+        let cancelled = false;
+        let success = false;
+        let failure = false;
+        const exitCode = argv.length ? 0 : 7;
+        const hostName = argv.length ? '' : 'My Server';
+        const cancellation = Symbol('cancel');
+        require.cache[require.resolve(promptsPath)].exports = {
+          intro() {},
+          select: async () => cancelAt === 'action' ? cancellation : 'daemon',
+          text: async options => {
+            assert.ok(options.validate('   '));
+            assert.strictEqual(options.validate(''), undefined);
+            return cancelAt === 'name' ? cancellation : hostName;
+          },
+          isCancel: value => value === cancellation,
+          cancel: () => { cancelled = true; },
+          outro: () => { finished = true; },
+          log: { info() {}, success: () => { success = true; }, error: () => { failure = true; } }
+        };
+        installers.resolveExistingPanePath = () => '/test/pane';
+        installers.spawnPane = async (_executable, args) => {
+          assert.ok(finished, 'Prompts must finish before interactive setup');
+          assert.deepStrictEqual(args, [
+            '--remote-setup', '--label', hostName || os.hostname() || 'Remote Host', '--prefer-tunnel', 'tailscale',
+            '--interactive-tailscale-setup', '--auto-listen-port'
+          ]);
+          spawned = true;
+          return exitCode;
+        };
+        delete require.cache[require.resolve(npmCli)];
+        const { main } = require(npmCli);
+        assert.strictEqual(await main(argv), cancelAt ? 0 : exitCode);
+        assert.strictEqual(success, !cancelAt && exitCode === 0);
+        assert.strictEqual(failure, !cancelAt && exitCode !== 0);
+        assert.strictEqual(spawned, !cancelAt);
+        assert.strictEqual(cancelled, Boolean(cancelAt));
+      }
+    }
+  } finally {
+    require.cache[require.resolve(promptsPath)].exports = originalPrompts;
+    delete require.cache[require.resolve(npmCli)];
+    installers.resolveExistingPanePath = originalResolve;
+    installers.spawnPane = originalSpawn;
+    if (originalCI === undefined) delete process.env.CI;
+    else process.env.CI = originalCI;
+    if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
+    else delete process.stdin.isTTY;
+    if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
+    else delete process.stdout.isTTY;
+  }
+  runPythonSnippet(`
+from unittest.mock import patch
+from runpane.cli import run_interactive_wizard
+from runpane.telemetry import create_initial_telemetry_context
+
+with patch("builtins.input", side_effect=["2", "My Server"]), patch("runpane.cli.install_or_update") as install:
+    install.return_value = 7
+    assert run_interactive_wizard(create_initial_telemetry_context([])) == 7
+    parsed = install.call_args.args[0]
+    assert parsed.target == "daemon"
+    assert parsed.remote_setup_args == [
+        "--label", "My Server", "--prefer-tunnel", "tailscale",
+        "--interactive-tailscale-setup", "--auto-listen-port"
+    ]
+`);
+}
+
 async function checkExistingDaemonShortCircuit() {
   const existingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-existing-'));
   const existingPath = path.join(existingDir, process.platform === 'win32' ? 'Pane.exe' : 'pane');
@@ -2722,6 +2806,8 @@ async function runChecks() {
   compareDaemonLaunchArgsParity();
   compareRemoteSetupDiagnosticParity();
   checkPlatformMatchingEdgeCases();
+  await checkGuidedRemoteSetup();
+  runPythonSnippet('import runpy; runpy.run_path("scripts/test-runpane-setup-pty.py", run_name="__main__")');
   await checkExistingDaemonShortCircuit();
   checkWindowsPaneVersionDoesNotLaunchExecutable();
   await checkFromJsonAcceptsBom();
