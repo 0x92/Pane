@@ -282,6 +282,7 @@ interface InitialInputDeliveryResult {
   sequenceName?: 'codex-ctrl-enter-cr' | 'enter-cr' | 'argument';
   verifiedSubmitted?: boolean;
   verification?: 'observed' | 'unverifiable';
+  delivery?: Delivery;
   staged?: boolean;
   attempts?: number;
   sentAt?: string;
@@ -551,6 +552,12 @@ interface PanelStateSummary {
   lastActivity?: string;
 }
 
+/** Where a prompt sent to a Claude or Codex composer went, and what Pane read to know. */
+interface Delivery {
+  state: 'taken' | 'queued' | 'in-composer' | 'unknown';
+  evidence: 'transcript' | 'screen' | 'argv';
+}
+
 interface PanelBlockedState {
   kind: 'codex-update' | 'agent-prompt' | 'submission_unverified' | 'composer-unknown' | 'unknown';
   message: string;
@@ -581,6 +588,7 @@ interface PanelScreenResult {
   composer: {
     isPresent: boolean;
     hasUndeliveredText: boolean;
+    ghostText?: string;
   };
   nextCommand?: string;
 }
@@ -595,6 +603,7 @@ interface PanelSubmitResult {
   sequenceName: 'codex-ctrl-enter-cr' | 'enter-cr';
   verifiedSubmitted: boolean;
   verification?: 'observed' | 'unverifiable';
+  delivery?: Delivery;
   sentAt: string;
   blocked?: PanelBlockedState;
   promptFile?: string;
@@ -612,6 +621,7 @@ interface PanelSubmitComposerResult {
   sequenceName: 'codex-ctrl-enter-cr' | 'enter-cr';
   verifiedSubmitted: boolean;
   verification?: 'observed' | 'unverifiable';
+  delivery?: Delivery;
   sentAt: string;
   blocked?: PanelBlockedState;
   nextCommand?: string;
@@ -808,6 +818,10 @@ const panelReadinessSchema: BoundarySchema<PanelReadiness> = boundary.object({
   nextCommand: boundary.optional(boundary.string),
 });
 const verificationSchema = boundary.optional(boundary.enumeration('observed', 'unverifiable'));
+const deliverySchema: BoundarySchema<Delivery | undefined> = boundary.optional(boundary.object({
+  state: boundary.enumeration('taken', 'queued', 'in-composer', 'unknown'),
+  evidence: boundary.enumeration('transcript', 'screen', 'argv'),
+}));
 const promptWarningsSchema = boundary.optional(boundary.array(boundary.object({
   code: boundary.enumeration('leading-bang-runs-shell', 'leading-hash-memory', 'leading-slash-command', 'leading-at-mention'),
   message: boundary.string,
@@ -820,6 +834,7 @@ const initialInputSchema: BoundarySchema<InitialInputDeliveryResult> = boundary.
   sequenceName: boundary.optional(boundary.enumeration('codex-ctrl-enter-cr', 'enter-cr', 'argument')),
   verifiedSubmitted: boundary.optional(boundary.boolean),
   verification: verificationSchema,
+  delivery: deliverySchema,
   staged: boundary.optional(boundary.boolean),
   attempts: boundary.optional(boundary.number),
   sentAt: boundary.optional(boundary.string),
@@ -1219,6 +1234,7 @@ export const panelScreenResultSchema: BoundarySchema<PanelScreenResult> = bounda
   composer: boundary.object({
     isPresent: boundary.boolean,
     hasUndeliveredText: boundary.boolean,
+    ghostText: boundary.optional(boundary.string),
   }),
   nextCommand: boundary.optional(boundary.string),
 });
@@ -1232,6 +1248,7 @@ export const panelSubmitResultSchema: BoundarySchema<PanelSubmitResult> = bounda
   sequenceName: boundary.enumeration('codex-ctrl-enter-cr', 'enter-cr'),
   verifiedSubmitted: boundary.boolean,
   verification: verificationSchema,
+  delivery: deliverySchema,
   sentAt: boundary.string,
   blocked: boundary.optional(panelBlockedSchema),
   promptFile: boundary.optional(boundary.string),
@@ -1248,6 +1265,7 @@ const panelSubmitComposerResultSchema: BoundarySchema<PanelSubmitComposerResult>
   sequenceName: boundary.enumeration('codex-ctrl-enter-cr', 'enter-cr'),
   verifiedSubmitted: boundary.boolean,
   verification: verificationSchema,
+  delivery: deliverySchema,
   sentAt: boundary.string,
   blocked: boundary.optional(panelBlockedSchema),
   nextCommand: boundary.optional(boundary.string),
@@ -2071,8 +2089,9 @@ export async function runPanelsScreen(parsed: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  output.write(result.text);
-  if (result.text && !result.text.endsWith('\n')) {
+  const text = markSuggestionLine(result.text, result.composer.ghostText);
+  output.write(text);
+  if (text && !text.endsWith('\n')) {
     output.write('\n');
   }
   return 0;
@@ -2092,6 +2111,7 @@ export async function runPanelsSubmit(parsed: ParsedArgs): Promise<number> {
     const verb = result.ok ? 'Submitted' : 'Could not verify';
     const verified = result.verifiedSubmitted ? ' verified' : ' unverified';
     console.log(`${verb} ${result.inputBytes} byte${result.inputBytes === 1 ? '' : 's'} via ${result.sequenceName} to panel ${result.panelId}.${verified}`);
+    printDelivery(result.delivery);
     if (result.blocked) {
       console.log(`Blocked: ${result.blocked.message}`);
     }
@@ -2102,6 +2122,31 @@ export async function runPanelsSubmit(parsed: ParsedArgs): Promise<number> {
   }
 
   return result.ok ? 0 : 1;
+}
+
+/** Where the prompt went, for human output: `Delivery: queued (transcript)`. */
+function printDelivery(delivery: Delivery | undefined, prefix = ''): void {
+  if (delivery) {
+    console.log(`${prefix}Delivery: ${delivery.state} (${delivery.evidence})`);
+  }
+}
+
+/**
+ * Mark the composer line that shows ghost text (a placeholder or the agent's
+ * suggested next prompt), so it does not read as typed input.
+ */
+export function markSuggestionLine(text: string, ghostText: string | undefined): string {
+  const ghost = ghostText?.split('\n')[0]?.trim();
+  if (!ghost) return text;
+  const lines = text.split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (/^[❯›>]/u.test(line) && line.includes(ghost)) {
+      lines[index] = `${lines[index].trimEnd()}  ⟨suggestion⟩`;
+      break;
+    }
+  }
+  return lines.join('\n');
 }
 
 /** The prompt file Pane wrote and any leading-character warnings, for human output. */
@@ -2132,6 +2177,7 @@ export async function runPanelsSubmitComposer(parsed: ParsedArgs): Promise<numbe
   } else {
     const verified = result.verifiedSubmitted ? ' verified' : ' unverified';
     console.log(`${result.ok ? 'Submitted' : 'Could not verify'} composer with ${result.sequenceName} to panel ${result.panelId}.${verified}`);
+    printDelivery(result.delivery);
     if (result.blocked) {
       console.log(`Blocked: ${result.blocked.message}`);
     }
@@ -2842,6 +2888,7 @@ function printInitialInputDelivery(initialInput: InitialInputDeliveryResult | un
   const attempts = initialInput.attempts === undefined ? '' : ` after ${initialInput.attempts} attempt${initialInput.attempts === 1 ? '' : 's'}`;
   const staged = initialInput.staged === undefined ? '' : `; staged: ${initialInput.staged ? 'yes' : 'no'}`;
   console.log(`${prefix}Initial input: ${status}${strategy}${attempts}${staged}`);
+  printDelivery(initialInput.delivery, prefix);
   if (initialInput.blocked) {
     console.log(`${prefix}Initial input blocked: ${initialInput.blocked.message}`);
   }
