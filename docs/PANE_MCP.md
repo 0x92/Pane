@@ -1,6 +1,6 @@
 # Pane MCP Server
 
-`runpane mcp` is an MCP server that gives coding agents Pane's `runpane` commands as tools. With it, an agent in any repository can list saved repositories, create Panes, open panels, read terminal screens, and send input, with no instructions file in the repo.
+`runpane mcp` is an MCP server that gives coding agents Pane's `runpane` commands as tools. With it, an agent in any repository can list saved repositories, create Panes, open panels, read terminal screens, and send input. Pane also keeps a short `AGENTS.md` pointer in saved repositories so agents that don't have the MCP server yet can find the CLI and how to connect.
 
 ## Automatic registration
 
@@ -157,4 +157,6 @@ Mutating tools keep the CLI's confirmation rule. Every command whose usage inclu
 
 ## AGENTS.md block
 
-Before the MCP server, Pane wrote a managed `<!-- pane-agent-context -->` block into each active repository's `AGENTS.md`. Pane no longer writes it by default. Existing blocks stay where they are, because deleting committed text from your repositories without asking would be a surprise. To remove them, turn **Publish Pane instructions to AGENTS.md** on and then off. Turning it off removes the block from every saved repository and logs each file it changed. To keep the block for agents that don't use MCP, leave that setting on.
+Pane still writes a short managed `<!-- pane-agent-context -->` block into each active repository's `AGENTS.md`. The block points agents at the RunPane CLI (`npm i -g runpane`, then `runpane doctor --json`) and at the `pane` MCP server, including Claude Code and Codex config. The full command catalog lives in MCP tools and `runpane agent-context`, not in the file.
+
+Turning **Publish Pane instructions to AGENTS.md** off stops Pane from updating the block. It does not delete existing blocks.

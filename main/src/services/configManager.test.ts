@@ -39,13 +39,9 @@ describe('ConfigManager appearance persistence', () => {
     expect(manager.getConfig().analytics?.enabled).toBe(false);
   });
 
-  it('switches an existing install from the AGENTS.md block to MCP registration once', async () => {
+  it('keeps writing AGENTS.md and turns on MCP registration for existing installs', async () => {
     await fs.writeFile(configPath, JSON.stringify({ agentContext: { managedAgentsMd: true } }));
     const manager = new ConfigManager();
-    await manager.initialize();
-    expect(manager.getConfig().agentContext).toEqual({ managedAgentsMd: false, registerMcp: true });
-
-    await manager.updateConfig({ agentContext: { managedAgentsMd: true } });
     await manager.initialize();
     expect(manager.getConfig().agentContext).toEqual({ managedAgentsMd: true, registerMcp: true });
   });

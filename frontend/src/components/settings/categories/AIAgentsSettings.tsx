@@ -87,12 +87,12 @@ export function AIAgentsSettings({ persistence, onDirtyChange }: AIAgentsSetting
         <SettingRow
           settingId="agent-context"
           label="Publish Pane instructions to AGENTS.md"
-          description="Adds a managed block to the active repository's AGENTS.md for agents that don't use MCP. Turning this off removes the block from all saved repositories."
+          description="Adds a short managed block to active repositories pointing agents at the RunPane CLI and MCP server."
           saveState={persistence.saveStates['agent-context']}
         >
           <ImmediateToggle
             label="Publish Pane instructions to AGENTS.md"
-            value={config.agentContext?.managedAgentsMd === true}
+            value={config.agentContext?.managedAgentsMd !== false}
             onSave={(value) => persistence.saveConfig('agent-context', { agentContext: { managedAgentsMd: value } })}
           />
         </SettingRow>

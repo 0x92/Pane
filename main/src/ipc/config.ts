@@ -7,7 +7,7 @@ import type { RemotePwaAffordances } from '../../../shared/types/remoteDaemon';
 import type { VoiceTranscriptionMode } from '../../../shared/types/voiceTranscription';
 import { ShellDetector } from '../utils/shellDetector';
 import { syncAutoStartOnBoot } from '../utils/autoStart';
-import { ensureProjectAgentContext, removeProjectAgentContext } from '../services/agentContextManager';
+import { ensureProjectAgentContext } from '../services/agentContextManager';
 import { syncPaneMcpForApp } from '../services/paneMcpRegistration';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 import { AppearanceValidationError } from '../../../shared/types/appearance';
@@ -74,21 +74,11 @@ export function registerConfigHandlers(
         console.log('[Config] Claude executable path changed, cleared availability cache');
       }
 
-      if (managedAgentsMdChanged) {
-        const nextConfig = configManager.getConfig();
+      if (managedAgentsMdChanged && configManager.getConfig().agentContext?.managedAgentsMd !== false) {
         const activeProject = sessionManager.getActiveProject();
-        // Turning the setting off is the one explicit cleanup of existing blocks.
-        const removing = nextConfig.agentContext?.managedAgentsMd !== true;
-        const projects = removing
-          ? databaseService.getAllProjects()
-          : activeProject ? [activeProject] : [];
-
-        for (const project of projects) {
+        if (activeProject) {
           try {
-            const result = removing
-              ? await removeProjectAgentContext(project)
-              : await ensureProjectAgentContext(project, nextConfig);
-            if (result.removed) console.log(`[Config] Removed Pane's AGENTS.md block from ${result.filePath}`);
+            await ensureProjectAgentContext(activeProject, configManager.getConfig());
           } catch (error) {
             console.warn('[Config] Failed to update Pane agent context after setting change:', error);
           }
