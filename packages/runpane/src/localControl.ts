@@ -636,7 +636,9 @@ type WorkspaceEntryKind =
   | 'agent.idle'
   | 'pane.created'
   | 'pane.gone'
-  | 'panel.exited';
+  | 'panel.exited'
+  | 'pane.associated'
+  | 'pane.detached';
 
 interface WorkspacePanelSummary {
   panelId: string;
@@ -668,7 +670,10 @@ interface WorkspaceEntry {
   heldInputPresent?: boolean;
   exitCode?: number;
   baseline?: true;
+  replay?: true;
   changedWhileAway?: boolean;
+  sessionId?: string;
+  sessionName?: string;
   panels?: WorkspacePanelSummary[];
 }
 
@@ -683,6 +688,7 @@ interface WorkspaceWaitResult extends WorkspaceStateResult {
   timedOut: boolean;
   dropped?: number;
   reset?: { reason: 'first-use' | 'epoch-changed' | 'cursor-truncated' | 'unknown-consumer' };
+  session?: { id: string; name: string };
   nextCommand: string;
 }
 
@@ -1251,6 +1257,8 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pane.created',
   'pane.gone',
   'panel.exited',
+  'pane.associated',
+  'pane.detached',
 );
 const agentStateSchema = boundary.enumeration('blocked', 'working', 'idle', 'unknown');
 const workspacePanelSummarySchema: BoundarySchema<WorkspacePanelSummary> = boundary.object({
@@ -1282,7 +1290,10 @@ const workspaceEntrySchema: BoundarySchema<WorkspaceEntry> = boundary.object({
   heldInputPresent: boundary.optional(boundary.boolean),
   exitCode: boundary.optional(boundary.number),
   baseline: boundary.optional(boundary.literal(true)),
+  replay: boundary.optional(boundary.literal(true)),
   changedWhileAway: boundary.optional(boundary.boolean),
+  sessionId: boundary.optional(boundary.string),
+  sessionName: boundary.optional(boundary.string),
   panels: boundary.optional(boundary.array(workspacePanelSummarySchema)),
 });
 export const workspaceStateResultSchema: BoundarySchema<WorkspaceStateResult> = boundary.object({
@@ -1301,6 +1312,7 @@ const workspaceWaitResultSchema: BoundarySchema<WorkspaceWaitResult> = boundary.
   reset: boundary.optional(boundary.object({
     reason: boundary.enumeration('first-use', 'epoch-changed', 'cursor-truncated', 'unknown-consumer'),
   })),
+  session: boundary.optional(boundary.object({ id: boundary.string, name: boundary.string })),
   nextCommand: boundary.string,
 });
 const repoSelectorSchema: BoundarySchema<PaneCreateRequest['repo']> = boundary.union(
@@ -1597,9 +1609,11 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
     && !parsed.noHeldInput && parsed.follow ? true : undefined;
   const cadenceValueFlagPresent = hasCadenceValueFlag(parsed);
   // Cadence state lives in the daemon per named consumer, so an anonymous follower names itself.
+  // A Session watch is named after the Session, so it survives an orchestrator agent switch.
+  const sessionCursor = parsed.sessionId ? sessionWatchCursorName(parsed.sessionId) : undefined;
   const panelCursor = process.env.PANE_PANEL_ID ? derivedWatchCursorName('panel', process.env.PANE_PANEL_ID) : undefined;
   const watchAs = parsed.watchAs
-    ?? (parsed.follow ? panelCursor || (cadenceValueFlagPresent ? `follow-${process.pid}` : undefined) : undefined);
+    ?? (parsed.follow ? sessionCursor || panelCursor || (cadenceValueFlagPresent ? `follow-${process.pid}` : undefined) : undefined);
   // --quiet drops lines that only prove liveness; --self-test still prints its WATCH OK result.
   const emitControlLine = (line: string): void => {
     if (!parsed.quiet) emitWatchLine(line);
@@ -1612,6 +1626,8 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
     limit: parsed.limit,
     kinds: parsed.watchKinds,
     paneIds: parsed.watchPaneIds,
+    // The daemon resolves the Session (id or exact name) and re-reads its Panes on every read.
+    session: parsed.sessionId,
     excludePaneIds: parsed.watchExcludePaneIds,
     repo: parsed.repo,
     nameContains: parsed.nameContains,
@@ -1646,6 +1662,10 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
         timeoutMs: timeoutMs + 5_000,
         eventInclude: [],
       });
+      if (request.session && !result.session) {
+        // An older daemon ignores the unknown field and would watch every Pane instead.
+        throw new Error('This Pane daemon does not support runpane watch --session; update Pane, or pass one --pane per Session Pane.');
+      }
       if (failingCode) {
         emitControlLine(formatNonEntry('_reconnected', { generation: result.generation }, format));
         failingCode = undefined;
@@ -1702,6 +1722,16 @@ const PORTABLE_WATCH_CURSOR_PATTERN = /^[A-Za-z0-9._-]{1,64}$/u;
 function derivedWatchCursorName(prefix: string, name: string): string {
   if (PORTABLE_WATCH_CURSOR_PATTERN.test(name)) return name;
   return `${prefix}-${createHash('sha256').update(name).digest('hex').slice(0, 12)}`;
+}
+
+/**
+ * Default cursor for `watch --session`: `session-<uuid>` for a Session id
+ * (`__orchestration_session_<uuid>__`), `session-<name>` for a name, shortened like any
+ * derived name when it is longer than 64 characters or has other characters.
+ */
+function sessionWatchCursorName(session: string): string {
+  const uuid = /^__orchestration_session_(.+)__$/u.exec(session)?.[1];
+  return derivedWatchCursorName('session', `session-${uuid ?? session}`);
 }
 
 function watchErrorCode(error: Error): string {
@@ -2573,6 +2603,8 @@ function workspaceLabel(kind: WorkspaceEntryKind): string {
     'pane.created': 'NEW',
     'pane.gone': 'GONE',
     'panel.exited': 'EXIT',
+    'pane.associated': 'JOINED',
+    'pane.detached': 'LEFT',
   } satisfies Record<WorkspaceEntryKind, string>;
   return labels[kind];
 }
