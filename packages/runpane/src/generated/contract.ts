@@ -1135,6 +1135,51 @@ export const RUNPANE_CONTRACT = {
       "jsonSchemas": [
         "sessionOverviewResult"
       ]
+    },
+    {
+      "name": "lock acquire",
+      "summary": "Acquire a named lock on a resource shared between agents, such as one test account, optionally waiting for it.",
+      "usage": [
+        "runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]"
+      ],
+      "mutates": true,
+      "additive": true,
+      "idempotent": true,
+      "toolsets": [
+        "sessions"
+      ],
+      "jsonSchemas": [
+        "lockAcquireRequest",
+        "lockAcquireResult"
+      ]
+    },
+    {
+      "name": "lock release",
+      "summary": "Release a named lock you hold, or force-release another owner's lock.",
+      "usage": [
+        "runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]"
+      ],
+      "mutates": true,
+      "idempotent": true,
+      "toolsets": [
+        "sessions"
+      ],
+      "jsonSchemas": [
+        "lockReleaseResult"
+      ]
+    },
+    {
+      "name": "lock list",
+      "summary": "List held named locks, optionally only one Session's.",
+      "usage": [
+        "runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]"
+      ],
+      "toolsets": [
+        "sessions"
+      ],
+      "jsonSchemas": [
+        "lockListResult"
+      ]
     }
   ],
   "flags": {
@@ -1255,7 +1300,7 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--name",
         "value": "<name>",
-        "description": "Name for the registered repository or created/renamed pane session."
+        "description": "Name for the registered repository, created/renamed pane session, or named lock."
       },
       {
         "name": "--worktree-name",
@@ -1447,6 +1492,21 @@ export const RUNPANE_CONTRACT = {
         "description": "Named orchestration Session id or exact name."
       },
       {
+        "name": "--ttl",
+        "value": "<duration>",
+        "description": "How long a named lock is held before it expires: a number with ms, s, m, or h (such as 30m); a bare number is milliseconds. At least 1s, at most 24h."
+      },
+      {
+        "name": "--wait",
+        "value": "<milliseconds>",
+        "description": "How long lock acquire waits for a held lock to come free; 0 (the default) returns at once."
+      },
+      {
+        "name": "--note",
+        "value": "<text>",
+        "description": "What a named lock is for. Outside a Pane terminal it also names the owner, so pass the same note to release it."
+      },
+      {
         "name": "--message",
         "value": "<message>",
         "description": "Commit message for panes commit."
@@ -1538,7 +1598,7 @@ export const RUNPANE_CONTRACT = {
       },
       {
         "name": "--force",
-        "description": "Archive even if the pane's branch has uncommitted, untracked, or unpushed changes."
+        "description": "Archive even if the pane's branch has uncommitted, untracked, or unpushed changes; for lock release, release another owner's lock."
       },
       {
         "name": "--remove-worktree",
@@ -1634,6 +1694,9 @@ export const RUNPANE_CONTRACT = {
         "  runpane sessions associate --session <id|name> --pane <pane-id> [--json] [--pane-dir <path>]",
         "  runpane sessions detach --session <id|name> [--pane <pane-id>] [--json] [--pane-dir <path>]",
         "  runpane sessions overview --session <id|name> [--json] [--pane-dir <path>]",
+        "  runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "  runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "  runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
         "  runpane panes list [--repo <selector>] [--json]",
         "  runpane panes cost [--repo <selector>] [--pane <pane-id>] [--json]",
         "  runpane workspace state [--repo <selector>] [--json]",
@@ -2648,6 +2711,60 @@ export const RUNPANE_CONTRACT = {
         "  --limit <count>                Maximum characters to return; defaults to 20000 (the end is kept)",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output"
+      ],
+      "lock": [
+        "Usage:",
+        "  runpane lock <acquire|release|list> [options]",
+        "",
+        "Named locks coordinate a resource shared between agents, such as one test account.",
+        "The caller is the owner: the Pane and panel from $PANE_SESSION_ID and $PANE_PANEL_ID.",
+        "A lock is scoped to the owner's Session when its Pane belongs to one; otherwise it is global.",
+        "It is released on --ttl expiry, when the owner panel exits, or when the owner Pane is archived."
+      ],
+      "lock acquire": [
+        "Usage:",
+        "runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
+      ],
+      "lock release": [
+        "Usage:",
+        "runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
+      ],
+      "lock list": [
+        "Usage:",
+        "runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
       ]
     },
     "pip": {
@@ -2706,6 +2823,9 @@ export const RUNPANE_CONTRACT = {
         "  runpane panes move --pane <pane-id> --folder <folder-id> --yes [--json] [--pane-dir <path>]",
         "  runpane folders list --repo <repo-id> [--json] [--pane-dir <path>]",
         "  runpane folders create --repo <repo-id> --name <name> --yes [--json] [--pane-dir <path>]",
+        "  runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "  runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "  runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
         "  runpane help [command]",
         "",
         "Quick start:",
@@ -3630,6 +3750,60 @@ export const RUNPANE_CONTRACT = {
         "  --limit <count>                Maximum characters to return; defaults to 20000 (the end is kept)",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output"
+      ],
+      "lock": [
+        "Usage:",
+        "  python -m runpane lock <acquire|release|list> [options]",
+        "",
+        "Named locks coordinate a resource shared between agents, such as one test account.",
+        "The caller is the owner: the Pane and panel from $PANE_SESSION_ID and $PANE_PANEL_ID.",
+        "A lock is scoped to the owner's Session when its Pane belongs to one; otherwise it is global.",
+        "It is released on --ttl expiry, when the owner panel exits, or when the owner Pane is archived."
+      ],
+      "lock acquire": [
+        "Usage:",
+        "python -m runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
+      ],
+      "lock release": [
+        "Usage:",
+        "python -m runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
+      ],
+      "lock list": [
+        "Usage:",
+        "python -m runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
       ]
     }
   },
@@ -3723,6 +3897,9 @@ export const RUNPANE_CONTRACT = {
       "runpane sessions associate --session <id|name> --pane <pane-id> [--json] [--pane-dir <path>]",
       "runpane sessions detach --session <id|name> [--pane <pane-id>] [--json] [--pane-dir <path>]",
       "runpane sessions overview --session <id|name> [--json] [--pane-dir <path>]",
+      "runpane lock acquire --name testing-account --ttl 30m --wait 1800000 --note \"call QA\" --json",
+      "runpane lock release --name testing-account --json",
+      "runpane lock list --json",
       "runpane agents start --repo active --name fix-login --agent claude --prompt \"Fix the login redirect\" --yes --json",
       "runpane agents status --pane <pane-id> --json",
       "runpane agents send --pane <pane-id> --text \"Also add a test\" --yes --json",
@@ -3773,6 +3950,7 @@ export const RUNPANE_CONTRACT = {
       "`sessions associate` associate a user-visible Pane with a named Session.",
       "`sessions detach` detach a Pane from a named Session.",
       "`sessions overview` read a live status, activity, git, and pull request overview for a named Session.",
+      "`runpane lock acquire|release|list` coordinate a resource shared between agents, such as one test account. The caller's Pane and panel own the lock; it is scoped to the owner's Session (or global outside one), renews for the same owner, and is released on TTL expiry, owner panel exit, or owner Pane archive. `--wait` blocks in the daemon until the lock comes free.",
       "`runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task in a repository, check on it, and send it a follow-up.",
       "`runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (`panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`.",
       "`runpane panels last-message --panel <panel-id>` reads a Claude or Codex agent's last reply from its transcript (up to `--limit` characters, default 20,000, keeping the end and reporting `truncated`). It never scrapes the screen: without a transcript it prints `{ ok: false, reason: \"transcript-unavailable\" }` and exits 1.",
@@ -4541,6 +4719,60 @@ export const RUNPANE_CONTRACT = {
         "--merged",
         "--remove-worktree",
         "--yes"
+      ],
+      [
+        "lock",
+        "acquire",
+        "--name",
+        "testing-account",
+        "--ttl",
+        "30m",
+        "--wait",
+        "1800000",
+        "--note",
+        "call QA",
+        "--json"
+      ],
+      [
+        "lock",
+        "acquire",
+        "--name",
+        "staging-db",
+        "--ttl",
+        "1500",
+        "--pane",
+        "session-1",
+        "--panel",
+        "panel-1",
+        "--pane-dir",
+        "/tmp/pane"
+      ],
+      [
+        "lock",
+        "acquire",
+        "--name=db",
+        "--ttl=2h"
+      ],
+      [
+        "lock",
+        "release",
+        "--name",
+        "testing-account",
+        "--force",
+        "--session",
+        "Release QA",
+        "--json"
+      ],
+      [
+        "lock",
+        "list",
+        "--session",
+        "Release QA",
+        "--json"
+      ],
+      [
+        "lock",
+        "--help"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -8120,9 +8352,260 @@ export const RUNPANE_CONTRACT = {
         },
         "refreshedAt": {
           "type": "string"
+        },
+        "locks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+          }
         }
       },
       "additionalProperties": false
+    },
+    "lockListResult": {
+      "type": "object",
+      "required": [
+        "ok",
+        "locks"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "locks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "scope",
+              "owner",
+              "acquiredAt",
+              "expiresAt",
+              "ttlMs"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "scope": {
+                "enum": [
+                  "session",
+                  "global"
+                ]
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "pane",
+                      "external"
+                    ]
+                  },
+                  "paneId": {
+                    "type": "string"
+                  },
+                  "panelId": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "note": {
+                "type": "string"
+              },
+              "acquiredAt": {
+                "type": "string"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "ttlMs": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "lockAcquireRequest": {
+      "type": "object",
+      "required": [
+        "name",
+        "ttlMs",
+        "owner"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ttlMs": {
+          "type": "number"
+        },
+        "waitMs": {
+          "type": "number"
+        },
+        "note": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "object",
+          "properties": {
+            "paneId": {
+              "type": "string"
+            },
+            "panelId": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "lockAcquireResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "acquired",
+            "renewed",
+            "waitedMs",
+            "lock"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "acquired": {
+              "const": true
+            },
+            "renewed": {
+              "type": "boolean"
+            },
+            "waitedMs": {
+              "type": "number"
+            },
+            "lock": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "acquired",
+            "timedOut",
+            "waitedMs",
+            "heldBy",
+            "expiresAt",
+            "lock"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "acquired": {
+              "const": false
+            },
+            "timedOut": {
+              "type": "boolean"
+            },
+            "waitedMs": {
+              "type": "number"
+            },
+            "heldBy": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items/properties/owner"
+            },
+            "expiresAt": {
+              "type": "string"
+            },
+            "lock": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "lockReleaseResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "released",
+            "forced"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "released": {
+              "type": "boolean"
+            },
+            "forced": {
+              "type": "boolean"
+            },
+            "lock": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "released",
+            "reason",
+            "heldBy",
+            "expiresAt",
+            "lock"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "released": {
+              "const": false
+            },
+            "reason": {
+              "const": "not-owner"
+            },
+            "heldBy": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items/properties/owner"
+            },
+            "expiresAt": {
+              "type": "string"
+            },
+            "lock": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "daemonActionResult": {
       "type": "object",
@@ -8622,7 +9105,8 @@ export const RUNPANE_CONTRACT = {
         "Use `runpane panels screen` for compact current state, including Claude and Codex composer state. Use `panels wait` for create-time readiness or text checks. Use `runpane watch --follow` to block on workspace transitions (READY, BLOCKED, IDLE, STUCK, EXIT) without polling. Use `panels submit` to send and submit a new turn. Use `panels submit-composer --strategy auto` only for a composer that was filled separately.",
         "Use `runpane panels input` only when exact bytes are required, such as Ctrl-C or handcrafted terminal input.",
         "Pane terminals draw inline images: sixel, iTerm2 inline images, and the kitty graphics protocol. Tools that need kitty graphics, such as terminal-browser and terminal-doom, run inside a Pane panel; `runpane doctor --json` reports the exact list under `terminal.graphicsProtocols`.",
-        "After creating Panes or sending terminal input, validate with `panels wait` or bounded `panels screen` before reporting success. For ongoing supervision, `runpane watch --follow` is the canonical monitor."
+        "After creating Panes or sending terminal input, validate with `panels wait` or bounded `panels screen` before reporting success. For ongoing supervision, `runpane watch --follow` is the canonical monitor.",
+        "When several agents share one resource, such as a test account, name a lock in their prompts: each worker runs `runpane lock acquire --name <name> --ttl 30m --wait 1800000 --json` before using it and `runpane lock release --name <name>` after."
       ],
       "detailCommand": "runpane agent-context --command <command> [--json]",
       "tools": [
@@ -12023,6 +12507,176 @@ export const RUNPANE_CONTRACT = {
         ],
         "jsonSchemas": [
           "sessionOverviewResult"
+        ],
+        "notes": [
+          "The result includes `locks`: named locks scoped to the Session or held by its Panes (see `runpane lock`)."
+        ]
+      },
+      "lock acquire": {
+        "name": "lock acquire",
+        "summary": "Acquire a named lock on a resource shared between agents, such as one test account, optionally waiting for it.",
+        "details": "Run this before using a resource that only one agent may use at a time, such as a shared test account, and release it when done. The owner is the calling Pane and panel ($PANE_SESSION_ID and $PANE_PANEL_ID, or --pane/--panel). The lock is scoped to the owner's Session when its Pane belongs to one, so two Sessions can each hold `testing-account`; otherwise it is global. It succeeds when the lock is free, expired, or already yours (which renews the TTL). Otherwise it returns ok:false with heldBy and expiresAt at once, or with --wait blocks in the daemon until the lock is released, expires, or its owner's panel exits or Pane is archived.",
+        "requiresPaneDaemon": true,
+        "mutates": true,
+        "arguments": [
+          {
+            "name": "--name",
+            "value": "<name>",
+            "required": true,
+            "description": "Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\"."
+          },
+          {
+            "name": "--ttl",
+            "value": "<duration>",
+            "required": true,
+            "description": "How long the lock is held before it expires, such as 90s, 30m, or 2h; at most 24h. Acquire again before it runs out to renew."
+          },
+          {
+            "name": "--wait",
+            "value": "<milliseconds>",
+            "required": false,
+            "description": "Wait this long for the lock to come free. The CLI waits in daemon calls of up to 120 seconds each."
+          },
+          {
+            "name": "--note",
+            "value": "<text>",
+            "required": false,
+            "description": "What the lock is for, shown to other agents. Required outside a Pane terminal, where it also names the owner."
+          },
+          {
+            "name": "--pane",
+            "value": "<pane-id>",
+            "required": false,
+            "description": "Act for this Pane instead of $PANE_SESSION_ID."
+          },
+          {
+            "name": "--panel",
+            "value": "<panel-id>",
+            "required": false,
+            "description": "Act for this panel instead of $PANE_PANEL_ID."
+          },
+          {
+            "name": "--json",
+            "required": false,
+            "description": "Print machine-readable output."
+          },
+          {
+            "name": "--pane-dir",
+            "value": "<path>",
+            "required": false,
+            "description": "Connect to a specific Pane data directory."
+          }
+        ],
+        "examples": [
+          "runpane lock acquire --name testing-account --ttl 30m --wait 1800000 --note \"call QA\" --json",
+          "runpane lock acquire --name staging-db --ttl 10m --json"
+        ],
+        "jsonSchemas": [
+          "lockAcquireRequest",
+          "lockAcquireResult"
+        ],
+        "notes": [
+          "Exit status is 0 only when the lock is yours; ok:false (exit 1) means another owner holds it, named by heldBy until expiresAt.",
+          "Release the lock as soon as you are done with the resource: `runpane lock release --name <name>`. If you interrupt a waiting acquire, the lock can still be granted to you for up to two minutes; release it or let the TTL expire.",
+          "Pane releases the lock when its TTL runs out, when the owner panel exits, or when the owner Pane is archived. Quitting Pane does not release it; locks survive a restart."
+        ]
+      },
+      "lock release": {
+        "name": "lock release",
+        "summary": "Release a named lock you hold, or force-release another owner's lock.",
+        "details": "Only the owner can release a lock. --force releases another owner's lock, for example a stuck worker's; use --session to name a Session-scoped lock from outside that Session.",
+        "requiresPaneDaemon": true,
+        "mutates": true,
+        "arguments": [
+          {
+            "name": "--name",
+            "value": "<name>",
+            "required": true,
+            "description": "Lock name."
+          },
+          {
+            "name": "--force",
+            "required": false,
+            "description": "Release the lock even though another owner holds it."
+          },
+          {
+            "name": "--session",
+            "value": "<id|name>",
+            "required": false,
+            "description": "Session whose lock to release; defaults to the caller's Session, or global."
+          },
+          {
+            "name": "--note",
+            "value": "<text>",
+            "required": false,
+            "description": "Outside a Pane terminal, the note the lock was acquired with."
+          },
+          {
+            "name": "--pane",
+            "value": "<pane-id>",
+            "required": false,
+            "description": "Act for this Pane instead of $PANE_SESSION_ID."
+          },
+          {
+            "name": "--panel",
+            "value": "<panel-id>",
+            "required": false,
+            "description": "Act for this panel instead of $PANE_PANEL_ID."
+          },
+          {
+            "name": "--json",
+            "required": false,
+            "description": "Print machine-readable output."
+          },
+          {
+            "name": "--pane-dir",
+            "value": "<path>",
+            "required": false,
+            "description": "Connect to a specific Pane data directory."
+          }
+        ],
+        "examples": [
+          "runpane lock release --name testing-account --json",
+          "runpane lock release --name testing-account --session \"<session-id-or-name>\" --force --json"
+        ],
+        "jsonSchemas": [
+          "lockReleaseResult"
+        ],
+        "notes": [
+          "released:false with ok:true means no such lock was held. ok:false with reason not-owner (exit 1) means another owner holds it."
+        ]
+      },
+      "lock list": {
+        "name": "lock list",
+        "summary": "List held named locks, optionally only one Session's.",
+        "details": "List every held lock, or with --session the locks scoped to that Session plus those its Panes hold. `runpane sessions overview` includes the same Session locks.",
+        "requiresPaneDaemon": true,
+        "mutates": false,
+        "arguments": [
+          {
+            "name": "--session",
+            "value": "<id|name>",
+            "required": false,
+            "description": "Named Session id or exact name."
+          },
+          {
+            "name": "--json",
+            "required": false,
+            "description": "Print machine-readable output."
+          },
+          {
+            "name": "--pane-dir",
+            "value": "<path>",
+            "required": false,
+            "description": "Connect to a specific Pane data directory."
+          }
+        ],
+        "examples": [
+          "runpane lock list --json",
+          "runpane lock list --session \"<session-id-or-name>\" --json"
+        ],
+        "jsonSchemas": [
+          "lockListResult"
         ],
         "notes": []
       }

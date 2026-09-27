@@ -504,7 +504,11 @@
         "sessions set-agent",
         "sessions associate",
         "sessions detach",
-        "sessions overview"
+        "sessions overview",
+        "lock",
+        "lock acquire",
+        "lock release",
+        "lock list"
       ],
       "properties": {
         "default": {
@@ -709,6 +713,18 @@
           "$ref": "#/$defs/helpLines"
         },
         "sessions overview": {
+          "$ref": "#/$defs/helpLines"
+        },
+        "lock": {
+          "$ref": "#/$defs/helpLines"
+        },
+        "lock acquire": {
+          "$ref": "#/$defs/helpLines"
+        },
+        "lock release": {
+          "$ref": "#/$defs/helpLines"
+        },
+        "lock list": {
           "$ref": "#/$defs/helpLines"
         }
       },
