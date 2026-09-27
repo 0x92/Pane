@@ -526,6 +526,9 @@ When a pane finishes something a human will read, have it run the
    progress returns to this conversation. Prefer \`--as-file-pointer\` for
    long prompts (\`panes create\`, \`panels submit\`, \`agents send\`): Pane
    writes the prompt to a private file and submits one line pointing at it.
+   End every worker prompt with: "When finished or blocked, run
+   \`runpane report --state <ready|blocked|failed|done> --pr <number> --head <sha> --summary-file <path>\`
+   (add \`--question \"<question>\"\` when blocked)."
 5. Keep the Session's own agent, profile, and tool configuration as they are.
 
 Never edit project implementation files from the Session. A Session can stay
@@ -623,7 +626,7 @@ The daemon owns liveness. Never write or run an ad-hoc watcher.
 Arm at session start:
 
     runpane watch --self-test
-    runpane watch --session "$PANE_ORCHESTRATION_SESSION_ID" --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff
+    runpane watch --session "$PANE_ORCHESTRATION_SESSION_ID" --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged,agent.report --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff
 
 Its named cursor defaults to \`session-<uuid>\`, where \`<uuid>\` is the UUID
 inside the Session ID: for the Session \`__orchestration_session_<uuid>__\`,
@@ -661,10 +664,18 @@ written:
 What each line means (the JSON \`kind\` is in parentheses; timings are
 unattended, then user present):
 
+- REPORT (\`agent.report\`): a worker ran \`runpane report\`. This is the
+  completion signal. It arrives at once and skips the batch, carrying the
+  state (ready, blocked, failed, or done), PR number, head commit, summary,
+  and a blocked worker's question. Read the full report with
+  \`runpane agents status --panel <panel-id> --json\` or the Session overview
+  (\`panes[].report\`) instead of scraping the screen.
 - READY (\`agent.ready\`): the turn ended and stayed quiet for 3 minutes (1
   minute). It arrives with the next batch, so up to ~13min after the turn
   ended (about 3 minutes). The settle hides the status flips a delegated pane
-  makes while it waits on subagents or Codex dispatches.
+  makes while it waits on subagents or Codex dispatches. A READY with no REPORT means look, and maybe nudge: read
+  \`runpane panels last-message --panel <panel-id> --json\`, then ask the
+  worker to run \`runpane report\` if it finished.
 - BLOCKED (\`agent.blocked\`): the agent is waiting on a human. It arrives
   within 30 seconds (15 seconds) and skips the batch.
 - IDLE (\`agent.idle\`): nothing is dispatched. It repeats after 10 minutes,
