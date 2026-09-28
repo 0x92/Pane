@@ -8,7 +8,9 @@ The Pane desktop app registers the server for you. On launch, Pane adds a `pane`
 
 - **Claude Code**: via `claude mcp add pane --scope user …`, which writes `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`).
 - **Codex**: a `[mcp_servers.pane]` table in `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`).
-- **Cursor**: a `mcpServers.pane` entry in `~/.cursor/mcp.json`. Pane detects Cursor from `~/.cursor`, `cursor`, or `agent` on PATH.
+- **Cursor**: a `mcpServers.pane` entry in `~/.cursor/mcp.json`. Pane detects Cursor from `~/.cursor`, `cursor`, `agent`, or `cursor-agent` on PATH.
+
+Packaged Pane also installs the on-demand `pane-manage-and-message-agents` user skill for detected Claude Code, Codex, and Cursor clients. Cursor uses `~/.cursor/skills/`; Claude Code and Codex use their user skill folders (including `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME`). Pane leaves hand-added skills alone and removes only its own copy when registration is off. The same applies inside detected WSL distros. [Cursor documents `~/.cursor/skills/` as a user-level Agent Skills directory](https://cursor.com/docs/skills).
 
 Pane registers only when it detects the corresponding client, and it manages only the entry it wrote:
 
@@ -78,6 +80,8 @@ VS Code (`.vscode/mcp.json`, or run **MCP: Add Server**):
 ```
 
 Any other client that can launch a stdio server uses the same command and arguments.
+
+`agents_send` uses the target agent's composer state. For Codex, it queues with Tab while the agent is working and submits with Enter when ready. A send is confirmed only after the text leaves the composer; if it remains, the result includes a command to retry the appropriate key. `panels_submit_composer` with `strategy: auto` uses the same keys.
 
 The server is stdio only: it runs next to the Pane app on the same machine, so there is no HTTP transport and no OAuth. To drive a remote Pane, run the server on the remote host.
 

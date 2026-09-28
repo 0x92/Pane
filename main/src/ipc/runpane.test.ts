@@ -2188,14 +2188,31 @@ describe('runpane IPC handlers', () => {
     expect(terminalPanelManager.writeToTerminal).toHaveBeenNthCalledWith(
       2,
       terminalPanel.id,
-      '\x1b[13;5u\r',
+      '\r',
     );
     expect(result).toMatchObject({
       ok: true,
       panelId: terminalPanel.id,
-      sequenceName: 'codex-ctrl-enter-cr',
+      sequenceName: 'enter-cr',
       verifiedSubmitted: true,
     });
+  });
+
+  it('stages and queues text while Codex is working', async () => {
+    vi.useFakeTimers();
+    vi.mocked(terminalPanelManager.getTerminalSnapshot)
+      .mockReturnValueOnce(terminalSnapshot('• Working (tab to queue message)\n› Ask Codex to do anything\n', 'active'))
+      .mockReturnValueOnce(terminalSnapshot('• Working (tab to queue message)\n› ping-busy\n', 'active'))
+      .mockReturnValue(terminalSnapshot('• Working\n› Ask Codex to do anything\n', 'active'));
+    const registry = createRegistry();
+
+    const pendingResult = registry.invoke('runpane:panels:submit', [{ panelId: terminalPanel.id, input: 'ping-busy' }]);
+    await vi.advanceTimersByTimeAsync(600);
+    const result = await pendingResult;
+
+    expect(terminalPanelManager.writeToTerminal).toHaveBeenNthCalledWith(1, terminalPanel.id, 'ping-busy');
+    expect(terminalPanelManager.writeToTerminal).toHaveBeenNthCalledWith(2, terminalPanel.id, '\t');
+    expect(result).toMatchObject({ ok: true, enter: 'tab', sequenceName: 'tab', verifiedSubmitted: true });
   });
 
   it('stages text before submitting a Claude composer', async () => {
@@ -2381,16 +2398,16 @@ describe('runpane IPC handlers', () => {
 
     expect(result).toMatchObject({
       ok: false,
-      sequenceName: 'codex-ctrl-enter-cr',
+      sequenceName: 'enter-cr',
       verifiedSubmitted: false,
       blocked: {
         kind: 'agent-prompt',
-        suggestedCommand: `runpane panels screen --panel ${terminalPanel.id} --limit 80 --json`,
+        suggestedCommand: `runpane panels input --panel ${terminalPanel.id} --keys enter --yes --json`,
       },
     });
   });
 
-  it('submits a Codex composer with the effective Ctrl+Enter sequence and verifies composer cleared', async () => {
+  it('submits an idle Codex composer with Enter and verifies composer cleared', async () => {
     vi.mocked(terminalPanelManager.getTerminalSnapshot)
       .mockReturnValueOnce({
         initialized: true,
@@ -2424,14 +2441,14 @@ describe('runpane IPC handlers', () => {
       strategy: 'auto',
     }]);
 
-    expect(terminalPanelManager.writeToTerminal).toHaveBeenCalledWith(terminalPanel.id, '\x1b[13;5u\r');
+    expect(terminalPanelManager.writeToTerminal).toHaveBeenCalledWith(terminalPanel.id, '\r');
     expect(result).toMatchObject({
       ok: true,
       panelId: terminalPanel.id,
       paneId: session.id,
-      inputBytes: 8,
-      strategy: 'codex-ctrl-enter',
-      sequenceName: 'codex-ctrl-enter-cr',
+      inputBytes: 1,
+      strategy: 'enter',
+      sequenceName: 'enter-cr',
       verifiedSubmitted: true,
       nextCommand: `runpane panels wait --panel ${terminalPanel.id} --for ready --timeout-ms 30000 --json`,
     });
@@ -2440,9 +2457,21 @@ describe('runpane IPC handlers', () => {
       expect.objectContaining({
         action: 'panels:submit-composer',
         status: 'success',
-        input_bytes: 8,
+        input_bytes: 1,
       }),
     );
+  });
+
+  it('queues a working Codex composer with Tab and verifies it left the composer', async () => {
+    vi.mocked(terminalPanelManager.getTerminalSnapshot)
+      .mockReturnValueOnce(terminalSnapshot('• Working (tab to queue message)\n› follow-up\n', 'active'))
+      .mockReturnValue(terminalSnapshot('• Working\n› Ask Codex to do anything\n', 'active'));
+    const registry = createRegistry();
+
+    const result = await registry.invoke('runpane:panels:submit-composer', [{ panelId: terminalPanel.id, strategy: 'auto' }]);
+
+    expect(terminalPanelManager.writeToTerminal).toHaveBeenCalledWith(terminalPanel.id, '\t');
+    expect(result).toMatchObject({ ok: true, strategy: 'tab', sequenceName: 'tab', verifiedSubmitted: true });
   });
 
   it('blocks submit-composer when the Codex pasted-content composer remains visible', async () => {
@@ -2468,20 +2497,20 @@ describe('runpane IPC handlers', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     const result = await pendingResult;
 
-    expect(terminalPanelManager.writeToTerminal).toHaveBeenNthCalledWith(1, terminalPanel.id, '\x1b[13;5u\r');
+    expect(terminalPanelManager.writeToTerminal).toHaveBeenNthCalledWith(1, terminalPanel.id, '\r');
     // The pasted content is still in the composer: one plain Enter, then report.
     expect(terminalPanelManager.writeToTerminal).toHaveBeenNthCalledWith(2, terminalPanel.id, '\r');
     expect(terminalPanelManager.writeToTerminal).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
       ok: false,
       panelId: terminalPanel.id,
-      inputBytes: 9,
-      strategy: 'codex-ctrl-enter',
-      sequenceName: 'codex-ctrl-enter-cr',
+      inputBytes: 2,
+      strategy: 'enter',
+      sequenceName: 'enter-cr',
       verifiedSubmitted: false,
       blocked: {
         kind: 'agent-prompt',
-        suggestedCommand: `runpane panels screen --panel ${terminalPanel.id} --limit 80 --json`,
+        suggestedCommand: `runpane panels input --panel ${terminalPanel.id} --keys enter --yes --json`,
       },
     });
   });
@@ -4360,7 +4389,7 @@ describe('runpane IPC handlers', () => {
       let staged = false;
       let submitted = false;
       vi.mocked(terminalPanelManager.writeToTerminal).mockImplementation((_panelId, data) => {
-        if (data === '\x1b[13;5u\r') submitted = true;
+        if (data === '\r') submitted = true;
         else staged = true;
       });
       vi.mocked(terminalPanelManager.getOutputGeneration).mockImplementation(() => (submitted ? 2 : staged ? 1 : 0));
@@ -4374,9 +4403,9 @@ describe('runpane IPC handlers', () => {
 
       expect(vi.mocked(terminalPanelManager.writeToTerminal).mock.calls).toEqual([
         [terminalPanel.id, `\x1b[200~${text}\x1b[201~`],
-        [terminalPanel.id, '\x1b[13;5u\r'],
+        [terminalPanel.id, '\r'],
       ]);
-      expect(result).toMatchObject({ ok: true, sequenceName: 'codex-ctrl-enter-cr', verifiedSubmitted: true });
+      expect(result).toMatchObject({ ok: true, sequenceName: 'enter-cr', verifiedSubmitted: true });
     });
 
     it('types short single-line text without a paste even when the agent accepts one', async () => {
@@ -4904,28 +4933,30 @@ describe('runpane IPC handlers', () => {
       expect(findUserTurnSince).toHaveBeenCalledWith(expect.objectContaining({ agent: 'codex', cwd: session.worktreePath }), expect.any(Number), undefined);
     });
 
-    it('reports a message a busy Codex holds for its next turn as queued', async () => {
+    it.each([1, 2])('queues a busy Codex message with Tab, accepted on attempt %s', async attempts => {
       vi.useFakeTimers();
       vi.mocked(panelManager.getPanel).mockReturnValue(terminalPanel);
-      // Codex 0.157: text and Enter in one write; the message waits under the running turn.
-      const state = { sent: false };
-      vi.mocked(terminalPanelManager.writeToTerminal).mockImplementation(() => {
-        state.sent = true;
+      const state = { staged: false, tabs: 0 };
+      vi.mocked(terminalPanelManager.writeToTerminal).mockImplementation((_panelId, data) => {
+        if (data === '\t') state.tabs += 1;
+        else state.staged = true;
       });
       vi.mocked(terminalPanelManager.getTerminalSnapshot).mockImplementation(() => terminalSnapshot(
-        state.sent
+        state.tabs >= attempts
           ? '• Working (12s • esc to interrupt)\n• Messages to be submitted after next tool call (press esc to interrupt and send immediately)\n  ↳ Also run the linter\n\n› Ask Codex to do anything'
-          : '• Working (10s • esc to interrupt)\n\n› Ask Codex to do anything',
+          : `• Working (10s • esc to interrupt)\n\n› ${state.staged ? 'Also run the linter' : 'Ask Codex to do anything'}`,
         'active',
         'codex',
       ));
 
       const pending = createRegistry().invoke('runpane:panels:submit', [{ panelId: terminalPanel.id, input: 'Also run the linter' }]);
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       const result = await pending;
 
-      expect(terminalPanelManager.writeToTerminal).toHaveBeenCalledWith(terminalPanel.id, 'Also run the linter\r');
-      expect(result).toMatchObject({ ok: true, verifiedSubmitted: true, delivery: { state: 'queued', evidence: 'screen' } });
+      const expected = [[terminalPanel.id, 'Also run the linter'], [terminalPanel.id, '\t']];
+      if (attempts === 2) expected.push([terminalPanel.id, '\t']);
+      expect(vi.mocked(terminalPanelManager.writeToTerminal).mock.calls).toEqual(expected);
+      expect(result).toMatchObject({ ok: true, enter: 'tab', verifiedSubmitted: true, delivery: { state: 'queued', evidence: 'screen' } });
     });
 
     it('reports the composer\'s ghost text without counting it as held input', async () => {

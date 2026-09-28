@@ -135,7 +135,9 @@ export async function runAgentsSend(parsed: ParsedArgs): Promise<number> {
     warnings: sent.warnings,
     next: delivered
       ? `Check on it with \`runpane agents status --pane ${paneId}\`.`
-      : `The message may still be in the composer. Run \`runpane agents status --panel ${panelId}\` to see the screen.`,
+      : sent.nextCommand
+        ? `The message is still in the composer. Run \`${sent.nextCommand}\`, then \`runpane agents status --panel ${panelId}\` to verify delivery.`
+        : `The message may still be in the composer. Run \`runpane agents status --panel ${panelId}\` to see the screen.`,
   };
   const how = sent.delivery ? ` (${sent.delivery.state}, from the ${sent.delivery.evidence})` : '';
   print(parsed, result, delivered ? `Delivered to ${panelId}${how}.` : `Not confirmed${how}: ${result.blocked ?? result.next}`);
