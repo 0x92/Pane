@@ -156,18 +156,6 @@ export class WorkspaceJournal implements PaneEventSink {
     this.paneById.set(metadata.paneId, metadata);
   }
 
-  /**
-   * Appends an entry raised by a daemon service (a worker's `runpane report`), filling in the
-   * Pane's name and repo (the id stands in for an unknown Pane's name).
-   */
-  appendPaneEntry(
-    paneId: string,
-    entry: Omit<RunpaneWorkspaceEntry, 'gen' | 'at' | keyof WorkspacePaneMetadata>,
-  ): RunpaneWorkspaceEntry {
-    const pane = this.lookupPane(paneId) ?? { paneId, paneName: paneId };
-    return this.append({ ...pane, ...entry });
-  }
-
   append(entry: Omit<RunpaneWorkspaceEntry, 'gen' | 'at'>): RunpaneWorkspaceEntry {
     const full: RunpaneWorkspaceEntry = {
       ...entry,
@@ -434,7 +422,7 @@ function matchesFilter(
   membership?: WorkspaceSessionMembership,
 ): boolean {
   if (filter.kinds && !filter.kinds.includes(entry.kind)) return false;
-  if (!filter.kinds && entry.kind === 'agent.report') return false;
+  if (!filter.kinds && filter.sessionId === undefined && entry.kind === 'agent.report') return false;
   if (!filter.kinds && filter.sessionId === undefined && OPT_IN_KINDS.includes(entry.kind)) return false;
   if (filter.sessionId !== undefined && !matchesSession(entry, filter.sessionId, membership)) return false;
   if (filter.paneIds && !filter.paneIds.includes(entry.paneId)) return false;
