@@ -508,6 +508,76 @@
       "folder-9",
       "--yes",
       "--json"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--quiet",
+      "--json",
+      "--pane-dir",
+      "/tmp/pane"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--no-control-lines",
+      "--all-managed"
+    ],
+    [
+      "watch",
+      "--session",
+      "__orchestration_session_1b4e28ba-2fa1-11d2-883f-0016d3cca427__",
+      "--follow",
+      "--quiet",
+      "--json",
+      "--kinds",
+      "agent.ready,agent.blocked,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged",
+      "--settle",
+      "180000"
+    ],
+    [
+      "watch",
+      "--session=Release train",
+      "--as",
+      "release-watch",
+      "--exclude-pane",
+      "pane-old"
+    ],
+    [
+      "agent-context",
+      "--command",
+      "panes create",
+      "--json",
+      "--pane-dir",
+      "/tmp/pane"
+    ],
+    [
+      "agent-context",
+      "--pane-dir=/tmp/pane"
+    ],
+    [
+      "version",
+      "--pane-dir",
+      "/tmp/pane"
+    ],
+    [
+      "panes",
+      "create",
+      "--repo",
+      "active",
+      "--name",
+      "w5a",
+      "--agent",
+      "claude",
+      "--base-branch",
+      "origin/release",
+      "--source",
+      "agent",
+      "--no-focus",
+      "--yes",
+      "--json",
+      "--pane-dir",
+      "/tmp/pane"
     ]
   ],
   "help": {

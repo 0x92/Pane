@@ -166,6 +166,7 @@ class ParsedArgs:
     include_shells: bool = False
     no_held_input: bool = False
     self_test: bool = False
+    quiet: bool = False
     report: bool = False
     body_file: Optional[str] = None
     message: Optional[str] = None
@@ -468,6 +469,13 @@ def parse_args(argv: List[str]) -> ParsedArgs:
     parse_flags(args, parsed)
     if parsed.command == "watch" and parsed.follow and parsed.timeout_ms == 0:
         raise ValueError("--timeout-ms must be greater than 0 with --follow.")
+    if parsed.command == "watch" and parsed.session_id is not None and parsed.watch_pane_ids:
+        raise ValueError(
+            "runpane watch accepts either --session or --pane, not both; "
+            "--session already follows every Pane in the Session."
+        )
+    if parsed.command == "watch" and parsed.session_id is not None and parsed.all_managed:
+        raise ValueError("runpane watch accepts either --session or --all-managed, not both.")
     if parsed.command == "watch" and parsed.all_managed and parsed.watch_pane_ids:
         raise ValueError("runpane watch accepts either --all-managed or --pane, not both.")
     if parsed.command == "watch" and parsed.json and parsed.watch_format == "lines":
@@ -528,6 +536,10 @@ def parse_flags(raw_args: List[str], parsed: ParsedArgs) -> None:
         elif is_agent_context_command and arg == "--command":
             index += 1
             parsed.context_command = read_value(args, index, arg, literal_values)
+        elif (is_agent_context_command or parsed.command == "version") and arg == "--pane-dir":
+            # Offline commands accept --pane-dir and ignore it, so one --pane-dir works for every command.
+            index += 1
+            parsed.pane_dir = read_value(args, index, arg, literal_values)
         elif is_local_command and arg in LOCAL_BOOLEAN_FLAGS:
             parse_local_boolean_flag(parsed, arg)
         elif is_local_command and arg in LOCAL_VALUE_FLAGS:
@@ -632,6 +644,11 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
         return
     if flag == "--self-test":
         parsed.self_test = True
+        return
+    if flag in {"--quiet", "--no-control-lines"}:
+        if parsed.command != "watch":
+            raise ValueError(f"{flag} is only valid with runpane watch.")
+        parsed.quiet = True
         return
     if flag == "--report":
         parsed.report = True

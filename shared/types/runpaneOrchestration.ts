@@ -41,7 +41,24 @@ export type RunpaneWorkspaceEntryKind =
   | 'agent.idle'
   | 'pane.created'
   | 'pane.gone'
-  | 'panel.exited';
+  | 'panel.exited'
+  /** The Pane joined a Session (`sessions associate`). */
+  | 'pane.associated'
+  /** The Pane left a Session (`sessions detach`). */
+  | 'pane.detached'
+  /** A Session member's open PR became conflicting with its base. */
+  | 'pr.conflicted'
+  /** A Session member's PR checks settled (`checks: passed | failed`) for its head commit. */
+  | 'pr.checks'
+  /** A Session member's PR was merged. */
+  | 'pr.merged';
+
+/** The PR a `pr.*` entry reports on. */
+export interface RunpaneWorkspacePullRequest {
+  number: number;
+  url: string;
+  headOid: string;
+}
 
 export interface RunpaneWorkspaceEntry {
   gen: number;
@@ -57,7 +74,7 @@ export interface RunpaneWorkspaceEntry {
   agentType?: string;
   from?: AgentState;
   to?: AgentState;
-  source: 'agent' | 'exit' | 'session';
+  source: 'agent' | 'exit' | 'session' | 'github';
   reason?: string | null;
   settledMs?: number;
   idleMs?: number;
@@ -66,7 +83,21 @@ export interface RunpaneWorkspaceEntry {
   heldInputPresent?: boolean;
   exitCode?: number;
   baseline?: true;
+  /**
+   * Set on the baseline entries a wait delivers after a reset. A replayed entry restates current
+   * state; it is never a new transition, so a replayed `agent.ready` is not READY.
+   */
+  replay?: true;
   changedWhileAway?: boolean;
+  /** Named Session of a `pane.associated` or `pane.detached` entry. */
+  sessionId?: string;
+  sessionName?: string;
+  /** PR of a `pr.conflicted`, `pr.checks`, or `pr.merged` entry. */
+  pr?: RunpaneWorkspacePullRequest;
+  /** Settled result of a `pr.checks` entry. */
+  checks?: 'passed' | 'failed';
+  /** Up to five failing check names of a failed `pr.checks` entry. */
+  failingChecks?: string[];
   panels?: RunpaneWorkspacePanelSummary[];
 }
 
@@ -85,6 +116,12 @@ export interface RunpaneWorkspaceWaitRequest {
   limit?: number;
   kinds?: RunpaneWorkspaceEntryKind[];
   paneIds?: string[];
+  /**
+   * Named Session id or exact name. Limits the wait to the Session's associated Panes, resolved
+   * on every read, and implies `pane.associated`/`pane.detached` entries. Cannot be combined with
+   * `paneIds`.
+   */
+  session?: string;
   excludePaneIds?: string[];
   repo?: RunpaneRepoSelector;
   nameContains?: string;
@@ -115,6 +152,8 @@ export interface RunpaneWorkspaceWaitResult {
   timedOut: boolean;
   dropped?: number;
   reset?: { reason: RunpaneWorkspaceResetReason };
+  /** The Session a `session` request resolved to; its absence tells a client the daemon ignored `session`. */
+  session?: { id: string; name: string };
   nextCommand: string;
 }
 
@@ -472,6 +511,17 @@ export type RunpanePaneArchiveBlockCode =
   | 'uncommitted-and-unpushed'
   | 'status-unknown';
 
+/**
+ * Why the archive safety check was skipped or could not run. `external-worktree` (an adopted Pane
+ * whose worktree Pane does not own), `main-repo`, and a Pane with no repository also mean archive
+ * leaves the worktree on disk (`worktreeWillRemain`).
+ */
+export type RunpanePaneArchiveSafetyCheckReason =
+  | 'external-worktree'
+  | 'main-repo'
+  | 'missing-project-context'
+  | 'git-error';
+
 export interface RunpanePaneArchiveSafetyCheck {
   performed: boolean;
   hasUncommittedChanges?: boolean;
@@ -481,6 +531,9 @@ export interface RunpanePaneArchiveSafetyCheck {
   upstreamRefreshed?: boolean;
   unpushedCommits?: number;
   unpushedCommitDetails?: RunpanePaneArchiveCommit[];
+  reason?: RunpanePaneArchiveSafetyCheckReason;
+  /** Set when archive will not remove the worktree because cleanup does not apply to this Pane. */
+  worktreeWillRemain?: true;
 }
 
 export interface RunpanePaneArchiveCommit {

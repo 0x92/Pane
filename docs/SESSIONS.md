@@ -179,22 +179,98 @@ stale.
 
 ## Session watcher
 
-Use one durable, named watcher per Session, scoped to every associated Pane:
+Use one durable, named watcher per Session. `--session` takes the Session ID
+or exact name, and the daemon follows every Pane associated with it:
 
 ```text
-runpane watch --as session-<session-id> --follow --pane <pane-id> \
-  --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone \
+runpane watch --session <session-id> --follow --quiet --json \
+  --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged \
   --settle 180000 --blocked-settle 30000 --min-interval 600000 \
-  --idle-backoff --json
+  --idle-backoff
 ```
 
-Repeat `--pane` for each associated Pane. A discussion-only Session has no
-follow watcher; never omit `--pane` to watch all Panes. After an associate or
-detach mutation, refresh `sessions overview` and re-arm the same cursor with
-the current Pane set. On restart, retain the `session-<session-id>` cursor and
-capture a fresh output baseline before interpreting notifications. Return
-blocked and decision findings to the Session conversation. Terminal idle or
-exit remains activity evidence only.
+The daemon resolves the Session once per request and re-reads its
+associations on every journal read. A Pane associated after the watcher
+starts is included; a detached or archived Pane drops out, together with any
+line still held for it by `--settle` or `--min-interval`. The Session's own
+hidden owner and orchestrator panels never appear, and an association limited
+to specific panels reports only those panels. There is no re-arm after
+`sessions associate` or `sessions detach`. `--session` cannot be combined with
+`--pane` or `--all-managed`, an unknown Session fails the watch, and a daemon
+that predates `--session` fails it with `WATCH ERROR` instead of watching every
+Pane.
+
+Membership changes are journal entries: `pane.associated` (`JOINED <pane-name>
+pane <pane-id> session <session-id>`) and `pane.detached` (`LEFT ...`). The
+Session manager emits them from `sessions associate` (only when the Pane was
+not already a member) and `sessions detach`. A watch without `--session`
+receives them only when `--kinds` lists them, so older clients never see an
+unknown kind. Cadence state is keyed by the Session rather than its current
+Panes, so held lines survive membership changes.
+
+PR events come from the daemon's Session PR monitor
+(`main/src/services/sessionPrMonitor.ts`, decision D7). About every 3 minutes
+(jittered) it visits each Pane associated with a Session that is not
+archived. With no such Pane it runs no `gh` at all. A Pane whose PR is known to
+be open gets `gh pr view <number> --json
+number,url,state,mergeable,statusCheckRollup,headRefOid`. Any other member (no
+cached PR because nobody has looked at it, or a closed or merged one) is first
+looked up by branch with Pane's own `gh pr list --head <branch>` lookup, which
+also updates the Pane's git status, so a background worker's new or reopened PR
+is found within a round. All calls share the one-at-a-time `gh` slot Pane uses
+for its own PR lookups, so a round costs at most two calls per member. It
+appends, on transitions only:
+
+- `pr.conflicted` (`PR <pane-name> pane <pane-id> #<number> CONFLICTED`): the
+  PR now conflicts with its base. GitHub's transient `UNKNOWN` answer never
+  counts as a change.
+- `pr.checks` (`... CHECKS PASSED`, or `... CHECKS FAILED lint,test` with up to
+  five names): every check on the head commit finished. A new head commit
+  reports again once its checks finish.
+- `pr.merged` (`... MERGED`). A merged PR is not polled again. A closed PR stops
+  polling without an entry.
+
+Entries carry `pr: {number, url, headOid}`, and `pr.checks` adds `checks` and
+`failingChecks`. The first poll of a PR after the daemon starts only records
+its state, so a restart never restates old conflicts; check `gh pr view` once
+after a restart. `pr.conflicted` and failed `pr.checks` bypass
+`--min-interval` like `BLOCKED`. The PR kinds are opt-in like `JOINED`/`LEFT`.
+Without `gh`, or while it is signed out, rate limited, or timing out, the
+monitor logs once, doubles its delay up to an hour, and resumes when `gh`
+answers again.
+
+The cursor defaults to `session-<uuid>`, where `<uuid>` is the UUID inside the
+Session ID: the Session `__orchestration_session_<uuid>__` uses
+`session-<uuid>`. Passing the name instead gives `session-<name>`. Cursor names
+may be up to 128 characters (64 before this release); when runpane derives a
+name itself, such as this default or the `PANE_PANEL_ID` fallback, it shortens
+one longer than 64 characters (or one with other characters) to
+`<prefix>-<first 12 hex characters of its sha256>`.
+
+A discussion-only Session has no follow watcher. On restart, retain the
+`session-<uuid>` cursor and capture a fresh output baseline before
+interpreting notifications. After a reset (`_reset`), the baseline restates
+current state: those JSON entries carry `replay: true` (and
+`changedWhileAway: true` after a daemon restart). A replayed `agent.ready` is
+never READY; re-read `sessions overview` instead of acting on it. Lines mode
+prints only `CHANGED` for them. Return blocked and decision findings to the
+Session conversation. Terminal idle or exit remains activity evidence only.
+
+`--quiet` (alias `--no-control-lines`) drops the control lines that only prove
+liveness: `_ok`, `_heartbeat`, and `_reconnected` (`WATCH OK`, `HEARTBEAT`,
+and `WATCH RECONNECTED` in lines mode). `_error`, `_reset`, and `_dropped`
+always print. Under `--follow`, JSON entries for a panel holding unsent
+composer text carry `heldInputPresent: true`, the JSON form of `STUCK`.
+
+### Watch profiles
+
+| Profile | When | Flags | Worst-case READY delay |
+|---|---|---|---|
+| Unattended (default) | Overnight or background runs; every wake-up costs a full context replay | `--settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff` | about 13 minutes |
+| User present | Someone is waiting on the result | `--settle 60000 --blocked-settle 15000 --min-interval 120000`, no `--idle-backoff` | about 3 minutes |
+
+Both profiles use the same `--kinds` list, `--quiet`, and named cursor.
+Switch profiles by re-arming the same cursor.
 
 ## Skill contract
 

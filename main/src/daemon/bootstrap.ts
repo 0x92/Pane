@@ -43,6 +43,7 @@ import { syncRemoteTransportForMode } from './remoteTransportStartup';
 import { panelManager } from '../services/panelManager';
 import { terminalPanelManager } from '../services/terminalPanelManager';
 import { WorkspaceJournal } from '../services/workspaceJournal';
+import { SessionPrMonitor } from '../services/sessionPrMonitor';
 import { WorkspaceStateReader } from '../services/workspaceStateReader';
 import { WorkspaceCursorStore } from '../services/workspaceCursorStore';
 import { extractWorkspaceHeldInput } from '../services/workspaceHeldInput';
@@ -277,6 +278,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
         heldInput: snapshot?.screenText ? extractWorkspaceHeldInput(snapshot.screenText) : undefined,
       };
     },
+    resolveSessionMembership: sessionId => orchestrationSessionManager.workspaceMembership(sessionId),
   });
   for (const session of sessionManager.getAllSessions()) {
     const project = sessionManager.getProjectForSession(session.id);
@@ -288,6 +290,14 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
       worktreePath: session.worktreePath,
     });
   }
+  // Polls GitHub only for Panes in a live Session with an open PR; idle rounds run no gh.
+  const sessionPrMonitor = new SessionPrMonitor({
+    sessions: orchestrationSessionManager,
+    panes: sessionManager,
+    gitStatus: gitStatusManager,
+    journal: workspaceJournal,
+    logger,
+  });
   const workspaceStateReader = new WorkspaceStateReader(
     sessionManager,
     () => workspaceJournal.epoch,
@@ -376,6 +386,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
   logsManager.setAnalyticsManager(analyticsManager);
 
   gitStatusManager.startPolling();
+  sessionPrMonitor.start();
   if (mode === 'desktop') {
     versionChecker.startPeriodicCheck();
   }
@@ -413,6 +424,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
       await sessionManager.cleanup();
       await runCommandManager.stopAllRunCommands();
       gitStatusManager.stopPolling();
+      sessionPrMonitor.stop();
       configManager.stopWatching();
       await cliManagerFactory.shutdown();
       await taskQueue.close();
