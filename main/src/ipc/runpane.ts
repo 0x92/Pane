@@ -1083,7 +1083,6 @@ export function registerRunpaneHandlers(
         : normalized.input;
       // A CR inside the text would be Enter to an agent composer.
       const stagedInput = stripTrailingNewlines(normalizePromptNewlines(submittedText));
-      const { activityStatus, isCliReady } = beforeScreen.state;
       const agentType = screenAgentType(beforeScreen);
       const warnings = agentType === 'claude' ? claudePromptWarnings(stagedInput) : undefined;
       // Claude reads text and Enter arriving in one read as a paste and keeps
@@ -1101,7 +1100,7 @@ export function registerRunpaneHandlers(
         );
       }
       const stagesComposer = beforeScreen.composer.isPresent && (agentType === 'claude' ||
-        (agentType === 'codex' && activityStatus === 'idle' && isCliReady === true));
+        agentType === 'codex');
       if (stagedInput.length > 0 && stagesComposer && (agentType === 'claude' || agentType === 'codex')) {
         // Claude takes a separately written Enter while it works (it queues
         // the message), so staging never waits for it to be idle.
@@ -1115,7 +1114,7 @@ export function registerRunpaneHandlers(
           panelId: panel.id,
           paneId: panel.sessionId,
           inputBytes: staged.inputBytes + submission.inputBytes,
-          enter: 'cr',
+          enter: submission.strategy === 'tab' ? 'tab' : 'cr',
           sequenceName: submission.sequenceName,
           verifiedSubmitted: submission.verifiedSubmitted,
           verification: submission.verification,
@@ -1898,7 +1897,7 @@ async function submitCreateComposerInput(
   probeBase?: Omit<DeliveryProbe, 'sentAtMs'>,
 ): Promise<RunpaneInitialInputDeliveryResult> {
   const input = tool.initialInput ?? '';
-  const submit = resolveComposerSubmit('auto', tool.agent);
+  const submit = resolveComposerSubmit(tool.agent === 'codex' ? 'codex-ctrl-enter' : 'auto', tool.agent);
   const nextCommand = panelScreenCommand(panel.id);
   const probe = probeBase ? { ...probeBase, sentAtMs: Date.now() } : undefined;
   let lastVerdict: ReturnType<typeof assessComposerEvidence> = 'unknown';
@@ -2406,7 +2405,7 @@ function ensureSubmitEnter(input: string): string {
 }
 
 interface ComposerSubmit {
-  strategy: 'codex-ctrl-enter' | 'enter';
+  strategy: 'codex-ctrl-enter' | 'enter' | 'tab';
   sequenceName: RunpanePanelSubmitComposerResult['sequenceName'];
   input: string;
 }
@@ -2414,8 +2413,12 @@ interface ComposerSubmit {
 function resolveComposerSubmit(
   strategy: RunpanePanelSubmitComposerStrategy | undefined,
   agentType: RunpaneAgentId | undefined,
+  activityStatus?: string,
 ): ComposerSubmit {
-  if (strategy === 'codex-ctrl-enter' || ((!strategy || strategy === 'auto') && agentType === 'codex')) {
+  if (strategy === 'tab' || ((!strategy || strategy === 'auto') && agentType === 'codex' && activityStatus === 'active')) {
+    return { strategy: 'tab', sequenceName: 'tab', input: '\t' };
+  }
+  if (strategy === 'codex-ctrl-enter') {
     return {
       strategy: 'codex-ctrl-enter',
       sequenceName: 'codex-ctrl-enter-cr',
@@ -2443,7 +2446,7 @@ async function submitComposerForPanel(
 ): Promise<RunpanePanelSubmitComposerResult> {
   const beforeScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
   const agentType = screenAgentType(beforeScreen);
-  const submit = resolveComposerSubmit(strategy, agentType);
+  const submit = resolveComposerSubmit(strategy, agentType, beforeScreen.state.activityStatus);
   const probeBase = composerDeliveryProbe(panel, delivery.cwd, agentType, delivery.text);
   const probe = probeBase ? { ...probeBase, sentAtMs: Date.now() } : undefined;
   const outputGenerationBeforeSubmit = terminalPanelManager.getOutputGeneration(panel.id);
@@ -2452,12 +2455,13 @@ async function submitComposerForPanel(
   let verification = await verifyComposerSubmitted(panel, beforeScreen, outputGenerationBeforeSubmit, probe);
 
   // The staged text still sitting in the composer proves the first submit was
-  // not taken (an agent mid-paste or busy can drop it), so one plain Enter
-  // cannot send it twice. An empty composer never gets a second Enter.
+  // not taken (an agent mid-paste or busy can drop it). Retry once using the
+  // current activity state; a busy Codex must still queue with Tab.
   if ((strategy ?? 'auto') === 'auto' && verification.stagedTextVisible) {
     const outputGenerationBeforeRetry = terminalPanelManager.getOutputGeneration(panel.id);
-    terminalPanelManager.writeToTerminal(panel.id, '\r');
-    inputBytes += 1;
+    const retry = resolveComposerSubmit('auto', agentType, verification.latestScreen.state.activityStatus);
+    terminalPanelManager.writeToTerminal(panel.id, retry.input);
+    inputBytes += Buffer.byteLength(retry.input, 'utf8');
     verification = await verifyComposerSubmitted(panel, verification.latestScreen, outputGenerationBeforeRetry, probe);
   }
 
@@ -2677,7 +2681,7 @@ async function verifyComposerSubmitted(
       afterText: latestScreen.text,
       stagedText,
     });
-    clearedOnScreen = (verdict === 'cleared' && panelHasFreshOutputSince(panel.id, outputGenerationBeforeSubmit)) ||
+    clearedOnScreen = (verdict === 'cleared' && !latestScreen.composer.hasUndeliveredText && panelHasFreshOutputSince(panel.id, outputGenerationBeforeSubmit)) ||
       (beforeHadComposerPrompt && !latestScreen.composer.hasUndeliveredText && !looksLikePendingComposer(latestScreen.text));
   }
 
@@ -2697,7 +2701,9 @@ async function verifyComposerSubmitted(
       blocked: {
         kind: 'agent-prompt',
         message: 'Pane sent the composer submit sequence, but the prompt still appears to be sitting in the composer.',
-        suggestedCommand: panelScreenCommand(panel.id),
+        suggestedCommand: latestScreen.state.agentType === 'codex'
+          ? `runpane panels input --panel ${panel.id} --keys ${latestScreen.state.activityStatus === 'active' ? 'tab' : 'enter'} --yes --json`
+          : panelScreenCommand(panel.id),
       },
       latestScreen,
       stagedTextVisible: latestScreen.composer.hasUndeliveredText,
@@ -3499,16 +3505,17 @@ function parsePanelSubmitComposerRequest(value: PaneCommandValue): RunpanePanelS
     value.strategy !== undefined &&
     value.strategy !== 'auto' &&
     value.strategy !== 'codex-ctrl-enter' &&
+    value.strategy !== 'tab' &&
     value.strategy !== 'enter'
   ) {
-    throw new Error('Panel submit-composer strategy must be auto, codex-ctrl-enter, or enter');
+    throw new Error('Panel submit-composer strategy must be auto, codex-ctrl-enter, enter, or tab');
   }
 
   return {
     panelId,
     strategy: value.strategy === undefined
       ? undefined
-      : decodeBoundary(value.strategy, boundary.enumeration('auto', 'codex-ctrl-enter', 'enter')),
+      : decodeBoundary(value.strategy, boundary.enumeration('auto', 'codex-ctrl-enter', 'enter', 'tab')),
   };
 }
 
