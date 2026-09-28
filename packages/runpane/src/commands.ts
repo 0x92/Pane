@@ -56,6 +56,7 @@ export interface ParsedArgs {
   focus?: boolean;
   pinned?: boolean;
   noPinned?: boolean;
+  noAssociate?: boolean;
   composerStrategy?: string;
   force?: boolean;
   launch?: boolean;
@@ -333,6 +334,10 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
   }
   if (flag === '--no-pinned') {
     parsed.noPinned = true;
+    return;
+  }
+  if (flag === '--no-associate') {
+    parsed.noAssociate = true;
     return;
   }
   if (flag === '--force') {

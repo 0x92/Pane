@@ -575,6 +575,7 @@ function compareParserParity() {
       focus: parsed.focus ?? false,
       pinned: parsed.pinned ?? false,
       noPinned: parsed.noPinned ?? false,
+      noAssociate: parsed.noAssociate ?? false,
       composerStrategy: parsed.composerStrategy ?? null,
       watchAs: parsed.watchAs ?? null,
       watchSince: parsed.watchSince ?? null,
@@ -664,6 +665,7 @@ for args in samples:
         "focus": parsed.focus,
         "pinned": parsed.pinned,
         "noPinned": parsed.no_pinned,
+        "noAssociate": parsed.no_associate,
         "composerStrategy": parsed.composer_strategy,
         "watchAs": parsed.watch_as,
         "watchSince": parsed.watch_since,
@@ -1647,6 +1649,50 @@ finally:
       dryRun: true
     }
   });
+}
+
+async function checkCreateAssociationSource() {
+  const payloadPath = path.join(os.tmpdir(), `runpane-association-${process.pid}.json`);
+  const previousSession = process.env.PANE_ORCHESTRATION_SESSION_ID;
+  fs.writeFileSync(payloadPath, JSON.stringify({
+    repo: 'active',
+    panes: [{ name: 'child', tool: { command: 'echo ready' } }],
+    associateSession: 'explicit-session',
+  }));
+  try {
+    const { parseRunpaneArgs } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'commands.js'));
+    const { buildPaneCreateRequest } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'localControl.js'));
+    const request = async (...flags) => buildPaneCreateRequest(parseRunpaneArgs(['panes', 'create', '--from-json', payloadPath, ...flags]));
+    delete process.env.PANE_ORCHESTRATION_SESSION_ID;
+    assert.strictEqual((await request()).associateSession, 'explicit-session');
+    process.env.PANE_ORCHESTRATION_SESSION_ID = 'current-session';
+    assert.strictEqual((await request()).associateSession, 'current-session');
+    assert.strictEqual((await request('--no-associate')).associateSession, undefined);
+  } finally {
+    if (previousSession === undefined) delete process.env.PANE_ORCHESTRATION_SESSION_ID;
+    else process.env.PANE_ORCHESTRATION_SESSION_ID = previousSession;
+    fs.rmSync(payloadPath, { force: true });
+  }
+
+  runPythonSnippet(`
+import json
+import os
+import tempfile
+from runpane.cli import parse_args
+from runpane.local_control import build_pane_create_request
+
+with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8") as handle:
+    json.dump({"repo": "active", "panes": [{"name": "child", "tool": {"command": "echo ready"}}], "associateSession": "explicit-session"}, handle)
+try:
+    args = ["panes", "create", "--from-json", handle.name]
+    os.environ.pop("PANE_ORCHESTRATION_SESSION_ID", None)
+    assert build_pane_create_request(parse_args(args))["associateSession"] == "explicit-session"
+    os.environ["PANE_ORCHESTRATION_SESSION_ID"] = "current-session"
+    assert build_pane_create_request(parse_args(args))["associateSession"] == "current-session"
+    assert "associateSession" not in build_pane_create_request(parse_args(args + ["--no-associate"]))
+finally:
+    os.unlink(handle.name)
+`);
 }
 
 async function checkPaneCreateBlockedReadiness() {
@@ -2813,6 +2859,7 @@ async function runChecks() {
   await checkExistingDaemonShortCircuit();
   checkWindowsPaneVersionDoesNotLaunchExecutable();
   await checkFromJsonAcceptsBom();
+  await checkCreateAssociationSource();
   await checkPaneArchiveDryRunParity();
   await checkPanePinParity();
   await checkPaneCreateBlockedReadiness();

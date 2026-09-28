@@ -59,6 +59,7 @@ import type {
   RunpanePaneCreateRequest,
   RunpanePaneCreateResult,
   RunpanePaneCreateResultItem,
+  RunpanePaneAssociationOutcome,
   RunpanePaneReadiness,
   RunpanePaneSummary,
   RunpanePanelActivityStatus,
@@ -663,6 +664,7 @@ export function registerRunpaneHandlers(
           waitReady: normalized.waitReady,
           readyTimeoutMs: normalized.readyTimeoutMs,
           activate: resolvePaneCreateActivation(normalized, item),
+          associateSession: normalized.associateSession,
         }),
       );
 
@@ -722,6 +724,7 @@ export function registerRunpaneHandlers(
           await sessionManager.updateSession(session.id, { status: 'stopped' });
           const stoppedSession = sessionManager.getSession(session.id);
           if (!stoppedSession) throw new Error(`Created session ${session.id} was not found after status update`);
+          const association = await associateCreatedPane(services, normalized.associateSession, session.id);
           await Promise.all([
             panelManager.ensureExplorerPanel(session.id),
             panelManager.ensureDiffPanel(session.id),
@@ -763,6 +766,7 @@ export function registerRunpaneHandlers(
             active: Boolean(panel.state.isActive),
             focused: Boolean(panel.state.isActive),
             nextCommand: panelOutputCommand(panel.id),
+            association,
           });
         } catch (error) {
           let failureSessionId = createdSessionId;
@@ -1397,6 +1401,7 @@ interface PaneCreateItemOptions {
   waitReady?: boolean;
   readyTimeoutMs?: number;
   activate?: boolean;
+  associateSession?: string;
 }
 
 interface TerminalPanelCreateOptions {
@@ -1697,6 +1702,7 @@ async function createPaneItem(
       throw new Error(`Created session ${sessionResult.sessionId} was not found`);
     }
     createdWorktreePath = session.worktreePath;
+    const association = await associateCreatedPane(services, options.associateSession, session.id);
 
     const { panel, readiness, initialInput } = await createTerminalPanelForSession(services, session, tool, {
       activate: options.activate,
@@ -1720,6 +1726,7 @@ async function createPaneItem(
       focused: Boolean(panel.state.isActive),
       readiness,
       initialInput,
+      association,
     };
   } catch (error) {
     return createFailureItem(index, item, error, createdSessionId, createdWorktreePath);
@@ -2666,6 +2673,7 @@ function parsePaneCreateRequest(value: PaneCommandValue): RunpanePaneCreateReque
     noFocus: optionalBoolean(value.noFocus),
     focus: optionalBoolean(value.focus),
     source: value.source === 'user' || value.source === 'agent' ? value.source : undefined,
+    associateSession: optionalString(value.associateSession)?.trim() || undefined,
   };
 }
 
@@ -2700,7 +2708,27 @@ function parsePaneAdoptRequest(value: PaneCommandValue): RunpanePaneAdoptRequest
     noFocus: optionalBoolean(value.noFocus),
     focus: optionalBoolean(value.focus),
     source: value.source === 'user' || value.source === 'agent' ? value.source : undefined,
+    associateSession: optionalString(value.associateSession)?.trim() || undefined,
   };
+}
+
+/**
+ * Panes created from inside a Session orchestrator become that Session's
+ * children in the same call, so agents cannot forget `sessions associate`.
+ * A failed association is reported on the item and never undoes the Pane.
+ */
+async function associateCreatedPane(
+  services: AppServices,
+  sessionId: string | undefined,
+  paneId: string,
+): Promise<RunpanePaneAssociationOutcome | undefined> {
+  if (!sessionId) return undefined;
+  try {
+    await requireOrchestrationSessionManager(services).associate({ sessionId }, { paneId });
+    return { sessionId, ok: true };
+  } catch (error) {
+    return { sessionId, ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function validateAdoptedWorktree(

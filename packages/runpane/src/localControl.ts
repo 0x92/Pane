@@ -199,6 +199,7 @@ interface PaneCreateRequest {
   noFocus?: boolean;
   focus?: boolean;
   source?: 'user' | 'agent';
+  associateSession?: string;
 }
 
 interface PaneAdoptRequest {
@@ -217,6 +218,7 @@ interface PaneAdoptRequest {
   noFocus?: boolean;
   focus?: boolean;
   source?: 'user' | 'agent';
+  associateSession?: string;
 }
 
 interface PaneCreateItem {
@@ -244,6 +246,7 @@ interface PaneCreateSuccessItem {
   nextCommand?: string;
   readiness?: PanelReadiness;
   initialInput?: InitialInputDeliveryResult;
+  association?: { sessionId: string; ok: boolean; error?: string };
 }
 
 interface PaneCreateFailureItem {
@@ -707,6 +710,7 @@ interface PaneCreateRequestInput {
   noFocus?: boolean;
   focus?: boolean;
   source?: 'user' | 'agent';
+  associateSession?: string;
 }
 
 interface PaneAdoptRequestInput extends Omit<PaneAdoptRequest, 'panes'> {
@@ -1035,6 +1039,11 @@ export const paneCreateResultSchema: BoundarySchema<PaneCreateResult> = boundary
       nextCommand: boundary.optional(boundary.string),
       readiness: boundary.optional(panelReadinessSchema),
       initialInput: boundary.optional(initialInputSchema),
+      association: boundary.optional(boundary.object({
+        sessionId: boundary.string,
+        ok: boundary.boolean,
+        error: boundary.optional(boundary.string),
+      })),
     }),
     boundary.object({
       ok: boundary.literal(false),
@@ -1320,6 +1329,7 @@ const paneCreateRequestInputSchema: BoundarySchema<PaneCreateRequestInput> = bou
   noFocus: boundary.optional(boundary.boolean),
   focus: boundary.optional(boundary.boolean),
   source: boundary.optional(boundary.enumeration('user', 'agent')),
+  associateSession: boundary.optional(boundary.string),
 });
 const paneAdoptRequestInputSchema: BoundarySchema<PaneAdoptRequestInput> = boundary.object({
   repo: repoSelectorSchema,
@@ -1337,6 +1347,7 @@ const paneAdoptRequestInputSchema: BoundarySchema<PaneAdoptRequestInput> = bound
   noFocus: boundary.optional(boundary.boolean),
   focus: boundary.optional(boundary.boolean),
   source: boundary.optional(boundary.enumeration('user', 'agent')),
+  associateSession: boundary.optional(boundary.string),
 });
 
 export async function runReposList(parsed: ParsedArgs): Promise<number> {
@@ -1718,6 +1729,7 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
         ...pane,
         tool: parsePaneToolSpecPayload(pane.tool, index),
       })),
+      associateSession: parsed.noAssociate ? undefined : resolveAssociateSession(parsed) ?? decoded.associateSession,
     };
   } else {
     if (!parsed.repo || !parsed.repoPath || !parsed.name) {
@@ -1740,6 +1752,7 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
     noFocus: parsed.noFocus || undefined,
     focus: parsed.focus || undefined,
     source: parsed.source === 'user' || parsed.source === 'agent' ? parsed.source : undefined,
+    associateSession: resolveAssociateSession(parsed),
     };
   }
   await confirmPaneAdopt(parsed, request);
@@ -2164,6 +2177,7 @@ export async function buildPaneCreateRequest(parsed: ParsedArgs): Promise<PaneCr
       request.panes = request.panes.map(item => ({ ...item, pinned: pinnedOverride }));
     }
     applyPaneFocusOptions(parsed, request);
+    request.associateSession = parsed.noAssociate ? undefined : resolveAssociateSession(parsed) ?? request.associateSession;
     return request;
   }
 
@@ -2196,9 +2210,16 @@ export async function buildPaneCreateRequest(parsed: ParsedArgs): Promise<PaneCr
     noFocus: !parsed.focus && (parsed.noFocus || source === 'agent' || Boolean(parsed.agent)) ? true : undefined,
     focus: parsed.focus || undefined,
     source,
+    associateSession: resolveAssociateSession(parsed),
   };
 
   return request;
+}
+
+/** Inside a Session orchestrator, new Panes join that Session unless --no-associate. */
+function resolveAssociateSession(parsed: ParsedArgs): string | undefined {
+  if (parsed.noAssociate) return undefined;
+  return process.env.PANE_ORCHESTRATION_SESSION_ID?.trim() || undefined;
 }
 
 function applyPaneFocusOptions(parsed: ParsedArgs, request: PaneCreateRequest): void {
@@ -2599,6 +2620,11 @@ function printPaneCreateResult(result: PaneCreateResult): void {
         }
       }
       printInitialInputDelivery(item.initialInput, '  ');
+      if (item.association) {
+        console.log(item.association.ok
+          ? `  Associated with Session ${item.association.sessionId}`
+          : `  Not associated with Session ${item.association.sessionId}: ${item.association.error ?? 'unknown error'}`);
+      }
       if (item.nextCommand) {
         console.log(`  Next: ${item.nextCommand}`);
       }
