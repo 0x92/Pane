@@ -2750,7 +2750,7 @@ export function buildPanelInputRequest(parsed: ParsedArgs, command: 'input' | 's
     throw new Error(`runpane panels ${command} requires --text, --keys, or --input-file.`);
   }
   if (parsed.keys !== undefined && command !== 'input') {
-    throw new Error('--keys is for panels input; panels submit sends text followed by Enter.');
+    throw new Error('--keys is for panels input; panels submit sends text followed by the agent submit key.');
   }
   if (parsed.asFilePointer && command !== 'submit') {
     throw new Error('--as-file-pointer is for panels submit; panels input sends exact bytes.');
