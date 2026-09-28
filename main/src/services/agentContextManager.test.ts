@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  applyManagedAgentsMdSetting,
   ensureProjectAgentContext,
   PANE_AGENT_CONTEXT_END,
   PANE_AGENT_CONTEXT_START,
@@ -34,10 +35,10 @@ describe('agentContextManager', () => {
     }
   });
 
-  it('creates AGENTS.md with a short CLI and MCP pointer by default', async () => {
+  it('creates AGENTS.md with a managed Pane block when publishing is on', async () => {
     const projectPath = await createTempProject();
 
-    const result = await ensureProjectAgentContext({ path: projectPath }, {});
+    const result = await ensureProjectAgentContext({ path: projectPath }, enabledConfig());
 
     expect(result.changed).toBe(true);
     expect(result.filePath).toBe(path.join(projectPath, 'AGENTS.md'));
@@ -56,6 +57,57 @@ describe('agentContextManager', () => {
     expect(content).not.toContain('Typical workflow: register the saved base repository once');
     expect(content).not.toContain('Skill routing reference:');
     expect(content).toContain(PANE_AGENT_CONTEXT_END);
+  });
+
+  it('leaves repositories untouched when the setting is absent', async () => {
+    const projectPath = await createTempProject();
+
+    const result = await ensureProjectAgentContext({ path: projectPath }, {});
+
+    expect(result.changed).toBe(false);
+    await expect(fs.access(path.join(projectPath, 'AGENTS.md'))).rejects.toThrow();
+  });
+
+  it('removes only Pane\'s section from every project when publishing turns off', async () => {
+    const active = await createTempProject();
+    const inactive = await createTempProject();
+    await fs.writeFile(path.join(inactive, 'AGENTS.md'), '# Repo Rules\n\nKeep this line.\n', 'utf8');
+    await ensureProjectAgentContext({ path: active }, enabledConfig());
+    await ensureProjectAgentContext({ path: inactive }, enabledConfig());
+    const projects = [{ path: active }, { path: inactive }];
+
+    await applyManagedAgentsMdSetting(disabledConfig(), {
+      all: () => projects,
+      active: () => projects[0],
+    });
+
+    await expect(fs.readFile(path.join(active, 'AGENTS.md'), 'utf8')).resolves.not.toContain(PANE_AGENT_CONTEXT_START);
+    const kept = await fs.readFile(path.join(inactive, 'AGENTS.md'), 'utf8');
+    expect(kept).toContain('Keep this line.');
+    expect(kept).not.toContain(PANE_AGENT_CONTEXT_START);
+  });
+
+  it('retries removal when a saved project becomes available again', async () => {
+    const projectPath = await createTempProject();
+    const offlinePath = `${projectPath}-offline`;
+    await ensureProjectAgentContext({ path: projectPath }, enabledConfig());
+    await fs.rename(projectPath, offlinePath);
+    try {
+      const projects = [{ path: projectPath }];
+      expect(await applyManagedAgentsMdSetting(disabledConfig(), {
+        all: () => projects,
+        active: () => projects[0],
+      })).toBe(false);
+      await fs.rename(offlinePath, projectPath);
+      expect(await applyManagedAgentsMdSetting(disabledConfig(), {
+        all: () => projects,
+        active: () => projects[0],
+      })).toBe(true);
+      await expect(fs.readFile(path.join(projectPath, 'AGENTS.md'), 'utf8'))
+        .resolves.not.toContain(PANE_AGENT_CONTEXT_START);
+    } finally {
+      await fs.rm(offlinePath, { recursive: true, force: true });
+    }
   });
 
   it('updates an existing agents.md variant while preserving user content', async () => {

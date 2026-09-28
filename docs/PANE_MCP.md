@@ -1,6 +1,6 @@
 # Pane MCP Server
 
-`runpane mcp` is an MCP server that gives coding agents Pane's `runpane` commands as tools. With it, an agent in any repository can list saved repositories, create Panes, open panels, read terminal screens, and send input. Pane also keeps a short `AGENTS.md` pointer in saved repositories so agents that don't have the MCP server yet can find the CLI and how to connect.
+`runpane mcp` is an MCP server that gives coding agents Pane's `runpane` commands as tools. With it, an agent in any repository can list saved repositories, create Panes, open panels, read terminal screens, and send input. Pane installs a `pane` skill in the user's home skill folders so agents can find the CLI and how to connect.
 
 ## Automatic registration
 
@@ -156,8 +156,8 @@ A few flags are left out. `--json` is always passed. `--follow` is omitted becau
 
 Mutating tools keep the CLI's confirmation rule. Every command whose usage includes `--yes` gets a `yes` input. Without `yes: true`, the call fails with the CLI's own refusal and changes nothing. Tools are also annotated with `readOnlyHint`, so clients can auto-approve read-only tools and prompt for the rest.
 
-## AGENTS.md block
+## Agent guidance
 
-Pane still writes a short managed `<!-- pane-agent-context -->` block into each active repository's `AGENTS.md`. The block points agents at the RunPane CLI (`npm i -g runpane`, then `runpane doctor --json`) and at the `pane` MCP server, including Claude Code, Codex, and Cursor config. The full command catalog lives in MCP tools and `runpane agent-context`, not in the file.
+Pane installs a managed `pane` skill under `~/.claude/skills/pane` (or `$CLAUDE_CONFIG_DIR/skills/pane`) and `~/.agents/skills/pane`, including saved WSL distros on Windows. It leaves any existing skill without Pane's marker alone. **Install Pane skill for agents** in Settings → AI & Agents controls the installation; turning it off removes Pane's copy.
 
-Turning **Publish Pane instructions to AGENTS.md** off stops Pane from updating the block. It does not delete existing blocks.
+**Publish Pane instructions to AGENTS.md** is off by default. If enabled, Pane writes a marked block into the active repository's `AGENTS.md` with CLI and MCP setup instructions. Turning it off removes only Pane's marked block from saved repositories. On upgrade, Pane turns off the old default once and removes those blocks; a later opt-in is remembered. The full command catalog lives in MCP tools and `runpane agent-context`.

@@ -12,6 +12,7 @@ import { terminalPanelManager, type TerminalPanelSnapshot } from '../services/te
 import { databaseService as panelDatabase } from '../services/database';
 import type { PanelBuffers } from '../database/panelBuffers';
 import { ensureProjectAgentContext } from '../services/agentContextManager';
+import { syncPaneHomeSkill } from '../services/paneHomeSkill';
 import { fastCheckWorkingDirectory, listCommitsAhead } from '../services/gitPlumbingCommands';
 import { assessComposerEvidence, isSlashCommandInput } from './runpaneComposerEvidence';
 import { projectWorkspaceEntry } from '../services/workspaceJournal';
@@ -370,6 +371,9 @@ export function registerRunpaneHandlers(
 
       try {
         await ensureProjectAgentContext(project, configManager.getConfig());
+        if (project.wsl_enabled && project.wsl_distribution) {
+          await syncPaneHomeSkill(configManager.getConfig(), [], [project.wsl_distribution]);
+        }
       } catch (error) {
         console.warn('[Runpane] Failed to update Pane agent context after repo add:', error);
       }

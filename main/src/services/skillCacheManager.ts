@@ -4,6 +4,9 @@ import path from 'path';
 import { RUNPANE_CONTRACT } from '../../../shared/types/generatedRunpaneContract';
 import { getAppDirectory } from '../utils/appDirectory';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
+import type { AppConfig } from '../types/config';
+import type { Project } from '../database/models';
+import { syncPaneHomeSkill } from './paneHomeSkill';
 
 // Every skill Pane installs for its agents ships with Pane.
 const PANE_CHAT_BUNDLE_ROOT = path.join(__dirname, 'paneChatBundle');
@@ -239,6 +242,28 @@ export class SkillCacheManager {
 
   async start(): Promise<void> {
     await this.ensurePaneChatGuide();
+  }
+
+  /**
+   * Installs (or, when the setting is off, removes) Pane's managed skill in
+   * the user's home skill folders. Best effort: a failure never blocks startup.
+   */
+  async syncHomeSkill(
+    config: Pick<AppConfig, 'agentContext'>,
+    projects: Pick<Project, 'wsl_enabled' | 'wsl_distribution'>[] = [],
+  ): Promise<void> {
+    try {
+      const distros = projects.flatMap(project => project.wsl_enabled && project.wsl_distribution
+        ? [project.wsl_distribution] : []);
+      const results = await syncPaneHomeSkill(config, undefined, distros);
+      for (const result of results) {
+        if (result.outcome === 'user-owned' || result.outcome === 'unsafe') {
+          console.warn(`[SkillCache] Left ${result.skillPath} alone (${result.outcome}); Pane only manages files it marked`);
+        }
+      }
+    } catch (error) {
+      console.warn('[SkillCache] Failed to sync the Pane home skill', error);
+    }
   }
 
   async ensurePaneChatGuide(): Promise<string> {
