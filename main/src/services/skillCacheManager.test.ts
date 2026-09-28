@@ -325,7 +325,7 @@ process.stdout.write(JSON.stringify(payload) + '\\n');
     expect(canonicalSkill).toContain('runpane watch --session "$PANE_ORCHESTRATION_SESSION_ID" --follow --quiet --json');
     expect(canonicalSkill).toContain('the cursor is `session-<uuid>`');
     expect(canonicalSkill).not.toContain('session-<session-id>');
-    expect(canonicalSkill).toContain('--kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff');
+    expect(canonicalSkill).toContain('--kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged,agent.report --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff');
     // One Session watcher follows membership; the skill no longer asks for one --pane each or a re-arm.
     expect(canonicalSkill).not.toContain('--pane <pane-id> --kinds');
     expect(canonicalSkill).not.toContain('re-arm this\n  same named cursor with the current Pane set');
@@ -342,6 +342,9 @@ process.stdout.write(JSON.stringify(payload) + '\\n');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('Read and follow <absolute-path-to-prompt-file>');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('wait for the resource instead of taking it over');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('pass `--base-branch <ref>`');
+    expect(canonicalSkill).toContain('REPORT (`agent.report`): a worker ran `runpane report`. This is the\n  completion signal.');
+    expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('A READY with no REPORT means look, and maybe nudge');
+    expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('End every worker prompt with: "When finished or blocked, run `runpane report --state <ready|blocked|failed|done> --pr <number> --head <sha> --summary-file <path>`');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('BUSY is not requested and carries no action');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('waits on subagents or Codex dispatches');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('up to ~13min after the turn ended');

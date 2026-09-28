@@ -422,6 +422,7 @@ function matchesFilter(
   membership?: WorkspaceSessionMembership,
 ): boolean {
   if (filter.kinds && !filter.kinds.includes(entry.kind)) return false;
+  if (!filter.kinds && filter.sessionId === undefined && entry.kind === 'agent.report') return false;
   if (!filter.kinds && filter.sessionId === undefined && OPT_IN_KINDS.includes(entry.kind)) return false;
   if (filter.sessionId !== undefined && !matchesSession(entry, filter.sessionId, membership)) return false;
   if (filter.paneIds && !filter.paneIds.includes(entry.paneId)) return false;

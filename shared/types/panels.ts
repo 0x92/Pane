@@ -25,6 +25,28 @@ export interface ToolPanelState {
   customState?: TerminalPanelState | DiffPanelState | ExplorerPanelState | EditorPanelState | LogsPanelState | DashboardPanelState | SetupTasksPanelState | BrowserPanelState | object;
 }
 
+export type TerminalAgentDetection = 'declared' | 'command' | 'process' | 'screen';
+
+/** What a worker says about its task when it runs `runpane report`. */
+export type TerminalAgentReportState = 'ready' | 'blocked' | 'failed' | 'done';
+
+/** The latest `runpane report` from an agent panel, kept in its custom state so it survives restarts. */
+export interface TerminalAgentReport {
+  state: TerminalAgentReportState;
+  /** Pull request number the work is in. */
+  pr?: number;
+  /** Commit the report is about (lowercase hex, 7-40 characters). */
+  head?: string;
+  /** Up to 16,000 characters; a longer summary ends with a truncation marker and sets `summaryTruncated`. */
+  summary?: string;
+  summaryTruncated?: true;
+  /** Absolute path of the file the summary was read from (`--summary-file`). */
+  summaryPath?: string;
+  /** What the worker needs answered; present when `state` is `blocked`. */
+  question?: string;
+  reportedAt: string;
+}
+
 export interface TerminalPanelState {
   // Basic state (implemented in Phase 1-2)
   isInitialized?: boolean;       // Whether PTY process has been started
@@ -33,6 +55,7 @@ export interface TerminalPanelState {
   initialCommand?: string;       // Command to run on terminal init (e.g., "claude --dangerously-skip-permissions")
   initialInput?: string;         // First input to send once the initial command is ready
   initialInputMode?: 'stdin' | 'argument'; // How initialInput is delivered to the initial command
+  initialInputFile?: string;     // Prompt file an argument launch reads with "$(cat '<file>')" instead of inlining initialInput
   initialInputSubmitStrategy?: 'enter' | 'codex-ctrl-enter'; // How stdin initialInput should be submitted
   initialInputDeliveryVersion?: number; // Bumps when a feature changes delivery semantics
   initialInputSentAt?: string;   // Set after initialInput has been written once
@@ -59,7 +82,18 @@ export interface TerminalPanelState {
   wasInterrupted?: boolean;          // Whether this terminal was active when app shutdown occurred
   hasClaudeSessionId?: boolean;      // Whether --session-id was already passed to Claude (use --resume next time)
   agentType?: 'claude' | 'codex' | 'cursor'; // CLI agent type for panel-local resume behavior
+  /** How Pane learned `agentType`: declared with the launch, from the launch command, the foreground process, or the screen. */
+  agentDetection?: TerminalAgentDetection;
+  /** The command the panel was launched (or staged) with, as the user gave it. */
+  launchCommand?: string;
+  /**
+   * `wrapped`: the launch command is a wrapper (or unknown command) that runs the agent.
+   * Pane runs it unchanged — no `--session-id`, resume, or prompt-argument rewrites.
+   */
+  launchMode?: 'wrapped';
   agentSessionId?: string;           // Agent-generated session ID for resuming conversations
+  /** Latest `runpane report` from this panel's agent. */
+  agentReport?: TerminalAgentReport;
   /** Stable orchestration identity for resumed Session terminals. */
   orchestrationSessionId?: string;
 

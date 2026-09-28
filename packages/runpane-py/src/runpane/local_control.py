@@ -604,10 +604,77 @@ def run_panels_screen(parsed: Any) -> int:
         print_json(result)
         return 0
 
-    text = result.get("text") or ""
+    text = mark_suggestion_line(result.get("text") or "", (result.get("composer") or {}).get("ghostText"))
     sys.stdout.write(text)
     if text and not text.endswith("\n"):
         sys.stdout.write("\n")
+    return 0
+
+
+def run_panels_last_message(parsed: Any) -> int:
+    if not parsed.panel_id:
+        raise ValueError("runpane panels last-message requires --panel.")
+
+    result = invoke_daemon("runpane:panels:last-message", [{
+        "panelId": parsed.panel_id,
+        "limit": parsed.limit,
+    }], pane_dir=parsed.pane_dir)
+
+    if parsed.json:
+        print_json(result)
+    elif result.get("ok"):
+        text = result.get("text") or ""
+        sys.stdout.write(text)
+        if text and not text.endswith("\n"):
+            sys.stdout.write("\n")
+        if result.get("truncated"):
+            print(f"(showing the last {result.get('limit')} of {result.get('length')} characters)", file=sys.stderr)
+    else:
+        print(f"{result.get('reason')}: {result.get('message')}", file=sys.stderr)
+    return 0 if result.get("ok") else 1
+
+
+def resolve_report_identity(parsed: Any, env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Where a report is for: explicit --panel (with an optional --pane), else the Pane terminal's own panel."""
+    env = os.environ if env is None else env
+    if parsed.pane_id or parsed.panel_id:
+        if not parsed.panel_id:
+            raise ValueError("runpane report --pane also needs --panel <panel-id>. Find it with `runpane panels list --pane <pane-id>`.")
+        return {"paneId": parsed.pane_id, "panelId": parsed.panel_id} if parsed.pane_id else {"panelId": parsed.panel_id}
+    panel_id = (env.get("PANE_PANEL_ID") or "").strip()
+    if not panel_id:
+        raise ValueError(
+            "runpane report cannot tell which panel is reporting. Run it inside a Pane terminal "
+            "(which sets PANE_SESSION_ID and PANE_PANEL_ID), or pass --pane <pane-id> --panel <panel-id>."
+        )
+    pane_id = (env.get("PANE_SESSION_ID") or "").strip()
+    return {"paneId": pane_id, "panelId": panel_id} if pane_id else {"panelId": panel_id}
+
+
+# The CLIs send one character past the daemon's 16,000 so it still marks an overlong summary truncated.
+MAX_SENT_SUMMARY_LENGTH = 16_001
+
+
+def run_report(parsed: Any, env: Optional[Dict[str, str]] = None) -> int:
+    identity = resolve_report_identity(parsed, env)
+    summary = strip_utf8_bom(read_input_source(parsed.summary_file)) if parsed.summary_file is not None else parsed.summary
+    summary_path = os.path.abspath(parsed.summary_file) if parsed.summary_file not in (None, "-") else None
+    request: Dict[str, Any] = {
+        **identity,
+        "state": parsed.report_state,
+        **optional_value("pr", parsed.report_pr),
+        **optional_value("head", parsed.report_head),
+        **optional_value("summary", summary[:MAX_SENT_SUMMARY_LENGTH] if summary is not None else None),
+        **optional_value("summaryPath", summary_path),
+        **optional_value("question", parsed.question),
+    }
+    result = invoke_daemon("runpane:report", [request], pane_dir=parsed.pane_dir)
+    if parsed.json:
+        print_json(result)
+    else:
+        session_ids = result.get("sessionIds") or []
+        sessions = f" Recorded on Session {', '.join(session_ids)}." if session_ids else ""
+        print(f"Reported {describe_report(result.get('report') or {})} for panel {result.get('panelId')}.{sessions}")
     return 0
 
 
@@ -627,11 +694,41 @@ def run_panels_submit(parsed: Any) -> int:
             f"{verb} {input_bytes} byte{suffix} via {result.get('sequenceName')} "
             f"to panel {result.get('panelId')}.{verified}"
         )
+        print_delivery(result.get("delivery"))
         if result.get("blocked"):
             print(f"Blocked: {result['blocked'].get('message')}")
+        print_prompt_notes(result)
         if result.get("nextCommand"):
             print(f"Next: {result.get('nextCommand')}")
     return 0 if result.get("ok") else 1
+
+
+def print_delivery(delivery: Optional[Dict[str, Any]], prefix: str = "") -> None:
+    """Where the prompt went, for human output: `Delivery: queued (transcript)`."""
+    if delivery:
+        print(f"{prefix}Delivery: {delivery.get('state')} ({delivery.get('evidence')})")
+
+
+def mark_suggestion_line(text: str, ghost_text: Optional[str]) -> str:
+    """Mark the composer line that shows ghost text (a placeholder or suggested prompt)."""
+    ghost = (ghost_text or "").split("\n")[0].strip()
+    if not ghost:
+        return text
+    lines = text.split("\n")
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index].strip()
+        if line[:1] in ("❯", "›", ">") and ghost in line:
+            lines[index] = f"{lines[index].rstrip()}  ⟨suggestion⟩"
+            break
+    return "\n".join(lines)
+
+
+def print_prompt_notes(result: Dict[str, Any], prefix: str = "") -> None:
+    """The prompt file Pane wrote and any leading-character warnings, for human output."""
+    if result.get("promptFile"):
+        print(f"{prefix}Prompt file: {result.get('promptFile')}")
+    for warning in result.get("warnings") or []:
+        print(f"{prefix}Warning ({warning.get('code')}): {warning.get('message')}")
 
 
 def run_panels_submit_composer(parsed: Any) -> int:
@@ -650,6 +747,7 @@ def run_panels_submit_composer(parsed: Any) -> int:
         verb = "Submitted" if result.get("ok") else "Could not verify"
         verified = " verified" if result.get("verifiedSubmitted") else " unverified"
         print(f"{verb} composer with {result.get('sequenceName')} to panel {result.get('panelId')}.{verified}")
+        print_delivery(result.get("delivery"))
         if result.get("blocked"):
             print(f"Blocked: {result['blocked'].get('message')}")
         if result.get("nextCommand"):
@@ -714,6 +812,8 @@ def build_panel_input_request(parsed: Any, command: str = "input") -> Dict[str, 
         raise ValueError(f"runpane panels {command} requires --text, --keys, or --input-file.")
     if parsed.keys is not None and command != "input":
         raise ValueError("--keys is for panels input; panels submit sends text followed by Enter.")
+    if parsed.as_file_pointer and command != "submit":
+        raise ValueError("--as-file-pointer is for panels submit; panels input sends exact bytes.")
 
     if parsed.keys is not None:
         text = keys_to_bytes(parsed.keys)
@@ -721,7 +821,11 @@ def build_panel_input_request(parsed: Any, command: str = "input") -> Dict[str, 
         text = read_input_source(parsed.panel_input_file)
     else:
         text = parsed.panel_input or ""
-    return {"panelId": parsed.panel_id, "input": text}
+    return {
+        "panelId": parsed.panel_id,
+        "input": text,
+        **optional_value("asFilePointer", True if parsed.as_file_pointer else None),
+    }
 
 
 def keys_to_bytes(keys: Any) -> str:
@@ -839,10 +943,21 @@ def apply_pane_focus_options(parsed: Any, request: Dict[str, Any]) -> None:
 
 
 def build_tool_spec(parsed: Any, command: str = "panes create") -> Dict[str, Any]:
-    if parsed.agent and parsed.tool_command:
-        raise ValueError("Use either --agent or --tool-command, not both.")
-
     initial_input = resolve_initial_input(parsed)
+    if parsed.as_file_pointer and initial_input is None:
+        raise ValueError(f"--as-file-pointer needs a prompt: pass --prompt or --initial-input-file to runpane {command}.")
+    file_pointer = optional_value("initialInputAsFilePointer", True if parsed.as_file_pointer else None)
+
+    # With --tool-command, --agent names the agent the command runs (a wrapper
+    # such as `agent-farm run`); Pane launches the command unchanged.
+    if parsed.tool_command and parsed.agent:
+        return {
+            "command": parsed.tool_command,
+            "agentType": parsed.agent,
+            **optional_value("title", parsed.title),
+            **optional_value("initialInput", initial_input),
+            **file_pointer,
+        }
     agent = parsed.agent
 
     if not agent and not parsed.tool_command:
@@ -855,6 +970,7 @@ def build_tool_spec(parsed: Any, command: str = "panes create") -> Dict[str, Any
             "agent": agent,
             **optional_value("title", parsed.title),
             **optional_value("initialInput", initial_input),
+            **file_pointer,
         }
 
     if not parsed.tool_command:
@@ -864,6 +980,7 @@ def build_tool_spec(parsed: Any, command: str = "panes create") -> Dict[str, Any
         "command": parsed.tool_command,
         **optional_value("title", parsed.title),
         **optional_value("initialInput", initial_input),
+        **file_pointer,
     }
 
 
@@ -1076,6 +1193,9 @@ def format_workspace_entry_line(entry: Dict[str, Any]) -> Optional[str]:
         return f"{workspace_label(kind)} {name} {pane} session {sanitize_watch_value(entry.get('sessionId') or '')}"
     if kind in {"pr.conflicted", "pr.checks", "pr.merged"}:
         return format_pr_entry_line(kind, f"PR {name} {pane} #{(entry.get('pr') or {}).get('number', '?')}", entry)
+    if kind == "agent.report":
+        report = entry.get("report")
+        return f"REPORT {name} {pane}{panel} {describe_report(report) if report else 'unknown'}"
     return f"{workspace_label(kind)} {name} {pane}{panel}"
 
 
@@ -1089,6 +1209,23 @@ def format_pr_entry_line(kind: str, prefix: str, entry: Dict[str, Any]) -> str:
     # Failing names are joined by commas, so their own spaces and commas become underscores.
     names = [re.sub(r"[ ,]", "_", sanitize_watch_value(check)) for check in entry.get("failingChecks") or []]
     return f"{prefix} CHECKS FAILED" + (f" {','.join(names)}" if names else "")
+
+
+MAX_LINE_QUESTION_LENGTH = 200
+
+
+def describe_report(report: Dict[str, Any]) -> str:
+    """`ready pr#747 fc5dce9`, or `blocked pr#747: <question>` cut to 200 characters."""
+    parts = [sanitize_watch_value(report.get("state"))]
+    if report.get("pr") is not None:
+        parts.append(f"pr#{report.get('pr')}")
+    if report.get("head"):
+        parts.append(sanitize_watch_value(report.get("head"))[:7])
+    question = sanitize_watch_value(report.get("question")) if report.get("question") else ""
+    if not question:
+        return " ".join(parts)
+    shown = f"{question[:MAX_LINE_QUESTION_LENGTH - 1]}…" if len(question) > MAX_LINE_QUESTION_LENGTH else question
+    return f"{' '.join(parts)}: {shown}"
 
 
 def emit_watch_non_entry(kind: str, output_format: str, **fields: Any) -> None:
@@ -1131,6 +1268,7 @@ def workspace_label(kind: Any) -> str:
         "pr.conflicted": "PR CONFLICTED",
         "pr.checks": "PR CHECKS",
         "pr.merged": "PR MERGED",
+        "agent.report": "REPORT",
     }.get(kind, str(kind).upper())
 
 
@@ -1213,6 +1351,8 @@ def print_pane_create_result(result: Dict[str, Any]) -> None:
                     print(f"  Associated with Session {association.get('sessionId')}")
                 else:
                     print(f"  Not associated with Session {association.get('sessionId')}: {association.get('error', 'unknown error')}")
+            print_delivery((item.get("initialInput") or {}).get("delivery"), "  ")
+            print_prompt_notes(item, "  ")
             if item.get("nextCommand"):
                 print(f"  Next: {item.get('nextCommand')}")
         else:
@@ -1272,6 +1412,7 @@ def print_panel_create_result(result: Dict[str, Any]) -> None:
         blocked = readiness.get("blocked")
         if blocked:
             print(f"Blocked: {blocked.get('message')}")
+    print_prompt_notes(result)
     if result.get("nextCommand"):
         print(f"Next: {result.get('nextCommand')}")
 
@@ -1330,7 +1471,9 @@ def print_panel_list_result(result: Dict[str, Any]) -> None:
         if panel.get("initialized") is not None:
             initialized = " initialized" if panel.get("initialized") else " not-initialized"
         agent = f" {panel.get('agentType')}" if panel.get("agentType") else ""
-        print(f"{marker} {panel.get('id')}\t{panel.get('type')}\t{panel.get('title')}{initialized}{agent}")
+        detection = panel.get("agentDetection")
+        detection_label = f" ({detection})" if detection and detection != "command" else ""
+        print(f"{marker} {panel.get('id')}\t{panel.get('type')}\t{panel.get('title')}{initialized}{agent}{detection_label}")
 
 
 def optional_value(key: str, value: Any) -> Dict[str, Any]:

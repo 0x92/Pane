@@ -298,7 +298,8 @@ export const RUNPANE_CONTRACT = {
       "name": "panes create",
       "summary": "Create user-visible Panes (Pane sessions) backed by Pane-managed worktrees for feature/PR work and open terminal-backed tool tabs.",
       "usage": [
-        "runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [--source user|agent] [--focus|--no-focus] [options] [--pane-dir <path>]",
+        "runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--base-branch <branch>] [options] [--pane-dir <path>]",
+        "runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--source user|agent] [--focus|--no-focus] [--base-branch <branch>] [options] [--pane-dir <path>]",
         "runpane panes create --from-json <path|-> [--yes] [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
@@ -315,7 +316,8 @@ export const RUNPANE_CONTRACT = {
       "name": "panes adopt",
       "summary": "Adopt an existing externally managed git worktree as a Pane without changing the worktree.",
       "usage": [
-        "runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [--resume <id>] [--folder <name>] [--launch] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]"
+        "runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [--resume <id>] [--folder <name>] [--launch] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]",
+        "runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--folder <name>] [--launch] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "additive": true,
@@ -412,7 +414,7 @@ export const RUNPANE_CONTRACT = {
       "summary": "Create a terminal-backed tool panel inside an existing Pane session.",
       "usage": [
         "runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--wait-ready] --yes [--json] [--pane-dir <path>]",
-        "runpane panels create --pane <pane-id> --tool-command <command> [--title <title>] [--focus|--no-focus] --yes [--json] [--pane-dir <path>]"
+        "runpane panels create --pane <pane-id> --tool-command <command> [--agent <codex|claude|cursor>] [--title <title>] [--focus|--no-focus] [--wait-ready] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "additive": true,
@@ -483,7 +485,7 @@ export const RUNPANE_CONTRACT = {
       "name": "panels submit",
       "summary": "Send and submit text to a terminal panel, including idle agent composers.",
       "usage": [
-        "runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json] [--pane-dir <path>]"
+        "runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "toolsets": [
@@ -520,6 +522,20 @@ export const RUNPANE_CONTRACT = {
       ],
       "jsonSchemas": [
         "panelWaitResult"
+      ]
+    },
+    {
+      "name": "panels last-message",
+      "summary": "Read an agent's last reply from its transcript, without scraping the screen.",
+      "usage": [
+        "runpane panels last-message --panel <panel-id> [--limit <count>] [--json] [--pane-dir <path>]"
+      ],
+      "toolsets": [
+        "panels",
+        "agents"
+      ],
+      "jsonSchemas": [
+        "panelLastMessageResult"
       ]
     },
     {
@@ -972,7 +988,7 @@ export const RUNPANE_CONTRACT = {
       "name": "agents send",
       "summary": "Send a follow-up message to an agent and confirm it was submitted.",
       "usage": [
-        "runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> --yes [--json] [--pane-dir <path>]"
+        "runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> [--as-file-pointer] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "wrappers": [
@@ -984,6 +1000,22 @@ export const RUNPANE_CONTRACT = {
       ],
       "jsonSchemas": [
         "agentSendResult"
+      ]
+    },
+    {
+      "name": "report",
+      "summary": "Hand back a worker's structured report: state, PR, head commit, summary, and the question when blocked.",
+      "usage": [
+        "runpane report --state <ready|blocked|failed|done> [--pr <number>] [--head <sha>] [--summary <text>|--summary-file <path|->] [--question <text>] [--pane <pane-id> --panel <panel-id>] [--json] [--pane-dir <path>]"
+      ],
+      "mutates": true,
+      "additive": true,
+      "idempotent": true,
+      "toolsets": [
+        "agents"
+      ],
+      "jsonSchemas": [
+        "reportResult"
       ]
     },
     {
@@ -1245,7 +1277,7 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--agent",
         "value": "<codex|claude|cursor>",
-        "description": "Built-in agent terminal template to open."
+        "description": "Built-in agent terminal template to open. With --tool-command, the agent that command runs."
       },
       {
         "name": "--tool-command",
@@ -1388,7 +1420,7 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--min-interval",
         "value": "<milliseconds>",
-        "description": "Follow-only opt-in: hold non-urgent lines and flush them together at most once per interval; BLOCKED, PR CONFLICTED, and PR CHECKS FAILED bypass it."
+        "description": "Follow-only opt-in: hold non-urgent lines and flush them together at most once per interval; BLOCKED, REPORT, PR CONFLICTED, and PR CHECKS FAILED bypass it."
       },
       {
         "name": "--body-file",
@@ -1429,6 +1461,36 @@ export const RUNPANE_CONTRACT = {
         "name": "--keys",
         "value": "<name,...>",
         "description": "Named keys for panels input, such as down,enter."
+      },
+      {
+        "name": "--state",
+        "value": "<ready|blocked|failed|done>",
+        "description": "Report state for runpane report."
+      },
+      {
+        "name": "--pr",
+        "value": "<number>",
+        "description": "Pull request number for runpane report."
+      },
+      {
+        "name": "--head",
+        "value": "<sha>",
+        "description": "Head commit (7-40 hex characters) for runpane report."
+      },
+      {
+        "name": "--summary",
+        "value": "<text>",
+        "description": "Report summary text; up to 16,000 characters are kept."
+      },
+      {
+        "name": "--summary-file",
+        "value": "<path|->",
+        "description": "Read the report summary from a file or stdin."
+      },
+      {
+        "name": "--question",
+        "value": "<text>",
+        "description": "What a blocked worker needs answered; required with --state blocked."
       }
     ],
     "localBoolean": [
@@ -1467,6 +1529,10 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--launch",
         "description": "Run an adopted pane's agent resume command immediately instead of staging it."
+      },
+      {
+        "name": "--as-file-pointer",
+        "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
       },
       {
         "name": "--follow",
@@ -1560,6 +1626,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
         "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "  runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--json]",
+        "  runpane panels last-message --panel <panel-id> [--limit <count>] [--json]",
         "  runpane panes git-status --pane <pane-id> [--json] [--pane-dir <path>]",
         "  runpane panes commit --pane <pane-id> --message <message> --yes [--json] [--pane-dir <path>]",
         "  runpane panes push --pane <pane-id> --yes [--json] [--pane-dir <path>]",
@@ -1573,6 +1640,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane agents start --repo <selector> --name <name> (--agent <codex|claude|cursor>|--tool-command <command>) --prompt <task> [--base-branch <branch>] --yes [--json] [--pane-dir <path>]",
         "  runpane agents status (--pane <pane-id>|--panel <panel-id>) [--limit <count>] [--json] [--pane-dir <path>]",
         "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> --yes [--json] [--pane-dir <path>]",
+        "  runpane report --state <ready|blocked|failed|done> [--pr <number>] [--head <sha>] [--summary-file <path|->] [--question <text>] [--json]",
         "  runpane panes squash-rebase --pane <pane-id> --message <message> --yes [--json] [--pane-dir <path>]",
         "  runpane panes stash --pane <pane-id> --yes [--json] [--pane-dir <path>]",
         "  runpane panes stash-pop --pane <pane-id> --yes [--json] [--pane-dir <path>]",
@@ -1750,6 +1818,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Lists Pane sessions. Pass --repo to limit results to one saved repository.",
         "",
+        "status is running while any terminal panel is live. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
+        "",
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
@@ -1796,7 +1866,7 @@ export const RUNPANE_CONTRACT = {
         "  --idle-after <ms>              Re-firing READY idle interval; defaults to 600000 under --follow",
         "  --settle <ms>                  Opt-in: emit READY only after this quiet window (--follow only)",
         "  --blocked-settle <ms>          Opt-in: emit BLOCKED only after this window (--follow only)",
-        "  --min-interval <ms>            Opt-in: batch non-urgent lines per interval; BLOCKED and PR failures bypass (--follow only)",
+        "  --min-interval <ms>            Opt-in: batch non-urgent lines per interval; BLOCKED, REPORT, and PR failures bypass (--follow only)",
         "  --idle-backoff                 Opt-in: IDLE at --idle-after, 30m, 1h, 3h, then daily (--follow only)",
         "  --all-managed                  Explicitly watch all managed panes",
         "  --include-shells               Include ordinary shell panels",
@@ -1819,6 +1889,7 @@ export const RUNPANE_CONTRACT = {
         "  --json                         Alias for --format json",
         "",
         "Defaults are responsive: no settle, no batching, all kinds, IDLE every --idle-after. BUSY carries no action; drop it with --kinds.",
+        "agent.report (a worker ran `runpane report`) is opt-in: list it in --kinds. REPORT lines skip the --min-interval batch.",
         "Unattended (Pane Chat default): --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
         "User present: the same kinds with --settle 60000 --blocked-settle 15000 --min-interval 120000 and no --idle-backoff",
         "Session orchestrator: runpane watch --session <id|name> --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
@@ -1829,21 +1900,25 @@ export const RUNPANE_CONTRACT = {
       "panes create": [
         "Usage:",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [options]",
+        "  runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--base-branch <branch>] [options]",
         "  runpane panes create --from-json <path|-> [--yes] [--json]",
         "",
         "Creates user-visible Panes (Pane sessions) for feature/PR work in a saved repository and opens a terminal-backed tool tab. Pane creates and owns the worktree/branch for each new Pane.",
+        "",
+        "A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
         "",
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
         "  --name <name>                  Pane/session name",
         "  --worktree-name <name>         Worktree name; defaults to --name",
         "  --base-branch <branch>         Base branch for the worktree",
-        "  --agent <codex|claude|cursor>         Built-in terminal template",
+        "  --agent <codex|claude|cursor>  Built-in terminal template; with --tool-command, the agent it runs",
         "  --tool-command <command>       Custom terminal command",
         "  --title <title>                Terminal tab title",
         "  --initial-input <text>         Text sent after the command is ready",
         "  --prompt <text>                Alias for --initial-input",
         "  --initial-input-file <path|->  Read initial input from a file or stdin",
+        "  --as-file-pointer              Send `Read and follow <prompt file>` instead of the prompt",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
         "  --wait-ready                   Wait for terminal readiness before returning",
@@ -1863,10 +1938,13 @@ export const RUNPANE_CONTRACT = {
       "panes adopt": [
         "Usage:",
         "  runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [options]",
+        "  runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [options]",
         "",
         "Adopts an existing externally managed git worktree without creating, syncing, or deleting it.",
         "",
-        "Options: --resume <id> stages the agent resume command; --launch runs it immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews."
+        "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
+        "",
+        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
       ],
       "panes archive": [
         "Usage:",
@@ -1952,6 +2030,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
         "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "  runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--json]",
+        "  runpane panels last-message --panel <panel-id> [--limit <count>] [--json]",
         "",
         "Run \"runpane help panels create\" or another command-specific topic for options."
       ],
@@ -1960,6 +2039,8 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels list --pane <pane-id> [--json]",
         "",
         "Lists tool panels in a Pane session.",
+        "",
+        "agentDetection says how Pane knows agentType: declared, command, process, or screen. launchCommand is the command the panel was launched with.",
         "",
         "Options:",
         "  --pane <pane-id>               Pane/session id",
@@ -2052,14 +2133,21 @@ export const RUNPANE_CONTRACT = {
       ],
       "panels submit": [
         "Usage:",
-        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
+        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] --yes [--json]",
         "",
         "Sends text to a terminal panel and normalizes the final terminal Enter to CR. Use this for ordinary prompt answers and shell commands.",
+        "",
+        "For a Claude or Codex panel with no composer on screen, nothing is sent: the result is ok: false with blocked.kind composer-unknown.",
+        "",
+        "Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and the submit key goes as its own write once the paste has settled, even while the agent is working.",
+        "",
+        "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
         "",
         "Options:",
         "  --panel <panel-id>             Terminal panel id",
         "  --text <text>                  Text to submit before Enter",
         "  --input-file <path|->          Read text from a file or stdin before Enter",
+        "  --as-file-pointer              Write the text to a prompt file and submit `Read and follow <path>`",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output",
         "  --yes                          Skip confirmation for this mutating command"
@@ -2084,15 +2172,16 @@ export const RUNPANE_CONTRACT = {
         "",
         "Usage:",
         "  runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--title <title>] [--initial-input <text>] [--no-focus] [--wait-ready] --yes [--json]",
-        "  runpane panels create --pane <pane-id> --tool-command <command> [--title <title>] [--no-focus] --yes [--json]",
+        "  runpane panels create --pane <pane-id> --tool-command <command> [--agent <codex|claude|cursor>] [--title <title>] [--no-focus] [--wait-ready] --yes [--json]",
         "",
         "Options:",
         "  --pane <pane-id>              Existing Pane session to add the panel to.",
-        "  --agent <codex|claude|cursor>        Built-in agent command template to launch.",
+        "  --agent <codex|claude|cursor> Built-in agent command template, or with --tool-command the agent it runs.",
         "  --tool-command <command>      Custom terminal command to launch.",
         "  --title <title>               Panel title override.",
         "  --initial-input, --prompt     Initial input to send after the tool starts.",
         "  --initial-input-file <path|-> Read initial input from a file or stdin.",
+        "  --as-file-pointer             Send `Read and follow <prompt file>` instead of the prompt.",
         "  --no-focus                    Create the panel in the background.",
         "  --focus                       Explicitly focus the created panel.",
         "  --source <user|agent>         Mark the mutation source; agent implies background creation.",
@@ -2109,7 +2198,7 @@ export const RUNPANE_CONTRACT = {
         "",
         "Options:",
         "  --panel <panel-id>            Terminal panel id.",
-        "  --strategy <strategy>         Defaults to auto; Codex queues with Tab while working and submits with Enter when ready.",
+        "  --strategy <strategy>         Defaults to auto; Codex queues with Tab while working and submits with Enter when ready. auto retries once if the text is still in the composer.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
       ],
@@ -2475,7 +2564,7 @@ export const RUNPANE_CONTRACT = {
       ],
       "agents send": [
         "Usage:",
-        "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> --yes [--json] [--pane-dir <path>]",
+        "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> [--as-file-pointer] --yes [--json] [--pane-dir <path>]",
         "",
         "Send a follow-up message to an agent and confirm it was submitted.",
         "",
@@ -2483,6 +2572,7 @@ export const RUNPANE_CONTRACT = {
         "  --pane <pane-id>                Pane id; its agent panel is used.",
         "  --panel <panel-id>              Panel id.",
         "  --text <message>                The message to submit.",
+        "  --as-file-pointer               Write the message to a prompt file and send `Read and follow <path>`.",
         "  --yes                           Confirm this change; required in non-interactive shells.",
         "  --json                          Print machine-readable output.",
         "  --pane-dir <path>               Connect to a specific Pane data directory."
@@ -2492,6 +2582,42 @@ export const RUNPANE_CONTRACT = {
         "  runpane sessions <list|create|get|update|set-agent|associate|detach|overview> [options]",
         "",
         "Use a named Session to keep context, activity, and evidence attached to one orchestration thread."
+      ],
+      "report": [
+        "Usage:",
+        "  runpane report --state <ready|blocked|failed|done> [--pr <number>] [--head <sha>] [--summary <text>|--summary-file <path|->] [--question <text>] [--pane <pane-id> --panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Hands back a worker's structured report for its panel: the orchestrator receives it as an",
+        "agent.report watch event and reads it in `agents status` and `sessions overview`.",
+        "Inside a Pane terminal the panel comes from PANE_SESSION_ID and PANE_PANEL_ID.",
+        "",
+        "Options:",
+        "  --state <state>                ready, blocked, failed, or done",
+        "  --pr <number>                  Pull request number",
+        "  --head <sha>                   Head commit, 7-40 hex characters",
+        "  --summary <text>               Summary text; up to 16,000 characters are kept",
+        "  --summary-file <path|->        Read the summary from a file or stdin",
+        "  --question <text>              What you need answered; required with --state blocked",
+        "  --pane <pane-id>               Pane id when not running inside a Pane terminal",
+        "  --panel <panel-id>             Panel id when not running inside a Pane terminal",
+        "  --pane-dir <path>              Connect to a specific Pane data directory",
+        "  --json                         Print machine-readable output",
+        "",
+        "Example:",
+        "  runpane report --state ready --pr 747 --head fc5dce9 --summary-file /tmp/report.md"
+      ],
+      "panels last-message": [
+        "Usage:",
+        "  runpane panels last-message --panel <panel-id> [--limit <count>] [--json] [--pane-dir <path>]",
+        "",
+        "Reads a Claude or Codex agent's last reply from its transcript. It never scrapes the screen:",
+        "without a transcript it reports transcript-unavailable and exits non-zero.",
+        "",
+        "Options:",
+        "  --panel <panel-id>             Agent panel id",
+        "  --limit <count>                Maximum characters to return; defaults to 20000 (the end is kept)",
+        "  --pane-dir <path>              Connect to a specific Pane data directory",
+        "  --json                         Print machine-readable output"
       ]
     },
     "pip": {
@@ -2524,6 +2650,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
         "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "  runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--json]",
+        "  runpane panels last-message --panel <panel-id> [--limit <count>] [--json]",
         "  runpane panes git-status --pane <pane-id> [--json] [--pane-dir <path>]",
         "  runpane panes commit --pane <pane-id> --message <message> --yes [--json] [--pane-dir <path>]",
         "  runpane panes push --pane <pane-id> --yes [--json] [--pane-dir <path>]",
@@ -2537,6 +2664,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane agents start --repo <selector> --name <name> (--agent <codex|claude|cursor>|--tool-command <command>) --prompt <task> [--base-branch <branch>] --yes [--json] [--pane-dir <path>]",
         "  runpane agents status (--pane <pane-id>|--panel <panel-id>) [--limit <count>] [--json] [--pane-dir <path>]",
         "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> --yes [--json] [--pane-dir <path>]",
+        "  runpane report --state <ready|blocked|failed|done> [--pr <number>] [--head <sha>] [--summary-file <path|->] [--question <text>] [--json]",
         "  runpane panes squash-rebase --pane <pane-id> --message <message> --yes [--json] [--pane-dir <path>]",
         "  runpane panes stash --pane <pane-id> --yes [--json] [--pane-dir <path>]",
         "  runpane panes stash-pop --pane <pane-id> --yes [--json] [--pane-dir <path>]",
@@ -2703,6 +2831,8 @@ export const RUNPANE_CONTRACT = {
         "",
         "Lists Pane sessions. Pass --repo to limit results to one saved repository.",
         "",
+        "status is running while any terminal panel is live. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
+        "",
         "Options:",
         "  --repo <selector>",
         "  --pane-dir <path>",
@@ -2749,7 +2879,7 @@ export const RUNPANE_CONTRACT = {
         "  --idle-after <ms>",
         "  --settle <ms>                  Opt-in READY quiet window (--follow only)",
         "  --blocked-settle <ms>          Opt-in BLOCKED window (--follow only)",
-        "  --min-interval <ms>            Opt-in batching; BLOCKED and PR failures bypass (--follow only)",
+        "  --min-interval <ms>            Opt-in batching; BLOCKED, REPORT, and PR failures bypass (--follow only)",
         "  --idle-backoff                 Opt-in IDLE backoff (--follow only)",
         "  --all-managed",
         "  --include-shells",
@@ -2772,6 +2902,7 @@ export const RUNPANE_CONTRACT = {
         "  --json                         Alias for --format json",
         "",
         "Defaults are responsive: no settle, no batching, all kinds, IDLE every --idle-after. BUSY carries no action; drop it with --kinds.",
+        "agent.report (a worker ran `runpane report`) is opt-in: list it in --kinds. REPORT lines skip the --min-interval batch.",
         "Unattended (Pane Chat default): --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
         "User present: the same kinds with --settle 60000 --blocked-settle 15000 --min-interval 120000 and no --idle-backoff",
         "Session orchestrator: runpane watch --session <id|name> --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
@@ -2782,21 +2913,25 @@ export const RUNPANE_CONTRACT = {
       "panes create": [
         "Usage:",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [options]",
+        "  python -m runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--base-branch <branch>] [options]",
         "  runpane panes create --from-json <path|-> [--yes] [--json]",
         "",
         "Creates user-visible Panes (Pane sessions) for feature/PR work in a saved repository and opens a terminal-backed tool tab. Pane creates and owns the worktree/branch for each new Pane.",
+        "",
+        "A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
         "",
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
         "  --name <name>                  Pane/session name",
         "  --worktree-name <name>         Worktree name; defaults to --name",
         "  --base-branch <branch>         Base branch for the worktree",
-        "  --agent <codex|claude|cursor>         Built-in terminal template",
+        "  --agent <codex|claude|cursor>  Built-in terminal template; with --tool-command, the agent it runs",
         "  --tool-command <command>       Custom terminal command",
         "  --title <title>                Terminal tab title",
         "  --initial-input <text>         Text sent after the command is ready",
         "  --prompt <text>                Alias for --initial-input",
         "  --initial-input-file <path|->  Read initial input from a file or stdin",
+        "  --as-file-pointer              Send `Read and follow <prompt file>` instead of the prompt",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
         "  --wait-ready                   Wait for terminal readiness before returning",
@@ -2816,10 +2951,13 @@ export const RUNPANE_CONTRACT = {
       "panes adopt": [
         "Usage:",
         "  runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [options]",
+        "  runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [options]",
         "",
         "Adopts an existing externally managed git worktree without creating, syncing, or deleting it.",
         "",
-        "Options: --resume <id> stages the agent resume command; --launch runs it immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews."
+        "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
+        "",
+        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
       ],
       "panes archive": [
         "Usage:",
@@ -2905,6 +3043,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
         "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "  runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--json]",
+        "  runpane panels last-message --panel <panel-id> [--limit <count>] [--json]",
         "",
         "Run \"runpane help panels create\" or another command-specific topic for options."
       ],
@@ -2913,6 +3052,8 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels list --pane <pane-id> [--json]",
         "",
         "Lists tool panels in a Pane session.",
+        "",
+        "agentDetection says how Pane knows agentType: declared, command, process, or screen. launchCommand is the command the panel was launched with.",
         "",
         "Options:",
         "  --pane <pane-id>",
@@ -2997,14 +3138,21 @@ export const RUNPANE_CONTRACT = {
       ],
       "panels submit": [
         "Usage:",
-        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
+        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] --yes [--json]",
         "",
         "Sends text to a terminal panel and normalizes the final terminal Enter to CR. Use this for ordinary prompt answers and shell commands.",
+        "",
+        "For a Claude or Codex panel with no composer on screen, nothing is sent: the result is ok: false with blocked.kind composer-unknown.",
+        "",
+        "Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and the submit key goes as its own write once the paste has settled, even while the agent is working.",
+        "",
+        "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
         "",
         "Options:",
         "  --panel <panel-id>             Terminal panel id",
         "  --text <text>                  Text to submit before Enter",
         "  --input-file <path|->          Read text from a file or stdin before Enter",
+        "  --as-file-pointer              Write the text to a prompt file and submit `Read and follow <path>`",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output",
         "  --yes                          Skip confirmation for this mutating command"
@@ -3029,15 +3177,16 @@ export const RUNPANE_CONTRACT = {
         "",
         "Usage:",
         "  python -m runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--title <title>] [--initial-input <text>] [--no-focus] [--wait-ready] --yes [--json]",
-        "  python -m runpane panels create --pane <pane-id> --tool-command <command> [--title <title>] [--no-focus] --yes [--json]",
+        "  python -m runpane panels create --pane <pane-id> --tool-command <command> [--agent <codex|claude|cursor>] [--title <title>] [--no-focus] [--wait-ready] --yes [--json]",
         "",
         "Options:",
         "  --pane <pane-id>              Existing Pane session to add the panel to.",
-        "  --agent <codex|claude|cursor>        Built-in agent command template to launch.",
+        "  --agent <codex|claude|cursor> Built-in agent command template, or with --tool-command the agent it runs.",
         "  --tool-command <command>      Custom terminal command to launch.",
         "  --title <title>               Panel title override.",
         "  --initial-input, --prompt     Initial input to send after the tool starts.",
         "  --initial-input-file <path|-> Read initial input from a file or stdin.",
+        "  --as-file-pointer             Send `Read and follow <prompt file>` instead of the prompt.",
         "  --no-focus                    Create the panel in the background.",
         "  --focus                       Explicitly focus the created panel.",
         "  --source <user|agent>         Mark the mutation source; agent implies background creation.",
@@ -3054,7 +3203,7 @@ export const RUNPANE_CONTRACT = {
         "",
         "Options:",
         "  --panel <panel-id>            Terminal panel id.",
-        "  --strategy <strategy>         Defaults to auto; Codex queues with Tab while working and submits with Enter when ready.",
+        "  --strategy <strategy>         Defaults to auto; Codex queues with Tab while working and submits with Enter when ready. auto retries once if the text is still in the composer.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
       ],
@@ -3397,7 +3546,7 @@ export const RUNPANE_CONTRACT = {
       ],
       "agents send": [
         "Usage:",
-        "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> --yes [--json] [--pane-dir <path>]",
+        "  runpane agents send (--pane <pane-id>|--panel <panel-id>) --text <message> [--as-file-pointer] --yes [--json] [--pane-dir <path>]",
         "",
         "`runpane agents send` ships in the npm package and the Pane app, not in the Python package.",
         "Run it with Node instead: npx --yes runpane@latest agents send"
@@ -3407,6 +3556,42 @@ export const RUNPANE_CONTRACT = {
         "  runpane sessions <list|create|get|update|set-agent|associate|detach|overview> [options]",
         "",
         "Use a named Session to keep context, activity, and evidence attached to one orchestration thread."
+      ],
+      "report": [
+        "Usage:",
+        "  runpane report --state <ready|blocked|failed|done> [--pr <number>] [--head <sha>] [--summary <text>|--summary-file <path|->] [--question <text>] [--pane <pane-id> --panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Hands back a worker's structured report for its panel: the orchestrator receives it as an",
+        "agent.report watch event and reads it in `agents status` and `sessions overview`.",
+        "Inside a Pane terminal the panel comes from PANE_SESSION_ID and PANE_PANEL_ID.",
+        "",
+        "Options:",
+        "  --state <state>                ready, blocked, failed, or done",
+        "  --pr <number>                  Pull request number",
+        "  --head <sha>                   Head commit, 7-40 hex characters",
+        "  --summary <text>               Summary text; up to 16,000 characters are kept",
+        "  --summary-file <path|->        Read the summary from a file or stdin",
+        "  --question <text>              What you need answered; required with --state blocked",
+        "  --pane <pane-id>               Pane id when not running inside a Pane terminal",
+        "  --panel <panel-id>             Panel id when not running inside a Pane terminal",
+        "  --pane-dir <path>              Connect to a specific Pane data directory",
+        "  --json                         Print machine-readable output",
+        "",
+        "Example:",
+        "  runpane report --state ready --pr 747 --head fc5dce9 --summary-file /tmp/report.md"
+      ],
+      "panels last-message": [
+        "Usage:",
+        "  runpane panels last-message --panel <panel-id> [--limit <count>] [--json] [--pane-dir <path>]",
+        "",
+        "Reads a Claude or Codex agent's last reply from its transcript. It never scrapes the screen:",
+        "without a transcript it reports transcript-unavailable and exits non-zero.",
+        "",
+        "Options:",
+        "  --panel <panel-id>             Agent panel id",
+        "  --limit <count>                Maximum characters to return; defaults to 20000 (the end is kept)",
+        "  --pane-dir <path>              Connect to a specific Pane data directory",
+        "  --json                         Print machine-readable output"
       ]
     }
   },
@@ -3503,6 +3688,8 @@ export const RUNPANE_CONTRACT = {
       "runpane agents start --repo active --name fix-login --agent claude --prompt \"Fix the login redirect\" --yes --json",
       "runpane agents status --pane <pane-id> --json",
       "runpane agents send --pane <pane-id> --text \"Also add a test\" --yes --json",
+      "runpane report --state ready --pr 747 --head fc5dce9 --summary-file /tmp/report.md --json",
+      "runpane panels last-message --panel <panel-id> --json",
       "runpane docs search --query \"archive a pane\" --json",
       "runpane links create --pane <pane-id> --json",
       "runpane panes git-status --pane <pane-id> --json",
@@ -3527,7 +3714,7 @@ export const RUNPANE_CONTRACT = {
       "`runpane panes list` lists Pane sessions, optionally scoped to one saved repository.",
       "`runpane panes cost` reports estimated token costs per Pane for the last 30 days, including per-model breakdowns and cache efficiency; unscoped output includes an Unattributed bucket that reconciles against workspace totals.",
       "`runpane panes create` connects to the running local Pane daemon, resolves the requested saved base repository, creates user-visible Pane sessions backed by Pane-managed worktrees/branches, opens terminal-backed tool tabs, and optionally sends initial input to the started tool. Built-in agent panes and `--source agent` default to background/no-focus unless `--focus` is passed. New Panes are pinned into the UI's favorite/pin set by default; pass `--no-pinned` to opt out. Panes created interactively in the Pane UI are unaffected. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.",
-      "For `panes create --wait-ready`, `initialInput.verifiedSubmitted: true` is reported only after argument attachment or composer-clear plus activity evidence. Routing input does not by itself verify submission.",
+      "For `panes create --wait-ready`, `initialInput.delivery` says where the prompt went: `taken` or `queued` (from the agent's transcript, its screen, or `argv` for a launch-argument prompt), `in-composer`, or `unknown`. `initialInput.verifiedSubmitted` is true exactly when it is `taken` or `queued`. Routing input does not by itself verify submission.",
       "`runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. Add `--dry-run` to inspect the same evidence without archiving. Successful archives wait for worktree removal and report `worktreeCleanup`.",
       "`runpane panes rename` trims and updates a Pane's display name without changing its worktree, branch, panels, or focus, and returns the updated pane summary.",
       "`runpane panes focus` raises the Pane window and selects a Pane (and optionally one of its panels) exactly like clicking it in the UI. Because it steals the user's window focus, run it only on an explicit user request to open, focus, show, or switch to a Pane; never focus a Pane proactively, the same doctrine that keeps `panes create` background/no-focus for `--source agent`.",
@@ -3547,6 +3734,8 @@ export const RUNPANE_CONTRACT = {
       "`sessions detach` detach a Pane from a named Session.",
       "`sessions overview` read a live status, activity, git, and pull request overview for a named Session.",
       "`runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task in a repository, check on it, and send it a follow-up.",
+      "`runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (`panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`.",
+      "`runpane panels last-message --panel <panel-id>` reads a Claude or Codex agent's last reply from its transcript (up to `--limit` characters, default 20,000, keeping the end and reporting `truncated`). It never scrapes the screen: without a transcript it prints `{ ok: false, reason: \"transcript-unavailable\" }` and exits 1.",
       "Commands with a contract `daemonAction` (the `panes` git, script, restore, and move commands, `folders list|create`, and `links open`) call the same Pane daemon channel as the matching button in the app and print `{ ok, data, error }`. Destructive ones add a pane:// `link` to review the Pane.",
       "`runpane links create` builds `pane://open?...` links; opening one in Pane selects what it names and never changes Pane state.",
       "`runpane docs search|read` search and read Pane docs, help, and installed Pane Chat skills offline. They ship in the npm package and the Pane app only."
@@ -4148,6 +4337,103 @@ export const RUNPANE_CONTRACT = {
         "--json",
         "--pane-dir",
         "/tmp/pane"
+      ],
+      [
+        "panels",
+        "create",
+        "--pane",
+        "pane-1",
+        "--agent",
+        "codex",
+        "--tool-command",
+        "wrapper codex-run",
+        "--wait-ready",
+        "--yes",
+        "--json"
+      ],
+      [
+        "panes",
+        "create",
+        "--repo",
+        "active",
+        "--name",
+        "farm",
+        "--tool-command",
+        "agent-farm run free-range",
+        "--agent",
+        "claude",
+        "--prompt",
+        "Plan",
+        "--yes",
+        "--json"
+      ],
+      [
+        "panels",
+        "submit",
+        "--panel",
+        "panel-1",
+        "--input-file",
+        "brief.md",
+        "--as-file-pointer",
+        "--yes",
+        "--json"
+      ],
+      [
+        "panes",
+        "create",
+        "--repo",
+        "active",
+        "--name",
+        "long",
+        "--agent",
+        "claude",
+        "--initial-input-file",
+        "brief.md",
+        "--as-file-pointer",
+        "--dry-run",
+        "--yes",
+        "--json"
+      ],
+      [
+        "report",
+        "--state",
+        "ready",
+        "--pr",
+        "747",
+        "--head",
+        "FC5DCE9",
+        "--summary",
+        "Done: tests pass",
+        "--json"
+      ],
+      [
+        "report",
+        "--state",
+        "blocked",
+        "--question",
+        "Which API version?",
+        "--pane",
+        "session-1",
+        "--panel",
+        "panel-1",
+        "--summary-file",
+        "-"
+      ],
+      [
+        "report",
+        "--state=done",
+        "--summary-file=/tmp/report.md",
+        "--pane-dir",
+        "/tmp/pane"
+      ],
+      [
+        "panels",
+        "last-message",
+        "--panel",
+        "panel-1",
+        "--limit",
+        "5000",
+        "--json"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -4845,6 +5131,9 @@ export const RUNPANE_CONTRACT = {
                       },
                       "initialInput": {
                         "type": "string"
+                      },
+                      "initialInputAsFilePointer": {
+                        "type": "boolean"
                       }
                     },
                     "additionalProperties": false
@@ -4858,11 +5147,21 @@ export const RUNPANE_CONTRACT = {
                       "command": {
                         "type": "string"
                       },
+                      "agentType": {
+                        "enum": [
+                          "codex",
+                          "claude",
+                          "cursor"
+                        ]
+                      },
                       "title": {
                         "type": "string"
                       },
                       "initialInput": {
                         "type": "string"
+                      },
+                      "initialInputAsFilePointer": {
+                        "type": "boolean"
                       }
                     },
                     "additionalProperties": false
@@ -5125,6 +5424,9 @@ export const RUNPANE_CONTRACT = {
                       "verifiedSubmitted": {
                         "type": "boolean"
                       },
+                      "delivery": {
+                        "$ref": "#/jsonSchemas/panelSubmitResult/properties/delivery"
+                      },
                       "staged": {
                         "type": "boolean"
                       },
@@ -5203,6 +5505,12 @@ export const RUNPANE_CONTRACT = {
                       }
                     },
                     "additionalProperties": false
+                  },
+                  "promptFile": {
+                    "type": "string"
+                  },
+                  "warnings": {
+                    "$ref": "#/jsonSchemas/panelSubmitResult/properties/warnings"
                   }
                 },
                 "additionalProperties": false
@@ -5327,6 +5635,14 @@ export const RUNPANE_CONTRACT = {
                 "enum": [
                   "active",
                   "idle"
+                ]
+              },
+              "agentState": {
+                "enum": [
+                  "ready",
+                  "working",
+                  "blocked",
+                  "none"
                 ]
               },
               "ownership": {
@@ -5695,6 +6011,7 @@ export const RUNPANE_CONTRACT = {
             "pane.created",
             "pane.gone",
             "panel.exited",
+            "agent.report",
             "pane.associated",
             "pane.detached",
             "pr.conflicted",
@@ -5826,6 +6143,50 @@ export const RUNPANE_CONTRACT = {
             "type": "string"
           },
           "description": "Up to five failing check names of a failed pr.checks entry."
+        },
+        "report": {
+          "$ref": "#/jsonSchemas/agentReport",
+          "description": "Report of an agent.report entry; its summary is cut to 2,000 characters (the panel keeps up to 16,000)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentReport": {
+      "type": "object",
+      "description": "The latest runpane report from an agent panel.",
+      "required": [
+        "state",
+        "reportedAt"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "ready",
+            "blocked",
+            "failed",
+            "done"
+          ]
+        },
+        "pr": {
+          "type": "number"
+        },
+        "head": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "summaryTruncated": {
+          "const": true
+        },
+        "summaryPath": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "reportedAt": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -6490,6 +6851,17 @@ export const RUNPANE_CONTRACT = {
               "agentType": {
                 "type": "string"
               },
+              "agentDetection": {
+                "enum": [
+                  "declared",
+                  "command",
+                  "process",
+                  "screen"
+                ]
+              },
+              "launchCommand": {
+                "type": "string"
+              },
               "isCliPanel": {
                 "type": "boolean"
               },
@@ -6501,6 +6873,9 @@ export const RUNPANE_CONTRACT = {
               },
               "lastActiveAt": {
                 "type": "string"
+              },
+              "report": {
+                "$ref": "#/jsonSchemas/agentReport"
               }
             },
             "additionalProperties": false
@@ -6844,6 +7219,9 @@ export const RUNPANE_CONTRACT = {
             },
             "hasUndeliveredText": {
               "type": "boolean"
+            },
+            "ghostText": {
+              "type": "string"
             }
           },
           "additionalProperties": false
@@ -6869,6 +7247,9 @@ export const RUNPANE_CONTRACT = {
         },
         "input": {
           "type": "string"
+        },
+        "asFilePointer": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -6916,11 +7297,63 @@ export const RUNPANE_CONTRACT = {
         "verifiedSubmitted": {
           "type": "boolean"
         },
+        "delivery": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "taken",
+                "queued",
+                "in-composer",
+                "unknown"
+              ]
+            },
+            "evidence": {
+              "enum": [
+                "transcript",
+                "screen",
+                "argv"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
         "sentAt": {
           "type": "string"
         },
         "blocked": {
           "$ref": "#/jsonSchemas/panelSubmitComposerResult/properties/blocked"
+        },
+        "promptFile": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "leading-bang-runs-shell",
+                  "leading-hash-memory",
+                  "leading-slash-command",
+                  "leading-at-mention"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
         },
         "nextCommand": {
           "type": "string"
@@ -7063,6 +7496,81 @@ export const RUNPANE_CONTRACT = {
         }
       },
       "additionalProperties": false
+    },
+    "panelLastMessageResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "panelId",
+            "paneId",
+            "agentType",
+            "text",
+            "length",
+            "limit",
+            "truncated"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "panelId": {
+              "type": "string"
+            },
+            "paneId": {
+              "type": "string"
+            },
+            "agentType": {
+              "enum": [
+                "claude",
+                "codex"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "length": {
+              "type": "number"
+            },
+            "limit": {
+              "type": "number"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "panelId",
+            "paneId",
+            "reason",
+            "message"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "panelId": {
+              "type": "string"
+            },
+            "paneId": {
+              "type": "string"
+            },
+            "reason": {
+              "const": "transcript-unavailable"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "agentDoctorResult": {
       "type": "object",
@@ -7328,6 +7836,12 @@ export const RUNPANE_CONTRACT = {
           },
           "additionalProperties": false
         },
+        "promptFile": {
+          "type": "string"
+        },
+        "warnings": {
+          "$ref": "#/jsonSchemas/panelSubmitResult/properties/warnings"
+        },
         "nextCommand": {
           "type": "string"
         }
@@ -7398,6 +7912,9 @@ export const RUNPANE_CONTRACT = {
         "verifiedSubmitted": {
           "type": "boolean"
         },
+        "delivery": {
+          "$ref": "#/jsonSchemas/panelSubmitResult/properties/delivery"
+        },
         "sentAt": {
           "type": "string"
         },
@@ -7413,6 +7930,7 @@ export const RUNPANE_CONTRACT = {
                 "codex-update",
                 "agent-prompt",
                 "submission_unverified",
+                "composer-unknown",
                 "unknown"
               ]
             },
@@ -7743,6 +8261,9 @@ export const RUNPANE_CONTRACT = {
         },
         "link": {
           "type": "string"
+        },
+        "report": {
+          "$ref": "#/jsonSchemas/agentReport"
         }
       },
       "additionalProperties": false
@@ -7768,8 +8289,17 @@ export const RUNPANE_CONTRACT = {
         "delivered": {
           "type": "boolean"
         },
+        "delivery": {
+          "$ref": "#/jsonSchemas/panelSubmitResult/properties/delivery"
+        },
         "blocked": {
           "type": "string"
+        },
+        "promptFile": {
+          "type": "string"
+        },
+        "warnings": {
+          "$ref": "#/jsonSchemas/panelSubmitResult/properties/warnings"
         },
         "next": {
           "type": "string"
@@ -7796,6 +8326,40 @@ export const RUNPANE_CONTRACT = {
           "type": "string"
         },
         "candidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "reportResult": {
+      "type": "object",
+      "required": [
+        "ok",
+        "paneId",
+        "panelId",
+        "report",
+        "sessionIds"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "generation": {
+          "type": "number"
+        },
+        "paneId": {
+          "type": "string"
+        },
+        "panelId": {
+          "type": "string"
+        },
+        "report": {
+          "$ref": "#/jsonSchemas/agentReport"
+        },
+        "sessionIds": {
           "type": "array",
           "items": {
             "type": "string"
@@ -8511,7 +9075,8 @@ export const RUNPANE_CONTRACT = {
           "paneListResult"
         ],
         "notes": [
-          "Without --repo, this lists sessions across saved Pane repositories."
+          "Without --repo, this lists sessions across saved Pane repositories.",
+          "`status` is `running` while any terminal panel is live, otherwise the stored lifecycle value. `agentState` is the most urgent state of the live agent panels: `blocked`, `working`, `ready`, or `none`. `agentStatus` (`active`/`idle`) is kept for older clients."
         ]
       },
       "panes cost": {
@@ -8593,7 +9158,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--agent",
             "value": "<codex|claude|cursor>",
             "required": false,
-            "description": "Built-in agent terminal template to open."
+            "description": "Built-in agent terminal template to open. With --tool-command, the agent that command runs."
           },
           {
             "name": "--tool-command",
@@ -8612,6 +9177,11 @@ export const RUNPANE_CONTRACT = {
             "value": "<path|->",
             "required": false,
             "description": "Read initial input from a file or stdin."
+          },
+          {
+            "name": "--as-file-pointer",
+            "required": false,
+            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
           },
           {
             "name": "--from-json",
@@ -8692,7 +9262,8 @@ export const RUNPANE_CONTRACT = {
         "examples": [
           "runpane panes create --repo active --name issue-257 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json",
           "runpane panes create --from-json panes.json --yes --json",
-          "runpane panes create --repo active --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json"
+          "runpane panes create --repo active --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json",
+          "runpane panes create --repo active --name issue-123 --agent claude --initial-input-file brief.md --as-file-pointer --source agent --no-focus --wait-ready --yes --json"
         ],
         "jsonSchemas": [
           "paneCreateRequest",
@@ -8705,8 +9276,10 @@ export const RUNPANE_CONTRACT = {
           "Use `panels create` instead when a reviewer/helper should share an existing Pane's worktree.",
           "Agent-created Panes should pass `--source agent --no-focus --wait-ready --yes --json` unless the user explicitly wants focus moved. `panes create` pins the new Pane by default, so a follow-up `panes pin` call is unnecessary; pass `--no-pinned` for throwaway shells or bulk imports. `--pinned` is still accepted and is now a no-op. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.",
           "The built-in agent templates come from the runpane contract; custom terminal commands can pass agent-specific flags when requested by the user.",
-          "Use --initial-input-file for multi-line prompts or shell-sensitive initial input.",
-          "With --wait-ready, verifiedSubmitted is earned from delivery evidence; routing initial input alone does not imply verified submission.",
+          "Use --initial-input-file for multi-line prompts or shell-sensitive initial input. A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
+          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts.",
+          "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
+          "With --wait-ready, `initialInput.delivery` reports `taken`, `queued`, `in-composer` or `unknown` with its evidence (`transcript`, `screen`, or `argv` for a prompt passed at launch); verifiedSubmitted is true for `taken` or `queued`. Routing initial input alone does not imply verified submission.",
           "If initialInput.blocked.kind is submission_unverified, do not submit again automatically. Inspect initialInput.staged and attempts, then run nextCommand to resolve the ambiguous composer state.",
           "When the JSON result includes nextCommand, run it to validate that the terminal produced output before reporting success.",
           "Multi-pane requests are created sequentially today. The --concurrency flag is accepted for compatibility, but agents should not rely on parallel creation.",
@@ -8714,7 +9287,8 @@ export const RUNPANE_CONTRACT = {
           "For Windows PowerShell command chaining, use a custom terminal command like `powershell -NoProfile -Command \"cmd1; if ($LASTEXITCODE) { exit $LASTEXITCODE }; cmd2\"`.",
           "From WSL with Windows Pane, invoke through PowerShell and select the saved WSL repo by name or id, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane panes create --repo \"WSL Pane\" --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json'`.",
           "Use --wait-ready when an agent needs to verify that an agent terminal started instead of only creating a pane.",
-          "If readiness returns blocked, inspect blocked.suggestedCommand rather than guessing which prompt to answer."
+          "If readiness returns blocked, inspect blocked.suggestedCommand rather than guessing which prompt to answer.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
         ]
       },
       "panes adopt": {
@@ -8745,8 +9319,14 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--agent",
             "value": "<codex|claude|cursor>",
-            "required": true,
-            "description": "Agent whose terminal to create."
+            "required": false,
+            "description": "Agent whose terminal to create; with --tool-command, the agent that command runs."
+          },
+          {
+            "name": "--tool-command",
+            "value": "<command>",
+            "required": false,
+            "description": "Custom command to stage or launch instead of a built-in agent, such as a wrapper that runs one."
           },
           {
             "name": "--resume",
@@ -8798,14 +9378,19 @@ export const RUNPANE_CONTRACT = {
           }
         ],
         "examples": [
-          "runpane panes adopt --repo active --path /path/to/worktree --name imported --agent codex --resume <id> --yes --json"
+          "runpane panes adopt --repo active --path /path/to/worktree --name imported --agent codex --resume <id> --yes --json",
+          "runpane panes adopt --repo active --path /path/to/worktree --name imported --tool-command \"agent-farm run free-range\" --agent claude --launch --yes --json"
         ],
         "jsonSchemas": [
           "paneCreateResult"
         ],
         "notes": [
           "The resume command is staged without Enter unless --launch is passed.",
-          "Pane never removes an externally owned worktree."
+          "Pane never removes an externally owned worktree.",
+          "One of --agent or --tool-command is required.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen.",
+          "--resume needs a built-in agent command; a wrapper command resumes its own way.",
+          "The adopted Pane reports `status: running` in `panes list` while its terminal is live."
         ]
       },
       "panes archive": {
@@ -9111,7 +9696,8 @@ export const RUNPANE_CONTRACT = {
           "panelListResult"
         ],
         "notes": [
-          "The ids returned here are stable inputs for `panels output` and `panels input`."
+          "The ids returned here are stable inputs for `panels output` and `panels input`.",
+          "`agentType` is the agent Pane treats the panel as; `agentDetection` says how it knows (`declared`, `command`, `process`, or `screen`), and `launchCommand` is the command the panel was launched with."
         ]
       },
       "panels output": {
@@ -9307,14 +9893,14 @@ export const RUNPANE_CONTRACT = {
         ],
         "notes": [
           "Use this before `panels output` when an agent only needs the latest visible/current state.",
-          "The composer object reports whether a Claude or Codex composer is present and whether it holds undelivered text. Claude's dim placeholder suggestion does not count as undelivered text.",
+          "The composer object reports whether a Claude or Codex composer is present and whether it holds undelivered text. Placeholder and suggestion text (drawn dim or grey, such as Claude's suggested next prompt) does not count as undelivered text; `composer.ghostText` carries it, and text output marks its line with `⟨suggestion⟩`.",
           "If hasMore is true and context is missing, rerun with a larger --limit or use `panels output`."
         ]
       },
       "panels submit": {
         "name": "panels submit",
         "summary": "Send and submit text to a terminal panel, including idle agent composers.",
-        "details": "Use this for ordinary interactive submissions. For Claude, Pane waits for the composer to appear and show the staged text, then sends Enter on its own and verifies that the composer cleared; Claude keeps an Enter that arrives together with the text as a newline. For an idle Codex composer, Pane stages the text, waits for Codex paste handling, sends the Codex submit sequence, and verifies that the turn started when visible evidence is available. Other terminals receive a normalized CR Enter. Exact byte workflows remain on `panels input`.",
+        "details": "Use this for ordinary interactive submissions. For Claude, Pane waits for the composer to appear and show the staged text, then sends Enter on its own and verifies that the composer cleared; Claude keeps an Enter that arrives together with the text as a newline. For a Codex composer, Pane stages the text, waits for paste handling, then queues with Tab while working or submits with Enter when ready, and verifies delivery when visible evidence is available. Wrapper-launched agents are handled the same way once Pane knows the agent (declared, from the foreground process, or from the screen). A Claude or Codex panel with no composer on screen gets nothing: the result is `ok: false` with `blocked.kind: composer-unknown`. Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and the submit key goes as its own write once the paste has settled, even while the agent is working. Other terminals receive a normalized CR Enter. Exact byte workflows remain on `panels input`.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -9337,6 +9923,11 @@ export const RUNPANE_CONTRACT = {
             "description": "Read text from a file or stdin before Enter."
           },
           {
+            "name": "--as-file-pointer",
+            "required": false,
+            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+          },
+          {
             "name": "--yes",
             "required": false,
             "description": "Skip confirmation for this mutating command."
@@ -9355,16 +9946,20 @@ export const RUNPANE_CONTRACT = {
         ],
         "examples": [
           "runpane panels submit --panel <panel-id> --text \"2\" --yes --json",
-          "printf \"echo hello\" | runpane panels submit --panel <panel-id> --input-file - --yes --json"
+          "printf \"echo hello\" | runpane panels submit --panel <panel-id> --input-file - --yes --json",
+          "runpane panels submit --panel <panel-id> --input-file brief.md --as-file-pointer --yes --json"
         ],
         "jsonSchemas": [
           "panelSubmitRequest",
           "panelSubmitResult"
         ],
         "notes": [
-          "The response includes sequenceName, verifiedSubmitted, and nextCommand. If ok is false, inspect blocked and do not assume the turn started.",
-          "Do not follow `panels submit` with `panels submit-composer`; Claude and idle Codex composer submission is handled atomically.",
-          "Use `panels input` for Ctrl-C, escape sequences, or any workflow requiring exact bytes."
+          "The response includes sequenceName, verifiedSubmitted, delivery and nextCommand. For Claude and Codex, `delivery.state` is `taken` (the agent started a turn with the text), `queued` (it holds the text until its current turn ends), `in-composer` (the text is still in the composer) or `unknown`, and `delivery.evidence` is `transcript` (the agent's own transcript) or `screen`. verifiedSubmitted is true for `taken` or `queued`; never resend those. If ok is false, inspect blocked and do not assume the turn started.",
+          "Do not follow `panels submit` with `panels submit-composer`; Claude and Codex composer submission is handled atomically.",
+          "Use `panels input` for Ctrl-C, escape sequences, or any workflow requiring exact bytes.",
+          "On `blocked.kind: composer-unknown`, nothing was typed. Check `panels screen`; if the agent is at a prompt Pane does not recognise, use `panels input`.",
+          "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
+          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts."
         ]
       },
       "panels wait": {
@@ -9428,6 +10023,48 @@ export const RUNPANE_CONTRACT = {
           "The default timeout and screen are intentionally small for agent context safety."
         ]
       },
+      "panels last-message": {
+        "name": "panels last-message",
+        "summary": "Read an agent's last reply from its transcript, without scraping the screen.",
+        "details": "Use this when a worker is READY and you need what it said, such as its PR number or result. It reads the Claude or Codex transcript Pane found for the panel and never falls back to the screen.",
+        "requiresPaneDaemon": true,
+        "mutates": false,
+        "arguments": [
+          {
+            "name": "--panel",
+            "value": "<panel-id>",
+            "required": true,
+            "description": "Agent panel id."
+          },
+          {
+            "name": "--limit",
+            "value": "<count>",
+            "required": false,
+            "description": "Maximum characters to return; defaults to 20000. The end of the reply is kept."
+          },
+          {
+            "name": "--json",
+            "required": false,
+            "description": "Print machine-readable output."
+          },
+          {
+            "name": "--pane-dir",
+            "value": "<path>",
+            "required": false,
+            "description": "Connect to a specific Pane data directory."
+          }
+        ],
+        "examples": [
+          "runpane panels last-message --panel <panel-id> --json"
+        ],
+        "jsonSchemas": [
+          "panelLastMessageResult"
+        ],
+        "notes": [
+          "Without a transcript (a shell panel, another agent, or no reply yet) the result is `{ ok: false, reason: \"transcript-unavailable\" }` and the command exits 1. Use `panels screen` then.",
+          "A worker that ran `runpane report` already handed back its state, PR, head, and summary; read those with `agents status` before reading the whole reply."
+        ]
+      },
       "panels create": {
         "name": "panels create",
         "summary": "Create a reviewer/helper terminal tab inside an existing Pane.",
@@ -9445,7 +10082,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--agent",
             "value": "<codex|claude|cursor>",
             "required": false,
-            "description": "Built-in agent command template to launch."
+            "description": "Built-in agent command template to launch. With --tool-command, the agent that command runs."
           },
           {
             "name": "--tool-command",
@@ -9470,6 +10107,11 @@ export const RUNPANE_CONTRACT = {
             "value": "<path|->",
             "required": false,
             "description": "Read initial input from a file or stdin."
+          },
+          {
+            "name": "--as-file-pointer",
+            "required": false,
+            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
           },
           {
             "name": "--source",
@@ -9517,7 +10159,8 @@ export const RUNPANE_CONTRACT = {
         ],
         "examples": [
           "runpane panels create --pane <pane-id> --agent <agent> --source agent --no-focus --wait-ready --yes --json",
-          "runpane panels create --pane <pane-id> --tool-command <command> --title <title> --source agent --no-focus --wait-ready --yes --json"
+          "runpane panels create --pane <pane-id> --tool-command <command> --title <title> --source agent --no-focus --wait-ready --yes --json",
+          "runpane panels create --pane <pane-id> --tool-command \"agent-farm run free-range\" --agent claude --source agent --no-focus --wait-ready --yes --json"
         ],
         "jsonSchemas": [
           "panelCreateRequest",
@@ -9527,7 +10170,8 @@ export const RUNPANE_CONTRACT = {
           "Use this for same-pane reviewer loops after PR creation/testing.",
           "Panels share the existing Pane's worktree and branch.",
           "`panels create` is for visible helper/reviewer tabs, not the agent's default private delegation mechanism.",
-          "For agent-created panels, prefer --source agent or --no-focus to avoid stealing focus from the user or implementation tab."
+          "For agent-created panels, prefer --source agent or --no-focus to avoid stealing focus from the user or implementation tab.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
         ]
       },
       "panels submit-composer": {
@@ -9577,7 +10221,8 @@ export const RUNPANE_CONTRACT = {
         "notes": [
           "Use `panels input` or `panels submit` to write prompt text first; this command only submits the current composer.",
           "Use --strategy auto for agent workflows; explicit strategies are diagnostic escape hatches.",
-          "The JSON result includes sequenceName and verifiedSubmitted. If ok is false, follow blocked.suggestedCommand instead of assuming submission happened."
+          "The JSON result includes sequenceName, verifiedSubmitted and, for Claude and Codex, delivery (`taken`, `queued`, `in-composer` or `unknown`, with `transcript` or `screen` evidence). If ok is false, follow blocked.suggestedCommand instead of assuming submission happened.",
+          "With `--strategy auto`, if the staged text is still visible in the composer after the first attempt, Pane retries once and checks again: Tab for working Codex, Enter otherwise. It never retries an empty composer."
         ]
       },
       "workspace state": {
@@ -9676,7 +10321,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--min-interval",
             "value": "<milliseconds>",
             "required": false,
-            "description": "Opt-in (follow only): hold READY, IDLE, NEW, GONE, EXIT, and UNKNOWN lines and flush them together at most once per interval; BLOCKED, pr.conflicted, and failed pr.checks bypass it and carry the held lines with them. Default 0. The unattended orchestrator value is 600000, the user-present value 120000."
+            "description": "Opt-in (follow only): hold READY, IDLE, NEW, GONE, EXIT, and UNKNOWN lines and flush them together at most once per interval; BLOCKED, REPORT, pr.conflicted, and failed pr.checks bypass it and carry the held lines with them. Default 0. The unattended orchestrator value is 600000, the user-present value 120000."
           },
           {
             "name": "--idle-backoff",
@@ -9687,7 +10332,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--kinds",
             "required": false,
             "value": "<kind,...>",
-            "description": "Limit event kinds: agent.ready, agent.busy, agent.blocked, agent.unknown, agent.idle, pane.created, pane.gone, panel.exited, pane.associated, pane.detached, pr.conflicted, pr.checks, pr.merged. Default all, except that pane.associated, pane.detached, and the pr.* kinds arrive only when listed here or implied by --session. Drop agent.busy for any consumer that acts on lines; BUSY carries no action."
+            "description": "Limit event kinds: agent.ready, agent.busy, agent.blocked, agent.unknown, agent.idle, pane.created, pane.gone, panel.exited, agent.report, pane.associated, pane.detached, pr.conflicted, pr.checks, pr.merged. agent.report arrives only when listed explicitly. Default all, except that pane.associated, pane.detached, and the pr.* kinds arrive only when listed here or implied by --session. Drop agent.busy for any consumer that acts on lines; BUSY carries no action."
           },
           {
             "name": "--pane",
@@ -9814,7 +10459,8 @@ export const RUNPANE_CONTRACT = {
           "Under --session, pane.associated (JOINED <pane-name> pane <pane-id> session <session-id>) and pane.detached (LEFT ...) report membership changes; list them in --kinds next to the agent kinds. Other consumers receive them only when --kinds lists them, so older clients never see an unknown kind.",
           "PR events (decision D7): about every 3 minutes (jittered) the daemon visits each Pane associated with a live Session (none: no gh at all), finds its PR by branch when no open PR is known yet (gh pr list --head, so unwatched workers' new and reopened PRs are found), runs gh pr view on an open PR, and appends pr.conflicted (PR <pane-name> pane <pane-id> #<number> CONFLICTED: the PR now conflicts with its base), pr.checks (... CHECKS PASSED, or CHECKS FAILED <up to five names>: every check on the head commit finished), and pr.merged (... MERGED). Entries carry pr: {number, url, headOid}, plus checks and failingChecks for pr.checks. They fire on transitions only: the first poll of a PR after the daemon starts only records its state, so re-check conflicts after a restart with gh pr view. pr.conflicted and failed pr.checks bypass --min-interval like BLOCKED. Like JOINED/LEFT, they reach a consumer only under --session or when --kinds lists them. Without gh, or while it is signed out or rate limited, polling backs off (up to an hour) and no PR entries arrive.",
           "A daemon that predates --session returns no session field; runpane then fails with WATCH ERROR instead of watching every Pane.",
-          "Replay: after a reset (RESET/_reset), the baseline restates current state. In JSON, those entries carry replay: true (and changedWhileAway: true after an epoch change). A replayed agent.ready is never READY: re-read runpane sessions overview instead of acting on it. Lines mode prints only CHANGED for them."
+          "Replay: after a reset (RESET/_reset), the baseline restates current state. In JSON, those entries carry replay: true (and changedWhileAway: true after an epoch change). A replayed agent.ready is never READY: re-read runpane sessions overview instead of acting on it. Lines mode prints only CHANGED for them.",
+          "agent.report (REPORT <pane-name> pane <pane-id> panel <panel-id> <state> [pr#<n>] [<head>][: <question>]) is a worker's `runpane report`. It is opt-in: only a consumer that lists it in --kinds receives it. It bypasses --min-interval, and orchestrators treat it as the completion signal; a READY without a report means look, and maybe nudge."
         ]
       },
       "panes git-status": {
@@ -10788,6 +11434,11 @@ export const RUNPANE_CONTRACT = {
             "description": "The message to submit."
           },
           {
+            "name": "--as-file-pointer",
+            "required": false,
+            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+          },
+          {
             "name": "--yes",
             "required": false,
             "description": "Confirm this change; required in non-interactive shells."
@@ -10805,14 +11456,96 @@ export const RUNPANE_CONTRACT = {
           }
         ],
         "examples": [
-          "runpane agents send --pane <pane-id> --text \"Also add a test\" --yes --json"
+          "runpane agents send --pane <pane-id> --text \"Also add a test\" --yes --json",
+          "runpane agents send --pane <pane-id> --text \"$(cat review-notes.md)\" --as-file-pointer --yes --json"
         ],
         "jsonSchemas": [
           "agentSendResult"
         ],
         "notes": [
-          "`delivered` is true only when Pane saw the message leave the composer.",
-          "It types the text, then queues with Tab when Codex is working or submits with Enter when ready. It is for messages, not keys. To answer a menu, use `runpane panels input --panel <panel-id> --keys down,enter --yes`, then check the screen with `runpane agents status`."
+          "`delivered` is true when the agent took the message or queued it for after its current turn; `delivery` says which (`taken` or `queued`) and how Pane knows (`transcript` or `screen`). Never resend a delivered message.",
+          "It types the text, then queues with Tab when Codex is working or submits with Enter when ready. It is for messages, not keys. To answer a menu, use `runpane panels input --panel <panel-id> --keys down,enter --yes`, then check the screen with `runpane agents status`.",
+          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts."
+        ]
+      },
+      "report": {
+        "name": "report",
+        "summary": "Hand back a worker's structured report: state, PR, head commit, summary, and the question when blocked.",
+        "details": "Run this as a delegated worker when you finish, fail, or get blocked, as the last step of your task. The orchestrator receives it as an agent.report watch event and treats it as the completion signal.",
+        "requiresPaneDaemon": true,
+        "mutates": true,
+        "arguments": [
+          {
+            "name": "--state",
+            "value": "<ready|blocked|failed|done>",
+            "required": true,
+            "description": "ready: work is ready for review; done: finished with nothing to review; blocked: needs an answer; failed: could not finish."
+          },
+          {
+            "name": "--pr",
+            "value": "<number>",
+            "required": false,
+            "description": "Pull request number."
+          },
+          {
+            "name": "--head",
+            "value": "<sha>",
+            "required": false,
+            "description": "Head commit the report is about, 7-40 hex characters."
+          },
+          {
+            "name": "--summary",
+            "value": "<text>",
+            "required": false,
+            "description": "Summary text; up to 16,000 characters are kept."
+          },
+          {
+            "name": "--summary-file",
+            "value": "<path|->",
+            "required": false,
+            "description": "Read the summary from a file or stdin; the absolute path is kept as summaryPath."
+          },
+          {
+            "name": "--question",
+            "value": "<text>",
+            "required": false,
+            "description": "What you need answered; required with --state blocked."
+          },
+          {
+            "name": "--pane",
+            "value": "<pane-id>",
+            "required": false,
+            "description": "Pane id when not running inside a Pane terminal (PANE_SESSION_ID)."
+          },
+          {
+            "name": "--panel",
+            "value": "<panel-id>",
+            "required": false,
+            "description": "Panel id when not running inside a Pane terminal (PANE_PANEL_ID)."
+          },
+          {
+            "name": "--json",
+            "required": false,
+            "description": "Print machine-readable output."
+          },
+          {
+            "name": "--pane-dir",
+            "value": "<path>",
+            "required": false,
+            "description": "Connect to a specific Pane data directory."
+          }
+        ],
+        "examples": [
+          "runpane report --state ready --pr 747 --head fc5dce9 --summary-file /tmp/report.md --json",
+          "runpane report --state blocked --question \"Should the migration drop the old column?\""
+        ],
+        "jsonSchemas": [
+          "reportResult"
+        ],
+        "notes": [
+          "Inside a Pane terminal the report is for the current panel (PANE_SESSION_ID and PANE_PANEL_ID). Explicit --panel (with an optional --pane) wins; with neither, the command fails with a clear error.",
+          "Each report replaces the panel's previous one and survives a Pane restart.",
+          "Watchers receive agent.report only when they list it in --kinds. REPORT lines skip the --min-interval batch."
         ]
       },
       "sessions list": {

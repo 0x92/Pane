@@ -129,6 +129,8 @@ runpane sessions overview --session <id|name> [--json] [--pane-dir <path>]
 runpane agents start --repo active --name fix-login --agent claude --prompt "Fix the login redirect" --yes --json
 runpane agents status --pane <pane-id> --json
 runpane agents send --pane <pane-id> --text "Also add a test" --yes --json
+runpane report --state ready --pr 747 --head fc5dce9 --summary-file /tmp/report.md --json
+runpane panels last-message --panel <panel-id> --json
 runpane docs search --query "archive a pane" --json
 runpane links create --pane <pane-id> --json
 runpane panes git-status --pane <pane-id> --json
@@ -170,7 +172,7 @@ The wrapper must stream Pane stdout/stderr without reformatting because `pane --
 
 `runpane panes create` connects to the running local Pane daemon, resolves the requested saved base repository, creates user-visible Pane sessions backed by Pane-managed worktrees/branches, opens terminal-backed tool tabs, and optionally sends initial input to the started tool. Built-in agent panes and `--source agent` default to background/no-focus unless `--focus` is passed. New Panes are pinned into the UI's favorite/pin set by default; pass `--no-pinned` to opt out. Panes created interactively in the Pane UI are unaffected. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.
 
-For `panes create --wait-ready`, `initialInput.verifiedSubmitted: true` is reported only after argument attachment or composer-clear plus activity evidence. Routing input does not by itself verify submission.
+For `panes create --wait-ready`, `initialInput.delivery` says where the prompt went: `taken` or `queued` (from the agent's transcript, its screen, or `argv` for a launch-argument prompt), `in-composer`, or `unknown`. `initialInput.verifiedSubmitted` is true exactly when it is `taken` or `queued`. Routing input does not by itself verify submission.
 
 `runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. Add `--dry-run` to inspect the same evidence without archiving. Successful archives wait for worktree removal and report `worktreeCleanup`.
 
@@ -209,6 +211,10 @@ When running from WSL while Pane is installed on Windows, the Linux wrapper may 
 `sessions overview` read a live status, activity, git, and pull request overview for a named Session.
 
 `runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task in a repository, check on it, and send it a follow-up.
+
+`runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (`panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`.
+
+`runpane panels last-message --panel <panel-id>` reads a Claude or Codex agent's last reply from its transcript (up to `--limit` characters, default 20,000, keeping the end and reporting `truncated`). It never scrapes the screen: without a transcript it prints `{ ok: false, reason: "transcript-unavailable" }` and exits 1.
 
 Commands with a contract `daemonAction` (the `panes` git, script, restore, and move commands, `folders list|create`, and `links open`) call the same Pane daemon channel as the matching button in the app and print `{ ok, data, error }`. Destructive ones add a pane:// `link` to review the Pane.
 
@@ -344,6 +350,12 @@ These flags are consumed by local daemon-control commands:
 --url <pane-url>
 --toolsets <name,...>
 --keys <name,...>
+--state <ready|blocked|failed|done>
+--pr <number>
+--head <sha>
+--summary <text>
+--summary-file <path|->
+--question <text>
 --json
 --wait-ready
 --no-focus
@@ -353,6 +365,7 @@ These flags are consumed by local daemon-control commands:
 --no-associate
 --force
 --launch
+--as-file-pointer
 --follow
 --ack-now
 --include-held-input

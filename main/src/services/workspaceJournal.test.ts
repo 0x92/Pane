@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorkspaceJournal, workspaceFilterKey } from './workspaceJournal';
 
+/** What the daemon knows about a panel's agent, before and after wrapper detection. */
+interface WrapperIdentity {
+  isCliPanel: boolean;
+  agentType?: string;
+}
+
 describe('WorkspaceJournal', () => {
   it('appends gapless entries and filters reads', () => {
     let now = 1000;
@@ -78,6 +84,30 @@ describe('WorkspaceJournal', () => {
     expect(presenceOnly).toMatchObject({ heldInputPresent: true });
     expect(presenceOnly).not.toHaveProperty('heldInput');
     expect(journal.readySince('panel-1')).toBe(now);
+  });
+
+  it('reports a wrapper-launched panel to agents-only readers once its agent is known', () => {
+    // A panel launched as `agent-farm run`: plain until Pane detects Claude behind it.
+    const wrapper: WrapperIdentity = { isCliPanel: false };
+    const journal = new WorkspaceJournal({
+      resolvePane: paneId => ({ paneId, paneName: 'Farm' }),
+      resolvePanel: panelId => ({ panelId, paneId: 'pane-1', ...wrapper }),
+    });
+    journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'working' });
+    journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'idle' });
+    expect(journal.readAfter(0, { agentsOnly: true }).entries).toEqual([]);
+
+    wrapper.isCliPanel = true;
+    wrapper.agentType = 'claude';
+    journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'working' });
+    journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'blocked' });
+    journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'idle' });
+
+    expect(journal.readAfter(0, { agentsOnly: true }).entries.map(entry => [entry.kind, entry.agentType])).toEqual([
+      ['agent.busy', 'claude'],
+      ['agent.blocked', 'claude'],
+      ['agent.ready', 'claude'],
+    ]);
   });
 
   it('does not report the Claude Code prompt suggestion as held input', () => {
@@ -278,11 +308,40 @@ describe('WorkspaceJournal', () => {
       expect(journal.readAfter(0, { sessionId, kinds: ['agent.ready'] }).entries).toEqual([]);
     });
 
+    it('delivers a member worker report to Session watchers, and still keeps it from kinds-less consumers', () => {
+      const { journal } = sessionJournal();
+      const report = { state: 'ready' as const, pr: 747, reportedAt: '2026-09-27T18:00:00.000Z' };
+      journal.appendPaneEntry('one', { kind: 'agent.report', panelId: 'p1', agentType: 'claude', source: 'agent', report });
+      journal.appendPaneEntry('two', { kind: 'agent.report', panelId: 'p2', agentType: 'claude', source: 'agent', report });
+
+      expect(journal.readAfter(0, {}).entries).toEqual([]);
+      expect(journal.readAfter(0, { sessionId }).entries).toMatchObject([{ kind: 'agent.report', paneId: 'one', report }]);
+      expect(journal.readAfter(0, { sessionId, kinds: ['agent.ready'] }).entries).toEqual([]);
+    });
+
     it('keys a Session scope by the Session rather than its Panes', () => {
       expect(workspaceFilterKey({ sessionId })).toBe(workspaceFilterKey({ sessionId }));
       expect(workspaceFilterKey({ sessionId })).not.toBe(workspaceFilterKey({ sessionId: 'other' }));
       expect(workspaceFilterKey({ sessionId })).not.toBe(workspaceFilterKey({}));
     });
+  });
+
+  it('delivers agent.report only to a consumer that lists it in kinds', async () => {
+    const journal = new WorkspaceJournal({
+      resolvePane: paneId => ({ paneId, paneName: 'Fix login', repoId: 7 }),
+    });
+    const anyKind = journal.waitAfter(0, {}, 50);
+    const optedIn = journal.waitAfter(0, { kinds: ['agent.ready', 'agent.report'] }, 1000);
+    const report = { state: 'ready' as const, pr: 747, head: 'fc5dce9', reportedAt: '2026-09-27T18:00:00.000Z' };
+    journal.appendPaneEntry('pane-1', { kind: 'agent.report', panelId: 'panel-1', agentType: 'claude', source: 'agent', report });
+
+    await expect(optedIn).resolves.toMatchObject({
+      timedOut: false,
+      entries: [{ kind: 'agent.report', paneId: 'pane-1', paneName: 'Fix login', repoId: 7, panelId: 'panel-1', report }],
+    });
+    await expect(anyKind).resolves.toMatchObject({ timedOut: true, entries: [] });
+    expect(journal.readAfter(0).entries).toEqual([]);
+    expect(journal.readAfter(0, { kinds: ['agent.ready'] }).entries).toEqual([]);
   });
 
   it('times out without inventing an entry', async () => {

@@ -1,4 +1,4 @@
-import type { ProjectEnvironment, ToolPanelType } from './panels';
+import type { ProjectEnvironment, TerminalAgentReport, TerminalAgentReportState, ToolPanelType } from './panels';
 import type { RunpaneAgent } from './generatedRunpaneContract';
 import type { RemoteDaemonExecutableHealth } from './remoteDaemon';
 import type { TerminalGraphicsProtocol } from '../constants/terminalGraphics';
@@ -42,6 +42,8 @@ export type RunpaneWorkspaceEntryKind =
   | 'pane.created'
   | 'pane.gone'
   | 'panel.exited'
+  /** A worker report, delivered only when explicitly requested in kinds. */
+  | 'agent.report'
   /** The Pane joined a Session (`sessions associate`). */
   | 'pane.associated'
   /** The Pane left a Session (`sessions detach`). */
@@ -99,6 +101,8 @@ export interface RunpaneWorkspaceEntry {
   /** Up to five failing check names of a failed `pr.checks` entry. */
   failingChecks?: string[];
   panels?: RunpaneWorkspacePanelSummary[];
+  /** The report of an `agent.report` entry; its summary is cut to 2,000 characters (the panel keeps up to 16,000). */
+  report?: TerminalAgentReport;
 }
 
 export interface RunpaneWorkspacePanelSummary {
@@ -243,12 +247,18 @@ export interface RunpaneAgentToolSpec {
   agent: RunpaneAgentId;
   title?: string;
   initialInput?: string;
+  /** Write initialInput to a prompt file and send `Read and follow <path>` instead (`--as-file-pointer`). */
+  initialInputAsFilePointer?: boolean;
 }
 
 export interface RunpaneCommandToolSpec {
   command: string;
+  /** The agent this command runs (a wrapper such as `agent-farm run`); set by `--agent` with `--tool-command`. */
+  agentType?: RunpaneAgentId;
   title?: string;
   initialInput?: string;
+  /** Write initialInput to a prompt file and send `Read and follow <path>` instead (`--as-file-pointer`). */
+  initialInputAsFilePointer?: boolean;
 }
 
 export type RunpaneToolSpec = RunpaneAgentToolSpec | RunpaneCommandToolSpec;
@@ -306,12 +316,16 @@ export interface RunpaneErrorPayload {
 }
 
 export type RunpanePanelActivityStatus = 'active' | 'idle';
+/** Rolled-up agent state for a Pane: the most urgent state of its live agent panels. */
+export type RunpanePaneAgentState = 'ready' | 'working' | 'blocked' | 'none';
+export type RunpaneAgentDetection = 'declared' | 'command' | 'process' | 'screen';
 export type RunpanePanelScreenSource = 'alternateScreen' | 'scrollback' | 'persistedOutput' | 'empty';
 export type RunpanePanelWaitCondition = 'initialized' | 'ready' | 'idle' | 'text';
 export type RunpanePanelBlockerKind =
   | 'codex-update'
   | 'agent-prompt'
   | 'submission_unverified'
+  | 'composer-unknown'
   | 'unknown';
 
 export interface RunpanePanelStateSummary {
@@ -350,12 +364,25 @@ export interface RunpaneInitialInputDeliveryResult {
   sequenceName?: 'codex-ctrl-enter-cr' | 'enter-cr' | 'tab' | 'argument';
   verifiedSubmitted?: boolean;
   verification?: RunpanePanelVerification;
+  delivery?: RunpaneDelivery;
   staged?: boolean;
   attempts?: number;
   sentAt?: string;
   blocked?: RunpanePanelBlockedState;
   error?: RunpaneErrorPayload;
   nextCommand?: string;
+}
+
+/** A leading character Claude Code gives a meaning of its own; Pane sends the text unchanged. */
+export type RunpanePromptWarningCode =
+  | 'leading-bang-runs-shell'
+  | 'leading-hash-memory'
+  | 'leading-slash-command'
+  | 'leading-at-mention';
+
+export interface RunpanePromptWarning {
+  code: RunpanePromptWarningCode;
+  message: string;
 }
 
 export interface RunpanePaneCreateSuccessItem {
@@ -377,6 +404,9 @@ export interface RunpanePaneCreateSuccessItem {
   focused?: boolean;
   readiness?: RunpanePaneReadiness;
   initialInput?: RunpaneInitialInputDeliveryResult;
+  /** The prompt file Pane wrote for `--as-file-pointer`. */
+  promptFile?: string;
+  warnings?: RunpanePromptWarning[];
   association?: RunpanePaneAssociationOutcome;
 }
 
@@ -412,8 +442,10 @@ export interface RunpanePaneSummary {
   id: string;
   paneId: string;
   name: string;
+  /** `running` while any terminal panel is live; otherwise the stored lifecycle status. */
   status: string;
   agentStatus: RunpanePanelActivityStatus;
+  agentState: RunpanePaneAgentState;
   worktreePath: string;
   repoId: number;
   repoName?: string;
@@ -590,10 +622,14 @@ export interface RunpanePanelSummary {
   active: boolean;
   initialized?: boolean;
   agentType?: RunpaneAgentId;
+  agentDetection?: RunpaneAgentDetection;
+  launchCommand?: string;
   isCliPanel?: boolean;
   position?: number;
   createdAt?: string;
   lastActiveAt?: string;
+  /** Latest `runpane report` from this panel's agent. */
+  report?: TerminalAgentReport;
 }
 
 export interface RunpanePanelListRequest {
@@ -634,6 +670,9 @@ export interface RunpanePanelCreateResult {
   };
   readiness?: RunpanePaneReadiness;
   initialInput?: RunpaneInitialInputDeliveryResult;
+  /** The prompt file Pane wrote for `--as-file-pointer`. */
+  promptFile?: string;
+  warnings?: RunpanePromptWarning[];
   nextCommand?: string;
 }
 
@@ -677,6 +716,8 @@ export interface RunpanePanelScreenResult {
   composer: {
     isPresent: boolean;
     hasUndeliveredText: boolean;
+    /** Placeholder or suggestion text shown in the composer; it is not input. */
+    ghostText?: string;
   };
   nextCommand?: string;
 }
@@ -685,6 +726,55 @@ export interface RunpanePanelInputRequest {
   panelId: string;
   input: string;
 }
+
+/** `runpane report`: a worker's structured hand-back for its panel. */
+export interface RunpaneReportRequest {
+  /** The panel's Pane; when given it must own `panelId`. */
+  paneId?: string;
+  panelId: string;
+  state: TerminalAgentReportState;
+  pr?: number;
+  head?: string;
+  summary?: string;
+  summaryPath?: string;
+  question?: string;
+}
+
+export interface RunpaneReportResult {
+  ok: true;
+  generation?: number;
+  paneId: string;
+  panelId: string;
+  report: TerminalAgentReport;
+  /** Named Sessions the Pane is associated with, which recorded the report as activity. */
+  sessionIds: string[];
+}
+
+export interface RunpanePanelLastMessageRequest {
+  panelId: string;
+  /** Maximum characters to return; defaults to 20,000. */
+  limit?: number;
+}
+
+export type RunpanePanelLastMessageResult =
+  | {
+    ok: true;
+    panelId: string;
+    paneId: string;
+    agentType: 'claude' | 'codex';
+    /** The agent's last reply, from its transcript; the tail is kept when it is longer than `limit`. */
+    text: string;
+    length: number;
+    limit: number;
+    truncated: boolean;
+  }
+  | {
+    ok: false;
+    panelId: string;
+    paneId: string;
+    reason: 'transcript-unavailable';
+    message: string;
+  };
 
 export interface RunpanePanelInputResult {
   ok: true;
@@ -699,9 +789,23 @@ export interface RunpanePanelInputResult {
 export interface RunpanePanelSubmitRequest {
   panelId: string;
   input: string;
+  /** Write the text to a prompt file and submit `Read and follow <path>` instead. */
+  asFilePointer?: boolean;
 }
 
 export type RunpanePanelVerification = 'observed' | 'unverifiable';
+
+/**
+ * Where a prompt sent to a Claude or Codex composer went. `taken`: the agent
+ * started a turn with it; `queued`: the agent holds it until its current turn
+ * ends; `in-composer`: it is still in the composer; `unknown`: Pane saw
+ * neither. `evidence` says what Pane read: the agent's transcript, the
+ * screen, or (for a launch prompt) the launch arguments.
+ */
+export interface RunpaneDelivery {
+  state: 'taken' | 'queued' | 'in-composer' | 'unknown';
+  evidence: 'transcript' | 'screen' | 'argv';
+}
 
 export interface RunpanePanelSubmitResult {
   ok: boolean;
@@ -713,8 +817,13 @@ export interface RunpanePanelSubmitResult {
   sequenceName: 'codex-ctrl-enter-cr' | 'enter-cr' | 'tab';
   verifiedSubmitted: boolean;
   verification?: RunpanePanelVerification;
+  /** Present for Claude and Codex composers; `verifiedSubmitted` is true when it is `taken` or `queued`. */
+  delivery?: RunpaneDelivery;
   sentAt: string;
   blocked?: RunpanePanelBlockedState;
+  /** The prompt file Pane wrote for `asFilePointer`. */
+  promptFile?: string;
+  warnings?: RunpanePromptWarning[];
   nextCommand?: string;
 }
 
@@ -735,6 +844,8 @@ export interface RunpanePanelSubmitComposerResult {
   sequenceName: 'codex-ctrl-enter-cr' | 'enter-cr' | 'tab';
   verifiedSubmitted: boolean;
   verification?: RunpanePanelVerification;
+  /** Present for Claude and Codex composers; `verifiedSubmitted` is true when it is `taken` or `queued`. */
+  delivery?: RunpaneDelivery;
   sentAt: string;
   blocked?: RunpanePanelBlockedState;
   nextCommand?: string;
@@ -790,5 +901,8 @@ export interface RunpaneResolvedTool {
   title: string;
   command: string;
   agent?: RunpaneAgentId;
+  /** `wrapped` when `command` is a wrapper that runs `agent`; Pane launches it unchanged. */
+  launchMode?: 'wrapped';
   initialInput?: string;
+  initialInputAsFilePointer?: boolean;
 }

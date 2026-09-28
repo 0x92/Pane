@@ -24,6 +24,7 @@ import {
   runAgentsDoctor,
   runPanelsCreate,
   runPanelsInput,
+  runPanelsLastMessage,
   runPanelsList,
   runPanelsOutput,
   runPanelsScreen,
@@ -38,6 +39,7 @@ import {
   runPanesPin,
   runPanesRename,
   runPanesFocus,
+  runReport,
   runSessionsAssociate,
   runSessionsCreate,
   runSessionsDetach,
@@ -270,6 +272,14 @@ async function dispatchParsedCommand(parsed: ParsedArgs, telemetryContext: Wrapp
 
   if (parsed.command === 'panels wait') {
     return runPanelsWait(parsed);
+  }
+
+  if (parsed.command === 'panels last-message') {
+    return runPanelsLastMessage(parsed);
+  }
+
+  if (parsed.command === 'report') {
+    return runReport(parsed);
   }
 
   if (parsed.command === 'agents doctor') {

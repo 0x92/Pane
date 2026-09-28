@@ -14,15 +14,34 @@ import type { PanelBuffers } from '../database/panelBuffers';
 import { ensureProjectAgentContext } from '../services/agentContextManager';
 import { syncPaneHomeSkill } from '../services/paneHomeSkill';
 import { fastCheckWorkingDirectory, listCommitsAhead } from '../services/gitPlumbingCommands';
-import { assessComposerEvidence, isSlashCommandInput } from './runpaneComposerEvidence';
+import { assessComposerEvidence, isSlashCommandInput, looksLikePendingComposer } from './runpaneComposerEvidence';
 import { projectWorkspaceEntry } from '../services/workspaceJournal';
 import { detectAgentState } from '../services/agentStatus/manifestEngine';
-import { CODEX_LOADING_HEADER, getManifestForAgent } from '../services/agentStatus/manifests';
+import { getManifestForAgent } from '../services/agentStatus/manifests';
+import { detectAgentComposer, detectAgentFromScreen, screenShowsQueuedMessage } from '../services/agents/agentScreenSignature';
+import { agentTranscripts, type TranscriptLocator } from '../services/agentTranscript';
+import {
+  AGENT_REPORT_STATES,
+  journalAgentReport,
+  normalizeAgentReport,
+  readPanelAgentReport,
+} from '../services/agentReport';
+import { resolveAgentTypeFromCommand } from '../services/agents/agentIdentity';
+import {
+  bracketedPaste,
+  claudePromptWarnings,
+  filePointerPrompt,
+  isLongPrompt,
+  normalizePromptNewlines,
+  promptFileShellWord,
+  stripTrailingNewlines,
+  writePromptFile,
+} from '../services/agents/promptDelivery';
 import type { ArchiveProgressManager, SerializedArchiveTask } from '../services/archiveProgressManager';
 import type { CommandRunner } from '../utils/commandRunner';
 import type { Project } from '../database/models';
 import type { Session, SessionOutput } from '../types/session';
-import type { CreatePanelRequest, TerminalPanelState, ToolPanel } from '../../../shared/types/panels';
+import type { CreatePanelRequest, TerminalAgentReport, TerminalPanelState, ToolPanel } from '../../../shared/types/panels';
 import { RUNPANE_CONTRACT } from '../../../shared/types/generatedRunpaneContract';
 import { isAgentSupportedOnPlatform } from '../../../shared/constants/agentLaunchPresets';
 import {
@@ -64,12 +83,18 @@ import type {
   RunpanePaneAssociationOutcome,
   RunpanePaneReadiness,
   RunpanePaneSummary,
+  RunpanePromptWarning,
   RunpanePanelActivityStatus,
+  RunpanePaneAgentState,
+  RunpaneAgentDetection,
   RunpanePanelBlockedState,
+  RunpaneDelivery,
   RunpanePanelCreateRequest,
   RunpanePanelCreateResult,
   RunpanePanelInputRequest,
   RunpanePanelInputResult,
+  RunpanePanelLastMessageRequest,
+  RunpanePanelLastMessageResult,
   RunpanePanelListRequest,
   RunpanePanelListResult,
   RunpanePanelOutputRecord,
@@ -92,6 +117,8 @@ import type {
   RunpaneRepoListResult,
   RunpaneRepoSelector,
   RunpaneRepoSummary,
+  RunpaneReportRequest,
+  RunpaneReportResult,
   RunpaneResolvedTool,
   RunpaneToolSpec,
   RunpaneWorktreeCleanupState,
@@ -122,7 +149,7 @@ import { WatchCadence, type WatchCadenceOptions } from '../services/workspaceWat
 import { WorkspaceStateReader } from '../services/workspaceStateReader';
 import { WorkspaceCursorStore } from '../services/workspaceCursorStore';
 import { usageManager } from '../services/usage/usageManager';
-import { parseWSLPath } from '../utils/wslUtils';
+import { parseWSLPath, windowsPathToWSLMount, type WSLContext } from '../utils/wslUtils';
 import {
   dueIdleEntries,
   nextIdleDeadline,
@@ -158,6 +185,8 @@ const RUNPANE_CHANNELS = [
   'runpane:panels:submit',
   'runpane:panels:submit-composer',
   'runpane:panels:wait',
+  'runpane:panels:last-message',
+  'runpane:report',
   'runpane:workspace:state',
   'runpane:workspace:wait',
   'runpane:agents:doctor',
@@ -167,13 +196,24 @@ const AGENT_TEMPLATES = RUNPANE_CONTRACT.agentTemplates;
 const AGENT_IDS = new Set<string>(RUNPANE_CONTRACT.enums.agents);
 const DEFAULT_PANEL_OUTPUT_LIMIT = 200;
 const DEFAULT_PANEL_SCREEN_LIMIT = 80;
+const DEFAULT_LAST_MESSAGE_LIMIT = 20_000;
+const LAST_MESSAGE_TRUNCATION_MARKER = '[earlier text truncated]\n';
 const DEFAULT_PANEL_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_PANEL_WAIT_INTERVAL_MS = 500;
 const DEFAULT_COMPOSER_VERIFY_TIMEOUT_MS = 3_000;
 const DEFAULT_COMPOSER_VERIFY_INTERVAL_MS = 100;
+// The transcript settles a delivery the screen leaves open: polled this often, for this long after Enter.
+const TRANSCRIPT_POLL_INTERVAL_MS = 200;
+const TRANSCRIPT_DELIVERY_TIMEOUT_MS = 10_000;
+// Once the composer has emptied, how long the transcript gets to say taken or queued.
+const TRANSCRIPT_CONFIRM_MS = 2_000;
 const CODEX_SUBMIT_STAGE_DELAY_MS = 500;
 const CLAUDE_INPUT_WAIT_TIMEOUT_MS = 15_000;
 const CLAUDE_UI_QUIET_MS = 3_000;
+// After a bracketed paste, Enter waits for the agent to stop drawing it.
+const PASTE_SETTLE_QUIET_MS = 300;
+const PASTE_SETTLE_MAX_MS = 2_000;
+const CODEX_PASTE_ECHO_TIMEOUT_MS = 3_000;
 const MAX_CREATE_SUBMIT_ATTEMPTS = 3;
 const CREATE_SUBMIT_CONFIRMATION_DELAY_MS = 400;
 const DEFAULT_ARCHIVE_CLEANUP_TIMEOUT_MS = 30_000;
@@ -194,6 +234,7 @@ const MUTATING_RUNPANE_ACTIONS = new Set([
   'panels:input',
   'panels:submit',
   'panels:submit-composer',
+  'report',
   'sessions:create',
   'sessions:update',
   'sessions:set-agent',
@@ -704,6 +745,9 @@ export function registerRunpaneHandlers(
             throw new Error(`Worktree path is already registered by pane "${existing.name}" (${existing.id})`);
           }
           const tool = resolveToolSpec(item.tool, new PathResolver(repo).environment);
+          if (item.resume && tool.launchMode === 'wrapped') {
+            throw new Error('--resume needs a built-in agent command; a wrapper command resumes its own way.');
+          }
           if (normalized.dryRun) {
             items.push({ ok: true, index, name: item.name, pinned: item.pinned !== false, worktreePath: storedWorktreePath, tool: describeTool(tool) });
             continue;
@@ -737,11 +781,10 @@ export function registerRunpaneHandlers(
           ]);
 
           const initialState: TerminalPanelState = {
+            ...toolAgentIdentityState(tool),
             initialCommand: item.launch ? tool.command : undefined,
-            agentType: tool.agent,
             agentSessionId: item.resume,
             hasClaudeSessionId: tool.agent === 'claude' && Boolean(item.resume),
-            isCliPanel: Boolean(tool.agent),
           };
           const panel = await panelManager.createPanel({
             sessionId: session.id,
@@ -904,7 +947,7 @@ export function registerRunpaneHandlers(
         throw new Error(`No Pane repo found for pane ${pane.id}`);
       }
       const tool = resolveToolSpec(normalized.tool, new PathResolver(repo).environment);
-      const { panel, readiness, initialInput } = await createTerminalPanelForSession(services, pane, tool, {
+      const { panel, readiness, initialInput, promptFile, warnings } = await createTerminalPanelForSession(services, pane, tool, {
         activate: resolvePanelCreateActivation(normalized, tool),
         waitReady: normalized.waitReady,
         readyTimeoutMs: normalized.readyTimeoutMs,
@@ -920,6 +963,8 @@ export function registerRunpaneHandlers(
         tool: describeTool(tool),
         readiness,
         initialInput,
+        promptFile,
+        warnings,
         nextCommand: initialInput?.nextCommand ?? readiness?.nextCommand ?? panelOutputCommand(panel.id),
       };
     }, result => ({
@@ -1030,8 +1075,16 @@ export function registerRunpaneHandlers(
       }
 
       let beforeScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
-      const stagedInput = stripSubmitEnter(normalized.input);
-      const { agentType } = beforeScreen.state;
+      const promptFile = normalized.asFilePointer
+        ? await writePromptFile(panel.sessionId, stripTrailingNewlines(normalizePromptNewlines(normalized.input)))
+        : undefined;
+      const submittedText = promptFile
+        ? filePointerPrompt(agentVisiblePath(promptFile, sessionWslContext(services, panel.sessionId)))
+        : normalized.input;
+      // A CR inside the text would be Enter to an agent composer.
+      const stagedInput = stripTrailingNewlines(normalizePromptNewlines(submittedText));
+      const agentType = screenAgentType(beforeScreen);
+      const warnings = agentType === 'claude' ? claudePromptWarnings(stagedInput) : undefined;
       // Claude reads text and Enter arriving in one read as a paste and keeps
       // the Enter as a newline. Terminal readiness can precede Claude drawing
       // its UI or reading input, so wait while it is still drawing for its
@@ -1046,36 +1099,69 @@ export function registerRunpaneHandlers(
             (screen.state.isAlternateScreen === true && !panelHasOutputWithin(panel.id, CLAUDE_UI_QUIET_MS)),
         );
       }
-      const stagesComposer = beforeScreen.composer.isPresent && (agentType === 'claude' || agentType === 'codex');
-      if (stagedInput.length > 0 && stagesComposer) {
-        const outputGenerationBeforeStage = terminalPanelManager.getOutputGeneration(panel.id);
-        terminalPanelManager.writeToTerminal(panel.id, stagedInput);
-        if (agentType === 'claude') {
-          await waitForPanelScreen(
-            panel,
-            screen => screen.composer.hasUndeliveredText && panelHasFreshOutputSince(panel.id, outputGenerationBeforeStage),
-          );
-        } else {
-          await sleep(CODEX_SUBMIT_STAGE_DELAY_MS);
-        }
-        const submission = await submitComposerForPanel(panel, 'auto');
+      const stagesComposer = beforeScreen.composer.isPresent && (agentType === 'claude' ||
+        agentType === 'codex');
+      if (stagedInput.length > 0 && stagesComposer && (agentType === 'claude' || agentType === 'codex')) {
+        // Claude takes a separately written Enter while it works (it queues
+        // the message), so staging never waits for it to be idle.
+        const staged = await stageComposerText(panel, agentType, stagedInput);
+        const submission = await submitComposerForPanel(panel, 'auto', {
+          cwd: sessionManager.getSession(panel.sessionId)?.worktreePath,
+          text: stagedInput,
+        });
         return {
           ok: submission.ok,
           panelId: panel.id,
           paneId: panel.sessionId,
-          inputBytes: Buffer.byteLength(stagedInput, 'utf8') + submission.inputBytes,
+          inputBytes: staged.inputBytes + submission.inputBytes,
           enter: submission.strategy === 'tab' ? 'tab' : 'cr',
           sequenceName: submission.sequenceName,
           verifiedSubmitted: submission.verifiedSubmitted,
           verification: submission.verification,
+          delivery: submission.delivery,
           sentAt: submission.sentAt,
           blocked: submission.blocked,
+          promptFile,
+          warnings,
           nextCommand: submission.nextCommand,
         };
       }
 
-      const input = ensureSubmitEnter(normalized.input);
+      if (stagedInput.length > 0 && isComposerUnknown(panel, beforeScreen, agentType)) {
+        const suggestedCommand = panelScreenCommand(panel.id);
+        return {
+          ok: false,
+          panelId: panel.id,
+          paneId: panel.sessionId,
+          inputBytes: 0,
+          enter: 'cr',
+          sequenceName: 'enter-cr',
+          verifiedSubmitted: false,
+          sentAt: new Date().toISOString(),
+          blocked: {
+            kind: 'composer-unknown',
+            message: `Pane could not find the ${agentType === 'codex' ? 'Codex' : 'Claude'} composer in this panel, so it sent nothing. The agent may still be starting, or showing a view without its prompt. Check the screen, then submit again or use \`panels input\`.`,
+            suggestedCommand,
+          },
+          promptFile,
+          warnings,
+          nextCommand: suggestedCommand,
+        };
+      }
+
+      // An agent's CRs inside the text would each be an Enter; a shell keeps its bytes.
+      const input = ensureSubmitEnter(agentType === 'claude' || agentType === 'codex' ? stagedInput : submittedText);
+      // A busy Codex takes text and Enter in one write and holds the message
+      // for its next turn; its transcript or queue hint says where it went.
+      const probeBase = agentType === 'codex' && beforeScreen.composer.isPresent && stagedInput.length > 0
+        ? composerDeliveryProbe(panel, sessionManager.getSession(panel.sessionId)?.worktreePath, agentType, stagedInput)
+        : undefined;
+      const probe = probeBase ? { ...probeBase, sentAtMs: Date.now() } : undefined;
+      const outputGenerationBeforeWrite = terminalPanelManager.getOutputGeneration(panel.id);
       terminalPanelManager.writeToTerminal(panel.id, input);
+      const verification = probe
+        ? await verifyComposerSubmitted(panel, beforeScreen, outputGenerationBeforeWrite, probe)
+        : undefined;
 
       return {
         ok: true,
@@ -1084,8 +1170,11 @@ export function registerRunpaneHandlers(
         inputBytes: Buffer.byteLength(input, 'utf8'),
         enter: 'cr',
         sequenceName: 'enter-cr',
-        verifiedSubmitted: false,
+        verifiedSubmitted: verification?.verifiedSubmitted ?? false,
+        delivery: verification?.delivery,
         sentAt: new Date().toISOString(),
+        promptFile,
+        warnings,
         nextCommand: panelWaitCommand(panel.id),
       };
     }, result => ({
@@ -1103,7 +1192,9 @@ export function registerRunpaneHandlers(
         throw new Error(`Terminal panel ${panel.id} is not initialized`);
       }
 
-      return submitComposerForPanel(panel, normalized.strategy);
+      return submitComposerForPanel(panel, normalized.strategy, {
+        cwd: sessionManager.getSession(panel.sessionId)?.worktreePath,
+      });
     }, result => ({
       paneId: result.paneId,
       panelId: result.panelId,
@@ -1125,6 +1216,42 @@ export function registerRunpaneHandlers(
       condition: result.condition,
       timedOut: result.timedOut,
     }));
+  });
+
+  commandRegistry.register('runpane:panels:last-message', async (request: PaneCommandValue): Promise<RunpanePanelLastMessageResult> => {
+    return withRunpaneAction(services, 'panels:last-message', {}, async () => {
+      const normalized = parsePanelLastMessageRequest(request);
+      const panel = resolveTerminalPanel(normalized.panelId);
+      const cwd = sessionManager.getSession(panel.sessionId)?.worktreePath;
+      return readPanelLastMessage(panel, cwd, normalized.limit ?? DEFAULT_LAST_MESSAGE_LIMIT);
+    }, result => ({
+      paneId: result.paneId,
+      panelId: result.panelId,
+      resultCount: result.ok ? 1 : 0,
+    }));
+  });
+
+  commandRegistry.register('runpane:report', async (request: PaneCommandValue): Promise<RunpaneReportResult> => {
+    return withRunpaneAction(services, 'report', {}, async () => {
+      const normalized = parseReportRequest(request);
+      const panel = resolveTerminalPanel(normalized.panelId);
+      if (normalized.paneId && normalized.paneId !== panel.sessionId) {
+        throw new Error(`Panel ${panel.id} belongs to Pane ${panel.sessionId}, not ${normalized.paneId}.`);
+      }
+      const report = normalizeAgentReport(normalized, new Date().toISOString());
+      await storePanelAgentReport(panel, report);
+      const panelSummary = panelToSummary(panelManager.getPanel(panel.id) ?? panel);
+      workspaceJournal.appendPaneEntry(panel.sessionId, {
+        kind: 'agent.report',
+        panelId: panel.id,
+        panelTitle: panel.title,
+        agentType: panelSummary.agentType,
+        source: 'agent',
+        report: journalAgentReport(report),
+      });
+      const sessionIds = await services.orchestrationSessionManager?.recordAgentReport(panel.id, report) ?? [];
+      return { ok: true, paneId: panel.sessionId, panelId: panel.id, report, sessionIds };
+    }, result => ({ paneId: result.paneId, panelId: result.panelId, ok: result.ok }));
   });
 
   commandRegistry.register('runpane:workspace:state', async (request: PaneCommandValue = {}): Promise<RunpaneWorkspaceStateResult> => {
@@ -1368,8 +1495,9 @@ function sessionToPaneSummary(session: Session, project: Project): RunpanePaneSu
     id: session.id,
     paneId: session.id,
     name: session.name,
-    status: session.status,
+    status: resolvePaneLiveStatus(session, panels),
     agentStatus,
+    agentState: resolvePaneAgentState(panels),
     worktreePath: session.worktreePath,
     repoId: project.id,
     repoName: project.name,
@@ -1392,10 +1520,46 @@ function resolveAggregatedAgentStatus(panels: readonly ToolPanel[]): RunpanePane
   return 'idle';
 }
 
+/**
+ * A Pane with a live terminal is running, whatever lifecycle value was stored
+ * when it was created or adopted. Errors and startup keep their stored status.
+ */
+function resolvePaneLiveStatus(session: Session, panels: readonly ToolPanel[]): string {
+  if (session.status === 'error' || session.status === 'initializing') return session.status;
+  const hasLiveTerminal = panels.some(panel => panel.type === 'terminal' && terminalPanelManager.isTerminalInitialized(panel.id));
+  return hasLiveTerminal ? 'running' : session.status;
+}
+
+/** The most urgent state across a Pane's live agent panels: blocked, then working, then ready. */
+function resolvePaneAgentState(panels: readonly ToolPanel[]): RunpanePaneAgentState {
+  let agentState: RunpanePaneAgentState = 'none';
+  for (const panel of panels) {
+    if (panel.type !== 'terminal' || !terminalPanelManager.isTerminalInitialized(panel.id)) continue;
+    if (!panelToSummary(panel).isCliPanel) continue;
+    const state = terminalPanelManager.getAgentStatus(panel.id);
+    if (state === 'blocked') return 'blocked';
+    if (state === 'working') agentState = 'working';
+    else if (state === 'idle' && agentState === 'none') agentState = 'ready';
+  }
+  return agentState;
+}
+
+function optionalAgentDetection(value: PaneCommandValue): RunpaneAgentDetection | undefined {
+  try {
+    return decodeBoundary(value, boundary.enumeration('declared', 'command', 'process', 'screen'));
+  } catch {
+    return undefined;
+  }
+}
+
 function panelToSummary(panel: ToolPanel) {
   const customState = isRecord(panel.state.customState) ? panel.state.customState : {};
-  const agentType = optionalAgentId(customState.agentType);
-  const isCliPanel = optionalBoolean(customState.isCliPanel);
+  const initialCommand = optionalString(customState.initialCommand);
+  const commandAgentType = resolveAgentTypeFromCommand(initialCommand);
+  const agentType = optionalAgentId(customState.agentType) ?? commandAgentType;
+  const agentDetection = optionalAgentDetection(customState.agentDetection) ??
+    (agentType ? (agentType === commandAgentType ? 'command' : 'declared') : undefined);
+  const isCliPanel = optionalBoolean(customState.isCliPanel) ?? (agentType ? true : undefined);
 
   return {
     id: panel.id,
@@ -1406,11 +1570,61 @@ function panelToSummary(panel: ToolPanel) {
     active: Boolean(panel.state.isActive),
     initialized: panel.type === 'terminal' ? terminalPanelManager.isTerminalInitialized(panel.id) : undefined,
     agentType,
+    agentDetection,
+    launchCommand: optionalString(customState.launchCommand) ?? initialCommand,
     isCliPanel,
     position: optionalNumber(panel.metadata.position),
     createdAt: toIsoString(panel.metadata.createdAt),
     lastActiveAt: toIsoString(panel.metadata.lastActiveAt),
+    report: readPanelAgentReport(panel),
   };
+}
+
+/** Keep the report in the panel's custom state; the write merges, so other terminal state is untouched. */
+async function storePanelAgentReport(panel: ToolPanel, report: TerminalAgentReport): Promise<void> {
+  const current = panelManager.getPanel(panel.id) ?? panel;
+  const state = current.state ?? { isActive: false };
+  const customState = isRecord(state.customState) ? state.customState : {};
+  await panelManager.updatePanel(panel.id, {
+    state: { ...state, customState: { ...customState, agentReport: report } },
+  });
+}
+
+/**
+ * The agent's last reply from its transcript, bounded to `limit` characters (the tail is kept).
+ * Without a transcript this reports `transcript-unavailable`; it never falls back to the screen.
+ */
+async function readPanelLastMessage(
+  panel: ToolPanel,
+  cwd: string | undefined,
+  limit: number,
+): Promise<RunpanePanelLastMessageResult> {
+  const agentType = panelStateSummary(panel, terminalPanelManager.getTerminalSnapshot(panel.id)).agentType;
+  const unavailable = (message: string): RunpanePanelLastMessageResult => ({
+    ok: false,
+    panelId: panel.id,
+    paneId: panel.sessionId,
+    reason: 'transcript-unavailable',
+    message,
+  });
+  if (agentType !== 'claude' && agentType !== 'codex') {
+    return unavailable(`Panel ${panel.id} is not a Claude or Codex panel, so Pane has no transcript to read. Use \`runpane panels screen --panel ${panel.id}\`.`);
+  }
+  const locator = panelTranscriptLocator(panel, cwd, agentType);
+  let message: string | undefined;
+  try {
+    message = locator ? await agentTranscripts.lastAssistantMessage(locator) : undefined;
+  } catch {
+    message = undefined;
+  }
+  if (message === undefined) {
+    return unavailable(`No ${agentType} transcript reply found for panel ${panel.id}. Use \`runpane panels screen --panel ${panel.id}\`.`);
+  }
+  const truncated = message.length > limit;
+  const text = truncated
+    ? `${LAST_MESSAGE_TRUNCATION_MARKER}${message.slice(message.length - Math.max(0, limit - LAST_MESSAGE_TRUNCATION_MARKER.length))}`
+    : message;
+  return { ok: true, panelId: panel.id, paneId: panel.sessionId, agentType, text, length: message.length, limit, truncated };
 }
 
 interface PaneCreateItemOptions {
@@ -1431,15 +1645,80 @@ interface TerminalPanelCreateResult {
   panel: ToolPanel;
   readiness?: RunpanePaneReadiness;
   initialInput?: RunpaneInitialInputDeliveryResult;
+  promptFile?: string;
+  warnings?: RunpanePromptWarning[];
+}
+
+interface PreparedInitialInput {
+  /** The tool with the prompt as it will be sent: newlines normalised, or the file pointer line. */
+  tool: RunpaneResolvedTool;
+  useArgumentDelivery: boolean;
+  /** Prompt file the launch command reads with `"$(cat '<file>')"`. */
+  initialInputFile?: string;
+  /** Prompt file written for `--as-file-pointer`. */
+  promptFile?: string;
+  warnings?: RunpanePromptWarning[];
+}
+
+/**
+ * Decide how a create prompt reaches the agent. A long or multi-line prompt
+ * is never typed into the shell as an argument: on a POSIX shell the launch
+ * reads it from a prompt file, elsewhere the agent's composer takes it as a
+ * paste once the agent is ready. `--as-file-pointer` swaps the prompt for a
+ * one-line pointer to its file.
+ */
+async function prepareInitialInput(
+  session: Session,
+  tool: RunpaneResolvedTool,
+  wslContext: WSLContext | null,
+): Promise<PreparedInitialInput> {
+  if (!tool.initialInput) {
+    return { tool, useArgumentDelivery: false };
+  }
+
+  // Agent composers read CR as Enter; plain terminals keep their bytes.
+  let text = tool.agent ? stripTrailingNewlines(normalizePromptNewlines(tool.initialInput)) : tool.initialInput;
+  let promptFile: string | undefined;
+  if (tool.initialInputAsFilePointer) {
+    promptFile = await writePromptFile(session.id, text);
+    text = filePointerPrompt(agentVisiblePath(promptFile, wslContext));
+  }
+  const prepared: RunpaneResolvedTool = { ...tool, initialInput: text };
+  const warnings = tool.agent === 'claude' ? claudePromptWarnings(text) : undefined;
+
+  if (!shouldUseArgumentDelivery(prepared) || !isLongPrompt(text)) {
+    return { tool: prepared, useArgumentDelivery: shouldUseArgumentDelivery(prepared), promptFile, warnings };
+  }
+  if (terminalPanelManager.launchShellReadsPromptFile(wslContext)) {
+    const initialInputFile = await writePromptFile(session.id, text);
+    if (promptFileShellWord(initialInputFile)) {
+      return { tool: prepared, useArgumentDelivery: true, initialInputFile, promptFile, warnings };
+    }
+  }
+  return { tool: prepared, useArgumentDelivery: false, promptFile, warnings };
+}
+
+/** A Pane-side file path as the agent's shell sees it (a WSL mount path for WSL repos). */
+function agentVisiblePath(file: string, wslContext: WSLContext | null): string {
+  return wslContext && process.platform === 'win32' ? windowsPathToWSLMount(file) : file;
+}
+
+function sessionWslContext(services: AppServices, sessionId: string): WSLContext | null {
+  return services.sessionManager.getProjectContext(sessionId)?.commandRunner.wslContext ?? null;
 }
 
 async function createTerminalPanelForSession(
   services: AppServices,
   session: Session,
-  tool: RunpaneResolvedTool,
+  requestedTool: RunpaneResolvedTool,
   options: TerminalPanelCreateOptions,
 ): Promise<TerminalPanelCreateResult> {
-  const useArgumentDelivery = shouldUseArgumentDelivery(tool);
+  const wslContext = sessionWslContext(services, session.id);
+  const { tool, useArgumentDelivery, initialInputFile, promptFile, warnings } = await prepareInitialInput(
+    session,
+    requestedTool,
+    wslContext,
+  );
   const shouldCreateSubmitInitialInput = Boolean(
     options.waitReady &&
     tool.agent &&
@@ -1447,16 +1726,18 @@ async function createTerminalPanelForSession(
     !useArgumentDelivery,
   );
   const initialState: TerminalPanelState = {
+    ...toolAgentIdentityState(tool),
     initialCommand: tool.command,
     initialInput: tool.initialInput,
     initialInputSubmitStrategy: tool.agent === 'codex' && !useArgumentDelivery
       ? 'codex-ctrl-enter'
       : 'enter',
-    agentType: tool.agent,
-    isCliPanel: Boolean(tool.agent),
   };
   if (useArgumentDelivery) {
     initialState.initialInputMode = 'argument';
+  }
+  if (initialInputFile) {
+    initialState.initialInputFile = initialInputFile;
   }
   if (shouldCreateSubmitInitialInput) {
     initialState.initialInputSentAt = new Date().toISOString();
@@ -1473,12 +1754,7 @@ async function createTerminalPanelForSession(
   }
 
   const panel = await panelManager.createPanel(createRequest);
-  const context = services.sessionManager.getProjectContext(session.id);
-  await terminalPanelManager.initializeTerminal(
-    panel,
-    session.worktreePath,
-    context?.commandRunner.wslContext ?? null,
-  );
+  await terminalPanelManager.initializeTerminal(panel, session.worktreePath, wslContext);
 
   const readiness = options.waitReady
     ? toPaneReadiness(await waitForPanel(panel, {
@@ -1489,21 +1765,23 @@ async function createTerminalPanelForSession(
     }))
     : undefined;
 
-  const initialInput = readiness ? await submitCreateInitialInput(panel, tool, readiness) : undefined;
+  const initialInput = readiness ? await submitCreateInitialInput(panel, tool, useArgumentDelivery, readiness, session.worktreePath) : undefined;
 
-  return { panel, readiness, initialInput };
+  return { panel, readiness, initialInput, promptFile, warnings };
 }
 
 async function submitCreateInitialInput(
   panel: ToolPanel,
   tool: RunpaneResolvedTool,
-  readiness?: RunpanePaneReadiness,
+  useArgumentDelivery: boolean,
+  readiness: RunpanePaneReadiness | undefined,
+  cwd: string | undefined,
 ): Promise<RunpaneInitialInputDeliveryResult | undefined> {
   if (!tool.initialInput) {
     return undefined;
   }
 
-  if (shouldUseArgumentDelivery(tool)) {
+  if (useArgumentDelivery) {
     const currentPanel = panelManager.getPanel(panel.id);
     const customState = currentPanel && isRecord(currentPanel.state.customState)
       ? currentPanel.state.customState
@@ -1518,6 +1796,9 @@ async function submitCreateInitialInput(
       strategy: 'argument',
       sequenceName: 'argument',
       verifiedSubmitted: delivered,
+      delivery: delivered
+        ? await argumentDelivery(panel, tool, cwd, sentAt)
+        : { state: 'unknown', evidence: 'argv' },
       sentAt,
       nextCommand: readiness?.nextCommand ?? panelWaitCommand(panel.id),
     };
@@ -1545,9 +1826,33 @@ async function submitCreateInitialInput(
     };
   }
 
-  terminalPanelManager.writeToTerminal(panel.id, tool.initialInput);
-  await sleep(300);
-  return submitCreateComposerInput(panel, tool);
+  if (tool.agent !== 'claude' && tool.agent !== 'codex') {
+    terminalPanelManager.writeToTerminal(panel.id, tool.initialInput);
+    await sleep(300);
+    return submitCreateComposerInput(panel, tool, tool.initialInput);
+  }
+  const staged = await stageComposerText(panel, tool.agent, tool.initialInput);
+  return submitCreateComposerInput(panel, tool, staged.evidenceText, composerDeliveryProbe(panel, cwd, tool.agent, tool.initialInput));
+}
+
+/**
+ * A launch-argument prompt reached the agent with its launch (`argv`); the
+ * transcript upgrades that to `transcript` evidence once the agent has
+ * recorded the turn. One read, no waiting: create has already waited for ready.
+ */
+async function argumentDelivery(
+  panel: ToolPanel,
+  tool: RunpaneResolvedTool,
+  cwd: string | undefined,
+  sentAt: string | undefined,
+): Promise<RunpaneDelivery> {
+  const probe = composerDeliveryProbe(panel, cwd, tool.agent, tool.initialInput);
+  const sentAtMs = sentAt ? Date.parse(sentAt) : Number.NaN;
+  if (probe && !Number.isNaN(sentAtMs)) {
+    const check = await checkTranscriptDelivery({ ...probe, sentAtMs });
+    if (check.delivery) return check.delivery;
+  }
+  return { state: 'taken', evidence: 'argv' };
 }
 
 async function clearInitialInputSentPremark(panel: ToolPanel): Promise<void> {
@@ -1569,23 +1874,49 @@ async function clearInitialInputSentPremark(panel: ToolPanel): Promise<void> {
 }
 
 function shouldUseArgumentDelivery(tool: RunpaneResolvedTool): boolean {
+  // A wrapper's own arguments are not the agent's prompt argument.
   return Boolean(
     tool.initialInput &&
+    tool.launchMode !== 'wrapped' &&
     (tool.agent === 'claude' ||
       tool.agent === 'cursor' ||
       (tool.agent === 'codex' && !isSlashCommandInput(tool.initialInput))),
   );
 }
 
+/**
+ * Submit create input already staged in the composer. `evidenceText` is what
+ * the composer shows for it: the text, or the agent's paste marker. A retry
+ * Enter goes only on stable staged-text evidence, and never once the
+ * transcript or the agent's queue hint shows the prompt taken or queued.
+ */
 async function submitCreateComposerInput(
   panel: ToolPanel,
   tool: RunpaneResolvedTool,
+  evidenceText: string,
+  probeBase?: Omit<DeliveryProbe, 'sentAtMs'>,
 ): Promise<RunpaneInitialInputDeliveryResult> {
   const input = tool.initialInput ?? '';
   const submit = resolveComposerSubmit(tool.agent === 'codex' ? 'codex-ctrl-enter' : 'auto', tool.agent);
   const nextCommand = panelScreenCommand(panel.id);
+  const probe = probeBase ? { ...probeBase, sentAtMs: Date.now() } : undefined;
   let lastVerdict: ReturnType<typeof assessComposerEvidence> = 'unknown';
   let attempts = 0;
+  let transcriptLocated = false;
+  const submitted = (delivery: RunpaneDelivery | undefined): RunpaneInitialInputDeliveryResult => ({
+    delivered: true,
+    submitted: true,
+    inputBytes: Buffer.byteLength(input, 'utf8'),
+    strategy: submit.strategy,
+    sequenceName: submit.sequenceName,
+    verifiedSubmitted: true,
+    verification: 'observed' as const,
+    delivery,
+    staged: false,
+    attempts,
+    sentAt: new Date().toISOString(),
+    nextCommand,
+  });
 
   for (let attempt = 1; attempt <= MAX_CREATE_SUBMIT_ATTEMPTS; attempt += 1) {
     attempts = attempt;
@@ -1598,26 +1929,22 @@ async function submitCreateComposerInput(
     while (Date.now() - attemptStartedAt <= DEFAULT_COMPOSER_VERIFY_TIMEOUT_MS) {
       await sleep(DEFAULT_COMPOSER_VERIFY_INTERVAL_MS);
       const afterScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
+      if (probe) {
+        const check = await checkTranscriptDelivery(probe);
+        transcriptLocated ||= check.located;
+        if (check.delivery) return submitted(check.delivery);
+        if (screenShowsQueuedMessage(afterScreen.text, probe.agentType, input)) {
+          return submitted({ state: 'queued', evidence: 'screen' });
+        }
+      }
       lastVerdict = assessComposerEvidence({
         beforeText: beforeScreen.text,
         afterText: afterScreen.text,
-        stagedText: input,
+        stagedText: evidenceText,
       });
 
       if (lastVerdict === 'cleared' && panelHasFreshOutputSince(panel.id, outputGenerationBeforeSubmit)) {
-        return {
-          delivered: true,
-          submitted: true,
-          inputBytes: Buffer.byteLength(input, 'utf8'),
-          strategy: submit.strategy,
-          sequenceName: submit.sequenceName,
-          verifiedSubmitted: true,
-          verification: 'observed' as const,
-          staged: false,
-          attempts,
-          sentAt: new Date().toISOString(),
-          nextCommand,
-        };
+        return submitted(probe ? { state: 'taken', evidence: 'screen' } : undefined);
       }
 
       if (lastVerdict !== 'staged') {
@@ -1635,12 +1962,12 @@ async function submitCreateComposerInput(
       const confirmationVerdict = assessComposerEvidence({
         beforeText: beforeScreen.text,
         afterText: confirmationScreen.text,
-        stagedText: input,
+        stagedText: evidenceText,
       });
       const unchangedSinceFirstSample = assessComposerEvidence({
         beforeText: afterScreen.text,
         afterText: confirmationScreen.text,
-        stagedText: input,
+        stagedText: evidenceText,
       }) === 'staged';
       const confirmationScreenHasFreshOutput = panelHasFreshOutputSince(panel.id, outputGenerationBeforeSubmit);
       lastVerdict = confirmationVerdict;
@@ -1656,6 +1983,12 @@ async function submitCreateComposerInput(
     }
   }
 
+  // Nothing on screen settled it; the transcript gets the rest of the delivery window.
+  if (probe && transcriptLocated && lastVerdict !== 'staged') {
+    const late = await waitForTranscriptDelivery(probe, TRANSCRIPT_DELIVERY_TIMEOUT_MS - (Date.now() - probe.sentAtMs));
+    if (late) return submitted(late);
+  }
+
   return {
     delivered: true,
     submitted: false,
@@ -1663,6 +1996,7 @@ async function submitCreateComposerInput(
     strategy: submit.strategy,
     sequenceName: submit.sequenceName,
     verifiedSubmitted: false,
+    delivery: probe ? { state: lastVerdict === 'staged' ? 'in-composer' : 'unknown', evidence: 'screen' } : undefined,
     staged: lastVerdict === 'staged',
     attempts,
     sentAt: new Date().toISOString(),
@@ -1721,7 +2055,7 @@ async function createPaneItem(
     createdWorktreePath = session.worktreePath;
     const association = await associateCreatedPane(services, options.associateSession, session.id);
 
-    const { panel, readiness, initialInput } = await createTerminalPanelForSession(services, session, tool, {
+    const { panel, readiness, initialInput, promptFile, warnings } = await createTerminalPanelForSession(services, session, tool, {
       activate: options.activate,
       waitReady: options.waitReady,
       readyTimeoutMs: options.readyTimeoutMs,
@@ -1744,6 +2078,8 @@ async function createPaneItem(
       readiness,
       initialInput,
       association,
+      promptFile,
+      warnings,
     };
   } catch (error) {
     return createFailureItem(index, item, error, createdSessionId, createdWorktreePath);
@@ -1821,10 +2157,15 @@ async function buildPanelScreenResult(panel: ToolPanel, limit: number): Promise<
   const persisted = liveSnapshot ? null : panelDatabase.getPanelBuffers(panel.id);
   const { source, rawText } = selectPanelScreenText(liveSnapshot, customState, persisted);
   const bounded = boundSanitizedLines(rawText, limit);
-  const composerText = state.agentType === 'claude' && liveSnapshot
-    ? terminalPanelManager.getInputScreenText(panel.id) ?? bounded.text
-    : bounded.text;
-  const composer = detectPanelComposer(composerText, state.agentType);
+  // A wrapper agent Pane has not confirmed yet is still read by its screen signature.
+  const composerAgentType = state.agentType ?? detectAgentFromScreen(bounded.text);
+  // The live viewport split into typed and ghost (placeholder, suggestion) cells.
+  const composer = detectAgentComposer(bounded.text, composerAgentType, liveSnapshot
+    ? {
+      typedText: terminalPanelManager.getInputScreenText(panel.id),
+      ghostText: terminalPanelManager.getGhostScreenText(panel.id),
+    }
+    : {});
 
   return {
     ok: true,
@@ -1839,56 +2180,6 @@ async function buildPanelScreenResult(panel: ToolPanel, limit: number): Promise<
     composer,
     nextCommand: bounded.hasMore ? panelOutputCommand(panel.id) : panelWaitCommand(panel.id),
   };
-}
-
-function detectPanelComposer(
-  text: string,
-  agentType: RunpaneAgentId | undefined,
-): RunpanePanelScreenResult['composer'] {
-  if (agentType === 'claude') {
-    return detectClaudeComposer(text);
-  }
-  if (agentType !== 'codex' || CODEX_LOADING_HEADER.test(text)) {
-    return { isPresent: false, hasUndeliveredText: false };
-  }
-
-  const lines = text.split(/\r?\n/u).map(line => line.trim());
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const match = lines[index].match(/^[›❯]\s*(.*)$/u);
-    if (!match) continue;
-
-    const content = match[1].trim();
-    const isPlaceholder = /^ask codex to do anything[.!]?$/iu.test(content);
-    return {
-      isPresent: true,
-      hasUndeliveredText: content.length > 0 && !isPlaceholder,
-    };
-  }
-
-  const hasPastedContent = /\[Pasted Content[^\]]*\]/iu.test(text);
-  return {
-    isPresent: hasPastedContent,
-    hasUndeliveredText: hasPastedContent,
-  };
-}
-
-// Claude draws its composer as a `❯` line boxed between two horizontal rules;
-// held input is anything between the prompt marker and the closing rule.
-function detectClaudeComposer(text: string): RunpanePanelScreenResult['composer'] {
-  const lines = text.split(/\r?\n/u).map(line => line.trim());
-  const isRule = (line: string | undefined) => line !== undefined && /^─{3,}$/u.test(line);
-  for (let index = lines.length - 1; index > 0; index -= 1) {
-    const match = lines[index].match(/^❯(?:\s+(.*))?$/u);
-    if (!match || !isRule(lines[index - 1])) continue;
-
-    const closingRule = lines.findIndex((line, lineIndex) => lineIndex > index && isRule(line));
-    const held = [match[1] ?? '', ...lines.slice(index + 1, closingRule < 0 ? undefined : closingRule)];
-    return {
-      isPresent: true,
-      hasUndeliveredText: held.some(line => line.length > 0),
-    };
-  }
-  return { isPresent: false, hasUndeliveredText: false };
 }
 
 interface PanelScreenText {
@@ -2113,12 +2404,6 @@ function ensureSubmitEnter(input: string): string {
   return `${input}\r`;
 }
 
-function stripSubmitEnter(input: string): string {
-  if (input.endsWith('\r\n')) return input.slice(0, -2);
-  if (input.endsWith('\r') || input.endsWith('\n')) return input.slice(0, -1);
-  return input;
-}
-
 interface ComposerSubmit {
   strategy: 'codex-ctrl-enter' | 'enter' | 'tab';
   sequenceName: RunpanePanelSubmitComposerResult['sequenceName'];
@@ -2148,26 +2433,48 @@ function resolveComposerSubmit(
   };
 }
 
+/**
+ * Press the composer's submit sequence and report where the prompt went.
+ * `delivery` names the submitted text for the transcript check; without it,
+ * any turn the agent takes after Enter counts (submit-composer does not know
+ * what the composer holds).
+ */
 async function submitComposerForPanel(
   panel: ToolPanel,
   strategy: RunpanePanelSubmitComposerStrategy | undefined,
+  delivery: { cwd: string | undefined; text?: string },
 ): Promise<RunpanePanelSubmitComposerResult> {
   const beforeScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
-  const state = beforeScreen.state;
-  const submit = resolveComposerSubmit(strategy, state.agentType, state.activityStatus);
+  const agentType = screenAgentType(beforeScreen);
+  let submit = resolveComposerSubmit(strategy, agentType, beforeScreen.state.activityStatus);
+  const probeBase = composerDeliveryProbe(panel, delivery.cwd, agentType, delivery.text);
+  const probe = probeBase ? { ...probeBase, sentAtMs: Date.now() } : undefined;
   const outputGenerationBeforeSubmit = terminalPanelManager.getOutputGeneration(panel.id);
   terminalPanelManager.writeToTerminal(panel.id, submit.input);
-  const verification = await verifyComposerSubmitted(panel, beforeScreen, outputGenerationBeforeSubmit);
+  let inputBytes = Buffer.byteLength(submit.input, 'utf8');
+  let verification = await verifyComposerSubmitted(panel, beforeScreen, outputGenerationBeforeSubmit, probe);
+
+  // The staged text still sitting in the composer proves the first submit was
+  // not taken (an agent mid-paste or busy can drop it). Retry once using the
+  // current activity state; a busy Codex must still queue with Tab.
+  if ((strategy ?? 'auto') === 'auto' && verification.stagedTextVisible) {
+    const outputGenerationBeforeRetry = terminalPanelManager.getOutputGeneration(panel.id);
+    submit = resolveComposerSubmit('auto', agentType, verification.latestScreen.state.activityStatus);
+    terminalPanelManager.writeToTerminal(panel.id, submit.input);
+    inputBytes += Buffer.byteLength(submit.input, 'utf8');
+    verification = await verifyComposerSubmitted(panel, verification.latestScreen, outputGenerationBeforeRetry, probe);
+  }
 
   return {
     ok: verification.ok,
     panelId: panel.id,
     paneId: panel.sessionId,
-    inputBytes: Buffer.byteLength(submit.input, 'utf8'),
+    inputBytes,
     strategy: submit.strategy,
     sequenceName: submit.sequenceName,
     verifiedSubmitted: verification.verifiedSubmitted,
     verification: verification.verification,
+    delivery: verification.delivery,
     sentAt: new Date().toISOString(),
     blocked: verification.blocked,
     nextCommand: verification.blocked?.suggestedCommand ?? panelWaitCommand(panel.id),
@@ -2177,47 +2484,194 @@ async function submitComposerForPanel(
 async function waitForPanelScreen(
   panel: ToolPanel,
   isReady: (screen: RunpanePanelScreenResult) => boolean,
+  timeoutMs = CLAUDE_INPUT_WAIT_TIMEOUT_MS,
 ): Promise<RunpanePanelScreenResult> {
   const startedAt = Date.now();
   let screen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
-  while (!isReady(screen) && Date.now() - startedAt < CLAUDE_INPUT_WAIT_TIMEOUT_MS) {
+  while (!isReady(screen) && Date.now() - startedAt < timeoutMs) {
     await sleep(DEFAULT_COMPOSER_VERIFY_INTERVAL_MS);
     screen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
   }
   return screen;
 }
 
+interface StagedComposerText {
+  inputBytes: number;
+  /** What the composer shows for the staged text: the agent's paste marker, or the text. */
+  evidenceText: string;
+}
+
+/**
+ * Type text into a Claude or Codex composer and wait until it has landed, so
+ * the caller's Enter goes as its own write. Long or multi-line text goes as
+ * one bracketed paste (when the agent turned bracketed paste on): newlines
+ * stay text, and Enter waits for the paste marker or the text, then for the
+ * agent to stop drawing (bounded).
+ */
+async function stageComposerText(
+  panel: ToolPanel,
+  agentType: 'claude' | 'codex',
+  text: string,
+): Promise<StagedComposerText> {
+  const pasted = isLongPrompt(text) && terminalPanelManager.isBracketedPasteEnabled(panel.id);
+  const payload = pasted ? bracketedPaste(text) : text;
+  // A short Codex stage waits a fixed delay and reads no output.
+  const watchesEcho = agentType === 'claude' || pasted;
+  const outputGenerationBeforeStage = watchesEcho ? terminalPanelManager.getOutputGeneration(panel.id) : 0;
+  terminalPanelManager.writeToTerminal(panel.id, payload);
+  const landed = (screen: RunpanePanelScreenResult) =>
+    screen.composer.hasUndeliveredText && panelHasFreshOutputSince(panel.id, outputGenerationBeforeStage);
+
+  let screen: RunpanePanelScreenResult | undefined;
+  if (agentType === 'claude') {
+    screen = await waitForPanelScreen(panel, landed);
+  } else {
+    await sleep(CODEX_SUBMIT_STAGE_DELAY_MS);
+    if (pasted) screen = await waitForPanelScreen(panel, landed, CODEX_PASTE_ECHO_TIMEOUT_MS);
+  }
+  if (pasted) {
+    await waitForPanelOutputQuiet(panel.id);
+    screen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
+  }
+
+  return {
+    inputBytes: Buffer.byteLength(payload, 'utf8'),
+    evidenceText: (pasted && screen ? composerEvidenceText(screen.text) : '') || text,
+  };
+}
+
+/** Wait until the panel has drawn nothing for a short window, bounded. */
+async function waitForPanelOutputQuiet(panelId: string): Promise<void> {
+  const startedAt = Date.now();
+  while (panelHasOutputWithin(panelId, PASTE_SETTLE_QUIET_MS) && Date.now() - startedAt < PASTE_SETTLE_MAX_MS) {
+    await sleep(DEFAULT_COMPOSER_VERIFY_INTERVAL_MS);
+  }
+}
+
+/**
+ * What a composer submit is checked against: the agent's transcript (when
+ * Pane can find it) and its queued-message hint on screen.
+ */
+interface DeliveryProbe {
+  agentType: 'claude' | 'codex';
+  locator?: TranscriptLocator;
+  /** The submitted text; undefined when Pane could not read it, and any turn taken since `sentAtMs` counts. */
+  text?: string;
+  /** When Pane pressed Enter. */
+  sentAtMs: number;
+}
+
+interface TranscriptCheck {
+  delivery?: RunpaneDelivery;
+  /** Whether the panel's transcript exists, so waiting on it can pay off. */
+  located: boolean;
+}
+
+async function checkTranscriptDelivery(probe: DeliveryProbe): Promise<TranscriptCheck> {
+  if (!probe.locator) return { located: false };
+  try {
+    const lookup = await agentTranscripts.findUserTurnSince(probe.locator, probe.sentAtMs, probe.text);
+    return {
+      delivery: lookup.state ? { state: lookup.state, evidence: 'transcript' } : undefined,
+      located: lookup.file !== undefined,
+    };
+  } catch {
+    return { located: false };
+  }
+}
+
+/** Poll the transcript until it shows the turn taken or queued, or `timeoutMs` passes. */
+async function waitForTranscriptDelivery(probe: DeliveryProbe, timeoutMs: number): Promise<RunpaneDelivery | undefined> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await sleep(TRANSCRIPT_POLL_INTERVAL_MS);
+    const check = await checkTranscriptDelivery(probe);
+    if (check.delivery) return check.delivery;
+  }
+  return undefined;
+}
+
+/** Where the panel's agent writes its transcript; undefined for other panels or a Pane with no worktree. */
+function panelTranscriptLocator(
+  panel: ToolPanel,
+  cwd: string | undefined,
+  agentType: RunpaneAgentId | undefined,
+): TranscriptLocator | undefined {
+  if (!cwd || (agentType !== 'claude' && agentType !== 'codex')) return undefined;
+  const current = panelManager.getPanel(panel.id) ?? panel;
+  const customState = isRecord(current.state?.customState) ? current.state.customState : {};
+  const createdAt = Date.parse(panel.metadata?.createdAt ?? '');
+  return {
+    agent: agentType,
+    cwd,
+    sessionId: optionalString(customState.agentSessionId),
+    notBeforeMs: Number.isNaN(createdAt) ? undefined : createdAt,
+  };
+}
+
+/** A delivery probe for a Claude or Codex composer; other panels have none. */
+function composerDeliveryProbe(
+  panel: ToolPanel,
+  cwd: string | undefined,
+  agentType: RunpaneAgentId | undefined,
+  text: string | undefined,
+): Omit<DeliveryProbe, 'sentAtMs'> | undefined {
+  if (agentType !== 'claude' && agentType !== 'codex') return undefined;
+  return { agentType, locator: panelTranscriptLocator(panel, cwd, agentType), text };
+}
+
+/**
+ * After Enter, learn where the prompt went. The transcript is read on every
+ * poll and settles it (taken or queued); so does the agent's queued-message
+ * hint on screen. Otherwise the screen decides: a steadily empty composer is
+ * `taken`, text still in it is `in-composer`, and anything else waits on the
+ * transcript for the rest of TRANSCRIPT_DELIVERY_TIMEOUT_MS before `unknown`.
+ */
 async function verifyComposerSubmitted(
   panel: ToolPanel,
   beforeScreen: RunpanePanelScreenResult,
   outputGenerationBeforeSubmit: number,
-): Promise<{
-  ok: boolean;
-  verifiedSubmitted: boolean;
-  verification?: 'observed' | 'unverifiable';
-  blocked?: RunpanePanelBlockedState;
-}> {
+  probe?: DeliveryProbe,
+): Promise<ComposerVerification> {
   const beforeHadComposerPrompt = beforeScreen.composer.hasUndeliveredText || looksLikePendingComposer(beforeScreen.text);
-  if (!beforeHadComposerPrompt && !beforeScreen.text.trim()) {
-    return { ok: true, verifiedSubmitted: false };
+  if (!beforeHadComposerPrompt && !beforeScreen.text.trim() && !probe) {
+    return { ok: true, verifiedSubmitted: false, latestScreen: beforeScreen, stagedTextVisible: false };
   }
+  const agentType = screenAgentType(beforeScreen);
   const stagedText = composerEvidenceText(beforeScreen.text);
   let latestScreen = beforeScreen;
   let previousPollShowedEmptyComposer = false;
+  let transcriptLocated = false;
+  let clearedOnScreen = false;
   const startedAt = Date.now();
+  const delivered = (delivery: RunpaneDelivery): ComposerVerification => ({
+    ok: true,
+    verifiedSubmitted: true,
+    verification: 'observed',
+    latestScreen,
+    stagedTextVisible: false,
+    delivery,
+  });
 
-  while (Date.now() - startedAt <= DEFAULT_COMPOSER_VERIFY_TIMEOUT_MS) {
+  while (!clearedOnScreen && Date.now() - startedAt <= DEFAULT_COMPOSER_VERIFY_TIMEOUT_MS) {
     await sleep(DEFAULT_COMPOSER_VERIFY_INTERVAL_MS);
     latestScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
 
+    if (probe) {
+      const check = await checkTranscriptDelivery(probe);
+      transcriptLocated ||= check.located;
+      if (check.delivery) return delivered(check.delivery);
+      if (probe.text && screenShowsQueuedMessage(latestScreen.text, probe.agentType, probe.text)) {
+        return delivered({ state: 'queued', evidence: 'screen' });
+      }
+    }
+
     // Claude always draws its composer box, and repaints (at startup, say)
     // briefly show neither the box nor the prompt; only a steady empty box
-    // proves the prompt was taken.
-    if (beforeScreen.state.agentType === 'claude') {
+    // proves the prompt left it.
+    if (agentType === 'claude') {
       const showsEmptyComposer = latestScreen.composer.isPresent && !latestScreen.composer.hasUndeliveredText;
-      if (beforeHadComposerPrompt && showsEmptyComposer && previousPollShowedEmptyComposer) {
-        return { ok: true, verifiedSubmitted: true, verification: 'observed' };
-      }
+      clearedOnScreen = beforeHadComposerPrompt && showsEmptyComposer && previousPollShowedEmptyComposer;
       previousPollShowedEmptyComposer = showsEmptyComposer;
       continue;
     }
@@ -2227,16 +2681,16 @@ async function verifyComposerSubmitted(
       afterText: latestScreen.text,
       stagedText,
     });
-    const hasFreshOutput = panelHasFreshOutputSince(panel.id, outputGenerationBeforeSubmit);
+    clearedOnScreen = (verdict === 'cleared' && !latestScreen.composer.hasUndeliveredText && panelHasFreshOutputSince(panel.id, outputGenerationBeforeSubmit)) ||
+      (beforeHadComposerPrompt && !latestScreen.composer.hasUndeliveredText && !looksLikePendingComposer(latestScreen.text));
+  }
 
-    if (verdict === 'cleared' && hasFreshOutput && !latestScreen.composer.hasUndeliveredText) {
-      return { ok: true, verifiedSubmitted: true, verification: 'observed' };
-    }
-
-    if (beforeHadComposerPrompt && !latestScreen.composer.hasUndeliveredText && !looksLikePendingComposer(latestScreen.text)) {
-      return { ok: true, verifiedSubmitted: true, verification: 'observed' };
-    }
-
+  if (clearedOnScreen) {
+    // The composer emptied; the transcript, once written, says whether the agent took the turn or queued it.
+    const confirmed = probe && transcriptLocated
+      ? await waitForTranscriptDelivery(probe, TRANSCRIPT_CONFIRM_MS)
+      : undefined;
+    return delivered(confirmed ?? { state: 'taken', evidence: 'screen' });
   }
 
   if (beforeHadComposerPrompt && (latestScreen.composer.hasUndeliveredText || looksLikePendingComposer(latestScreen.text))) {
@@ -2251,14 +2705,59 @@ async function verifyComposerSubmitted(
           ? `runpane panels input --panel ${panel.id} --keys ${latestScreen.state.activityStatus === 'active' ? 'tab' : 'enter'} --yes --json`
           : panelScreenCommand(panel.id),
       },
+      latestScreen,
+      stagedTextVisible: latestScreen.composer.hasUndeliveredText,
+      delivery: probe ? { state: 'in-composer', evidence: 'screen' } : undefined,
     };
   }
 
+  if (probe && transcriptLocated) {
+    const late = await waitForTranscriptDelivery(probe, TRANSCRIPT_DELIVERY_TIMEOUT_MS - (Date.now() - startedAt));
+    if (late) return delivered(late);
+  }
+  const unknown: RunpaneDelivery | undefined = probe ? { state: 'unknown', evidence: 'screen' } : undefined;
   if (panelHasFreshOutputSince(panel.id, outputGenerationBeforeSubmit)) {
-    return { ok: true, verifiedSubmitted: false, verification: 'unverifiable' };
+    return { ok: true, verifiedSubmitted: false, verification: 'unverifiable', latestScreen, stagedTextVisible: false, delivery: unknown };
   }
 
-  return { ok: true, verifiedSubmitted: false };
+  return { ok: true, verifiedSubmitted: false, latestScreen, stagedTextVisible: false, delivery: unknown };
+}
+
+interface ComposerVerification {
+  ok: boolean;
+  /** The agent took or queued the prompt. */
+  verifiedSubmitted: boolean;
+  verification?: 'observed' | 'unverifiable';
+  blocked?: RunpanePanelBlockedState;
+  latestScreen: RunpanePanelScreenResult;
+  /** The composer still shows held text, so the submit was not taken. */
+  stagedTextVisible: boolean;
+  /** Present when the submit had a delivery probe (a Claude or Codex composer). */
+  delivery?: RunpaneDelivery;
+}
+
+/** The panel's agent, or the agent its screen shows before Pane has confirmed it. */
+function screenAgentType(screen: RunpanePanelScreenResult): RunpaneAgentId | undefined {
+  return screen.state.agentType ?? detectAgentFromScreen(screen.text);
+}
+
+/**
+ * A Claude or Codex panel with no composer on screen: typed text could land
+ * anywhere, so submit reports it rather than writing blind. Claude's quiet
+ * full-screen menus and Pane's own shell prompt (the agent has exited) keep
+ * the plain write.
+ */
+function isComposerUnknown(
+  panel: ToolPanel,
+  screen: RunpanePanelScreenResult,
+  agentType: RunpaneAgentId | undefined,
+): boolean {
+  if (agentType !== 'claude' && agentType !== 'codex') return false;
+  if (screen.composer.isPresent) return false;
+  if (agentType === 'claude' && screen.state.isAlternateScreen === true && !panelHasOutputWithin(panel.id, CLAUDE_UI_QUIET_MS)) {
+    return false;
+  }
+  return terminalPanelManager.getForegroundProcess(panel.id)?.isShell !== true;
 }
 
 function composerEvidenceText(text: string): string {
@@ -2269,11 +2768,6 @@ function composerEvidenceText(text: string): string {
   }
   const pasted = text.match(/\[Pasted (?:Content|text)[^\]]*\]/iu);
   return pasted?.[0] ?? '';
-}
-
-function looksLikePendingComposer(text: string): boolean {
-  return /\[Pasted (?:Content|text)[^\]]*\]/i.test(text) ||
-    /(?:press\s+)?(?:ctrl|control)\+enter\s+to\s+submit/i.test(text);
 }
 
 // GUI-launched Electron PATHs typically miss ~/.local/bin, cursor-agent's install target.
@@ -2652,6 +3146,7 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pr.conflicted',
   'pr.checks',
   'pr.merged',
+  'agent.report',
 );
 
 function parseWorkspaceKinds(value: PaneCommandValue): RunpaneWorkspaceEntryKind[] | undefined {
@@ -2946,6 +3441,36 @@ function parsePanelScreenRequest(value: PaneCommandValue): RunpanePanelScreenReq
   };
 }
 
+function parsePanelLastMessageRequest(value: PaneCommandValue): RunpanePanelLastMessageRequest {
+  if (!isRecord(value)) {
+    throw new Error('Panel last-message request must be an object');
+  }
+  const panelId = optionalString(value.panelId)?.trim();
+  if (!panelId) {
+    throw new Error('Panel last-message request must include panelId');
+  }
+  return { panelId, limit: parsePositiveInteger(value.limit, 'limit') };
+}
+
+const reportRequestSchema = boundary.object({
+  paneId: boundary.optional(boundary.string),
+  panelId: boundary.nonEmptyString,
+  state: boundary.enumeration(...AGENT_REPORT_STATES),
+  pr: boundary.optional(boundary.number),
+  head: boundary.optional(boundary.string),
+  summary: boundary.optional(boundary.string),
+  summaryPath: boundary.optional(boundary.string),
+  question: boundary.optional(boundary.string),
+});
+
+function parseReportRequest(value: PaneCommandValue): RunpaneReportRequest {
+  if (!isRecord(value)) {
+    throw new Error('Report request must be an object');
+  }
+  const decoded = decodeBoundary(value, reportRequestSchema);
+  return { ...decoded, paneId: decoded.paneId?.trim() || undefined, panelId: decoded.panelId.trim() };
+}
+
 function parsePanelSubmitRequest(value: PaneCommandValue): RunpanePanelSubmitRequest {
   if (!isRecord(value)) {
     throw new Error('Panel submit request must be an object');
@@ -2963,6 +3488,7 @@ function parsePanelSubmitRequest(value: PaneCommandValue): RunpanePanelSubmitReq
   return {
     panelId,
     input,
+    asFilePointer: optionalBoolean(value.asFilePointer),
   };
 }
 
@@ -3364,15 +3890,22 @@ function parseRunpaneToolSpec(value: PaneCommandValue, label: string): RunpaneTo
       agent,
       title: optionalString(value.title),
       initialInput: optionalString(value.initialInput),
+      initialInputAsFilePointer: optionalBoolean(value.initialInputAsFilePointer),
     };
   }
 
   const command = optionalString(value.command);
   if (command && command.trim().length > 0) {
+    const agentType = optionalAgentId(value.agentType);
+    if (value.agentType !== undefined && value.agentType !== null && !agentType) {
+      throw new Error(`${label} tool agentType must be one of ${RUNPANE_CONTRACT.enums.agents.join(', ')}`);
+    }
     return {
       command,
+      agentType,
       title: optionalString(value.title),
       initialInput: optionalString(value.initialInput),
+      initialInputAsFilePointer: optionalBoolean(value.initialInputAsFilePointer),
     };
   }
 
@@ -3487,14 +4020,44 @@ function resolveToolSpec(tool: RunpaneToolSpec, environment?: ProjectEnvironment
       command: template.command,
       agent: tool.agent,
       initialInput: tool.initialInput,
+      initialInputAsFilePointer: tool.initialInputAsFilePointer,
     };
   }
 
+  const declaredAgent = tool.agentType;
+  if (!declaredAgent) {
+    return {
+      title: tool.title ?? 'Terminal',
+      command: tool.command,
+      initialInput: tool.initialInput,
+      initialInputAsFilePointer: tool.initialInputAsFilePointer,
+    };
+  }
+
+  // `--agent` with `--tool-command` names the agent the command runs. A
+  // wrapper is launched as given; a plain agent command keeps its usual launch.
   return {
-    title: tool.title ?? 'Terminal',
+    title: tool.title ?? AGENT_TEMPLATES[declaredAgent].title,
     command: tool.command,
+    agent: declaredAgent,
+    launchMode: resolveAgentTypeFromCommand(tool.command) === declaredAgent ? undefined : 'wrapped',
     initialInput: tool.initialInput,
+    initialInputAsFilePointer: tool.initialInputAsFilePointer,
   };
+}
+
+/** Panel custom state for a tool's agent identity and launch command. */
+function toolAgentIdentityState(tool: RunpaneResolvedTool): TerminalPanelState {
+  const state: TerminalPanelState = {
+    agentType: tool.agent,
+    launchCommand: tool.command,
+    isCliPanel: Boolean(tool.agent),
+  };
+  if (tool.launchMode === 'wrapped') {
+    state.launchMode = 'wrapped';
+    state.agentDetection = 'declared';
+  }
+  return state;
 }
 
 type DescribedTool = Pick<RunpaneResolvedTool, 'title' | 'command' | 'agent'>;

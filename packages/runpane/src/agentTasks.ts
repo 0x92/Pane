@@ -2,17 +2,33 @@ import type { ParsedArgs } from './commands';
 import { confirmMutation } from './daemonActions';
 import { invokeDaemon } from './daemonClient';
 import { buildPaneLink } from './links';
+import { describeReport } from './watchLines';
 import {
+  type AgentReport,
   buildPaneCreateRequest,
   buildPanelInputRequest,
+  markSuggestionLine,
   paneCreateResultSchema,
   panelListResultSchema,
   panelScreenResultSchema,
   panelSubmitResultSchema,
+  printPromptNotes,
   workspaceStateResultSchema,
 } from './localControl';
 
 type AgentStatus = 'working' | 'ready' | 'blocked' | 'idle' | 'exited' | 'unknown';
+
+interface AgentStatusResult {
+  ok: true;
+  paneId: string;
+  panelId: string;
+  paneName?: string;
+  status: AgentStatus;
+  screen: string;
+  hasUndeliveredText: boolean;
+  link: string;
+  report?: AgentReport;
+}
 
 /** Terminal control bytes other than tab and newline are keystrokes, not message text. */
 function hasControlCharacters(text: string): boolean {
@@ -68,13 +84,14 @@ export async function runAgentsStart(parsed: ParsedArgs): Promise<number> {
 /** `agents status`: the agent's current state from the workspace journal plus its screen. */
 export async function runAgentsStatus(parsed: ParsedArgs): Promise<number> {
   const { paneId, panelId } = await resolveAgentPanel(parsed);
-  const [state, screen] = await Promise.all([
+  const [state, screen, report] = await Promise.all([
     invokeDaemon('runpane:workspace:state', [{}], workspaceStateResultSchema, { paneDir: parsed.paneDir }),
     invokeDaemon('runpane:panels:screen', [{ panelId, limit: parsed.limit ?? 40 }], panelScreenResultSchema, { paneDir: parsed.paneDir }),
+    readPanelReport(parsed, paneId, panelId),
   ]);
   const entry = state.entries.find((candidate) => candidate.panelId === panelId);
-  const result = {
-    ok: true as const,
+  const result: AgentStatusResult = {
+    ok: true,
     paneId,
     panelId,
     paneName: entry?.paneName,
@@ -83,11 +100,20 @@ export async function runAgentsStatus(parsed: ParsedArgs): Promise<number> {
     hasUndeliveredText: screen.composer.hasUndeliveredText,
     link: buildPaneLink({ kind: 'pane', id: paneId, panelId }),
   };
-  print(parsed, result, `${result.status}\n${result.screen}`);
+  if (report) result.report = report;
+  const reportLine = report ? `\nReport: ${describeReport(report)} (${report.reportedAt})` : '';
+  print(parsed, result, `${result.status}${reportLine}\n${markSuggestionLine(result.screen, screen.composer.ghostText)}`);
   return 0;
 }
 
-/** `agents send`: submit a follow-up and report whether Pane saw it leave the composer. */
+/** The panel's latest `runpane report`, from its Pane's panel list. */
+async function readPanelReport(parsed: ParsedArgs, paneId: string, panelId: string): Promise<AgentReport | undefined> {
+  if (!paneId) return undefined;
+  const { panels } = await invokeDaemon('runpane:panels:list', [{ paneId }], panelListResultSchema, { paneDir: parsed.paneDir });
+  return panels.find((candidate) => candidate.panelId === panelId)?.report;
+}
+
+/** `agents send`: submit a follow-up and report whether the agent took or queued it. */
 export async function runAgentsSend(parsed: ParsedArgs): Promise<number> {
   if (parsed.panelInput !== undefined && hasControlCharacters(parsed.panelInput)) {
     throw new Error('runpane agents send types a message and presses Enter, so it cannot send keys such as arrows, Escape, or Ctrl-C. '
@@ -103,14 +129,19 @@ export async function runAgentsSend(parsed: ParsedArgs): Promise<number> {
     paneId,
     panelId,
     delivered,
+    delivery: sent.delivery,
     blocked: sent.blocked?.message,
+    promptFile: sent.promptFile,
+    warnings: sent.warnings,
     next: delivered
       ? `Check on it with \`runpane agents status --pane ${paneId}\`.`
       : sent.nextCommand
         ? `The message is still in the composer. Run \`${sent.nextCommand}\`, then \`runpane agents status --panel ${panelId}\` to verify delivery.`
         : `The message may still be in the composer. Run \`runpane agents status --panel ${panelId}\` to see the screen.`,
   };
-  print(parsed, result, delivered ? `Delivered to ${panelId}.` : `Not confirmed: ${result.blocked ?? result.next}`);
+  const how = sent.delivery ? ` (${sent.delivery.state}, from the ${sent.delivery.evidence})` : '';
+  print(parsed, result, delivered ? `Delivered to ${panelId}${how}.` : `Not confirmed${how}: ${result.blocked ?? result.next}`);
+  if (!parsed.json) printPromptNotes(result);
   return delivered ? 0 : 1;
 }
 

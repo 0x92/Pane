@@ -578,6 +578,103 @@
       "--json",
       "--pane-dir",
       "/tmp/pane"
+    ],
+    [
+      "panels",
+      "create",
+      "--pane",
+      "pane-1",
+      "--agent",
+      "codex",
+      "--tool-command",
+      "wrapper codex-run",
+      "--wait-ready",
+      "--yes",
+      "--json"
+    ],
+    [
+      "panes",
+      "create",
+      "--repo",
+      "active",
+      "--name",
+      "farm",
+      "--tool-command",
+      "agent-farm run free-range",
+      "--agent",
+      "claude",
+      "--prompt",
+      "Plan",
+      "--yes",
+      "--json"
+    ],
+    [
+      "panels",
+      "submit",
+      "--panel",
+      "panel-1",
+      "--input-file",
+      "brief.md",
+      "--as-file-pointer",
+      "--yes",
+      "--json"
+    ],
+    [
+      "panes",
+      "create",
+      "--repo",
+      "active",
+      "--name",
+      "long",
+      "--agent",
+      "claude",
+      "--initial-input-file",
+      "brief.md",
+      "--as-file-pointer",
+      "--dry-run",
+      "--yes",
+      "--json"
+    ],
+    [
+      "report",
+      "--state",
+      "ready",
+      "--pr",
+      "747",
+      "--head",
+      "FC5DCE9",
+      "--summary",
+      "Done: tests pass",
+      "--json"
+    ],
+    [
+      "report",
+      "--state",
+      "blocked",
+      "--question",
+      "Which API version?",
+      "--pane",
+      "session-1",
+      "--panel",
+      "panel-1",
+      "--summary-file",
+      "-"
+    ],
+    [
+      "report",
+      "--state=done",
+      "--summary-file=/tmp/report.md",
+      "--pane-dir",
+      "/tmp/pane"
+    ],
+    [
+      "panels",
+      "last-message",
+      "--panel",
+      "panel-1",
+      "--limit",
+      "5000",
+      "--json"
     ]
   ],
   "help": {
