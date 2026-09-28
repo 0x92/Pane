@@ -9,7 +9,8 @@ command always matches the running Pane build.
 - `pnpm build:main` bundles `packages/runpane/src/cli.ts` into
   `main/dist/runpane/runpane.cjs` (`main/build-runpane-cli.js`). It ships
   inside the app with the rest of `main/dist`, and `pnpm dev` builds it
-  through `pnpm build:main`.
+  through `pnpm build:main`. The bundle embeds its version and docs search
+  index, so both still work after the single file is copied out of the app.
 - At startup (`createPaneDaemonHost`, which both the desktop app and the
   headless daemon use), Pane copies that file to `<PANE_DIR>/bin/runpane.cjs`
   and writes a `<PANE_DIR>/bin/runpane` shim (plus `runpane.cmd` on Windows).

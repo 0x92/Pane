@@ -26,8 +26,10 @@ const EXCERPT_CHARS = 240;
 export function loadDocs(paneDir: string | undefined): DocEntry[] {
   const entries: DocEntry[] = [];
   const indexFile = path.join(__dirname, 'docs-index.json');
-  if (fs.existsSync(indexFile)) {
-    for (const doc of decodeBoundary(JSON.parse(fs.readFileSync(indexFile, 'utf8')), indexedDocSchema)) {
+  const bundledIndex = process.env.RUNPANE_BUNDLED_DOCS_INDEX;
+  const indexJson = bundledIndex ?? (fs.existsSync(indexFile) ? fs.readFileSync(indexFile, 'utf8') : undefined);
+  if (indexJson) {
+    for (const doc of decodeBoundary(JSON.parse(indexJson), indexedDocSchema)) {
       entries.push({ ...doc, kind: 'doc' });
     }
   }
