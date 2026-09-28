@@ -34,11 +34,15 @@ function install(): RunpaneShimState {
 }
 
 describe('installRunpaneShim', () => {
-  it('copies the bundled CLI and writes a runnable managed shim', () => {
+  it('copies the bundled CLI and writes a managed shim', () => {
     const state = install();
     expect(state.shimPath).toBe(path.join(appDirectory, 'bin', 'runpane'));
     expect(fs.readFileSync(path.join(appDirectory, 'bin', 'runpane.cjs'), 'utf8')).toBe(fs.readFileSync(bundledCliPath, 'utf8'));
     expect(fs.readFileSync(state.shimPath, 'utf8')).toContain(PANE_MANAGED_SHIM_MARKER);
+  });
+
+  it.skipIf(process.platform === 'win32')('runs the POSIX shim', () => {
+    const state = install();
     expect(fs.statSync(state.shimPath).mode & 0o111).not.toBe(0);
     const env = { ...process.env };
     delete env.PANE_DIR;
