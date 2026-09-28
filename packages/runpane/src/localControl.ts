@@ -710,6 +710,7 @@ interface PaneCreateRequestInput {
   noFocus?: boolean;
   focus?: boolean;
   source?: 'user' | 'agent';
+  associateSession?: string;
 }
 
 interface PaneAdoptRequestInput extends Omit<PaneAdoptRequest, 'panes'> {
@@ -1328,6 +1329,7 @@ const paneCreateRequestInputSchema: BoundarySchema<PaneCreateRequestInput> = bou
   noFocus: boundary.optional(boundary.boolean),
   focus: boundary.optional(boundary.boolean),
   source: boundary.optional(boundary.enumeration('user', 'agent')),
+  associateSession: boundary.optional(boundary.string),
 });
 const paneAdoptRequestInputSchema: BoundarySchema<PaneAdoptRequestInput> = boundary.object({
   repo: repoSelectorSchema,
@@ -1345,6 +1347,7 @@ const paneAdoptRequestInputSchema: BoundarySchema<PaneAdoptRequestInput> = bound
   noFocus: boundary.optional(boundary.boolean),
   focus: boundary.optional(boundary.boolean),
   source: boundary.optional(boundary.enumeration('user', 'agent')),
+  associateSession: boundary.optional(boundary.string),
 });
 
 export async function runReposList(parsed: ParsedArgs): Promise<number> {
@@ -1726,7 +1729,7 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
         ...pane,
         tool: parsePaneToolSpecPayload(pane.tool, index),
       })),
-      associateSession: resolveAssociateSession(parsed),
+      associateSession: parsed.noAssociate ? undefined : resolveAssociateSession(parsed) ?? decoded.associateSession,
     };
   } else {
     if (!parsed.repo || !parsed.repoPath || !parsed.name) {
@@ -2174,7 +2177,7 @@ export async function buildPaneCreateRequest(parsed: ParsedArgs): Promise<PaneCr
       request.panes = request.panes.map(item => ({ ...item, pinned: pinnedOverride }));
     }
     applyPaneFocusOptions(parsed, request);
-    request.associateSession = resolveAssociateSession(parsed);
+    request.associateSession = parsed.noAssociate ? undefined : resolveAssociateSession(parsed) ?? request.associateSession;
     return request;
   }
 

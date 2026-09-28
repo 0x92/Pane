@@ -457,7 +457,9 @@ describe('runpane IPC handlers', () => {
       // SAFETY: The handler only calls associate on the Sessions manager.
       const services = { ...adoptionServices(repoPath, worktreePath), orchestrationSessionManager: { associate } as never };
       vi.mocked(panelManager.createPanel).mockResolvedValue(terminalPanel);
-      vi.mocked(terminalPanelManager.initializeTerminal).mockResolvedValue(undefined);
+      vi.mocked(terminalPanelManager.initializeTerminal).mockImplementation(async () => {
+        expect(associate).toHaveBeenCalledWith({ sessionId: 'orchestrator-1' }, { paneId: session.id });
+      });
       const request = {
         repo: { id: project.id },
         panes: [{ path: worktreePath, name: 'Adopted', tool: { agent: 'codex' } }],
@@ -2519,12 +2521,18 @@ describe('runpane IPC handlers', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     } as never);
 
-    const services = createServices();
+    const associate = vi.fn(async () => ({}));
+    // SAFETY: The handler only calls associate on the Sessions manager.
+    const services = createServices({ orchestrationSessionManager: { associate } as never });
+    vi.mocked(terminalPanelManager.initializeTerminal).mockImplementation(async () => {
+      expect(associate).toHaveBeenCalledWith({ sessionId: 'orchestrator-1' }, { paneId: session.id });
+    });
     const registry = createRegistry(services);
 
     const result = await registry.invoke('runpane:panes:create', [{
       repo: { id: project.id },
       timeoutMs: 1234,
+      associateSession: 'orchestrator-1',
       panes: [{
         name: 'issue-252',
         worktreeName: 'issue-252-worktree',
@@ -2574,6 +2582,7 @@ describe('runpane IPC handlers', () => {
         worktreePath: session.worktreePath,
         active: false,
         focused: false,
+        association: { sessionId: 'orchestrator-1', ok: true },
         nextCommand: 'runpane panels output --panel panel-1 --limit 200 --json',
       }],
     });

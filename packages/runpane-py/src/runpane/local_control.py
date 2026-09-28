@@ -738,7 +738,10 @@ def build_pane_create_request(parsed: Any) -> Dict[str, Any]:
                 for item in payload.get("panes", [])
             ]
         apply_pane_focus_options(parsed, payload)
-        payload.update(optional_value("associateSession", resolve_associate_session(parsed)))
+        if parsed.no_associate:
+            payload.pop("associateSession", None)
+        else:
+            payload.update(optional_value("associateSession", resolve_associate_session(parsed)))
         return payload
 
     if not parsed.repo:

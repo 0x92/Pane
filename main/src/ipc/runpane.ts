@@ -59,6 +59,7 @@ import type {
   RunpanePaneCreateRequest,
   RunpanePaneCreateResult,
   RunpanePaneCreateResultItem,
+  RunpanePaneAssociationOutcome,
   RunpanePaneReadiness,
   RunpanePaneSummary,
   RunpanePanelActivityStatus,
@@ -663,9 +664,9 @@ export function registerRunpaneHandlers(
           waitReady: normalized.waitReady,
           readyTimeoutMs: normalized.readyTimeoutMs,
           activate: resolvePaneCreateActivation(normalized, item),
+          associateSession: normalized.associateSession,
         }),
       );
-      await associateCreatedPanes(services, normalized.associateSession, items);
 
       return {
         ok: items.every(isPaneCreateItemSuccessful),
@@ -723,6 +724,7 @@ export function registerRunpaneHandlers(
           await sessionManager.updateSession(session.id, { status: 'stopped' });
           const stoppedSession = sessionManager.getSession(session.id);
           if (!stoppedSession) throw new Error(`Created session ${session.id} was not found after status update`);
+          const association = await associateCreatedPane(services, normalized.associateSession, session.id);
           await Promise.all([
             panelManager.ensureExplorerPanel(session.id),
             panelManager.ensureDiffPanel(session.id),
@@ -764,6 +766,7 @@ export function registerRunpaneHandlers(
             active: Boolean(panel.state.isActive),
             focused: Boolean(panel.state.isActive),
             nextCommand: panelOutputCommand(panel.id),
+            association,
           });
         } catch (error) {
           let failureSessionId = createdSessionId;
@@ -781,7 +784,6 @@ export function registerRunpaneHandlers(
         }
       }
 
-      if (!normalized.dryRun) await associateCreatedPanes(services, normalized.associateSession, items);
       return { ok: items.every(item => item.ok), repo: repoSummary, items };
     }, result => ({ repoId: result.repo.id, resultCount: result.items.length }));
   });
@@ -1399,6 +1401,7 @@ interface PaneCreateItemOptions {
   waitReady?: boolean;
   readyTimeoutMs?: number;
   activate?: boolean;
+  associateSession?: string;
 }
 
 interface TerminalPanelCreateOptions {
@@ -1699,6 +1702,7 @@ async function createPaneItem(
       throw new Error(`Created session ${sessionResult.sessionId} was not found`);
     }
     createdWorktreePath = session.worktreePath;
+    const association = await associateCreatedPane(services, options.associateSession, session.id);
 
     const { panel, readiness, initialInput } = await createTerminalPanelForSession(services, session, tool, {
       activate: options.activate,
@@ -1722,6 +1726,7 @@ async function createPaneItem(
       focused: Boolean(panel.state.isActive),
       readiness,
       initialInput,
+      association,
     };
   } catch (error) {
     return createFailureItem(index, item, error, createdSessionId, createdWorktreePath);
@@ -2712,20 +2717,17 @@ function parsePaneAdoptRequest(value: PaneCommandValue): RunpanePaneAdoptRequest
  * children in the same call, so agents cannot forget `sessions associate`.
  * A failed association is reported on the item and never undoes the Pane.
  */
-async function associateCreatedPanes(
+async function associateCreatedPane(
   services: AppServices,
   sessionId: string | undefined,
-  items: RunpanePaneCreateResultItem[],
-): Promise<void> {
-  if (!sessionId) return;
-  for (const item of items) {
-    if (!item.ok || !('panelId' in item) || !item.paneId) continue;
-    try {
-      await requireOrchestrationSessionManager(services).associate({ sessionId }, { paneId: item.paneId });
-      item.association = { sessionId, ok: true };
-    } catch (error) {
-      item.association = { sessionId, ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+  paneId: string,
+): Promise<RunpanePaneAssociationOutcome | undefined> {
+  if (!sessionId) return undefined;
+  try {
+    await requireOrchestrationSessionManager(services).associate({ sessionId }, { paneId });
+    return { sessionId, ok: true };
+  } catch (error) {
+    return { sessionId, ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
