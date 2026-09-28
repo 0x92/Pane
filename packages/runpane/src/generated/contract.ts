@@ -498,7 +498,7 @@ export const RUNPANE_CONTRACT = {
       "name": "panels submit-composer",
       "summary": "Submit an agent composer using the panel-appropriate key sequence.",
       "usage": [
-        "runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter] --yes [--json] [--pane-dir <path>]"
+        "runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "toolsets": [
@@ -1327,7 +1327,7 @@ export const RUNPANE_CONTRACT = {
       },
       {
         "name": "--strategy",
-        "value": "<auto|codex-ctrl-enter|enter>",
+        "value": "<auto|codex-ctrl-enter|enter|tab>",
         "description": "Composer submit key sequence strategy for panels submit-composer."
       },
       {
@@ -1558,7 +1558,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels screen --panel <panel-id> [--limit <count>] [--json]",
         "  runpane panels input --panel <panel-id> (--text <text>|--keys <name,...>|--input-file <path|->) --yes [--json]",
         "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
-        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter] --yes [--json]",
+        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "  runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--json]",
         "  runpane panes git-status --pane <pane-id> [--json] [--pane-dir <path>]",
         "  runpane panes commit --pane <pane-id> --message <message> --yes [--json] [--pane-dir <path>]",
@@ -1950,7 +1950,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels output --panel <panel-id> [--limit <count>] [--json]",
         "  runpane panels input --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
         "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
-        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter] --yes [--json]",
+        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "  runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--json]",
         "",
         "Run \"runpane help panels create\" or another command-specific topic for options."
@@ -2105,11 +2105,11 @@ export const RUNPANE_CONTRACT = {
         "Submit an agent composer using the panel-appropriate key sequence.",
         "",
         "Usage:",
-        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter] --yes [--json]",
+        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "",
         "Options:",
         "  --panel <panel-id>            Terminal panel id.",
-        "  --strategy <strategy>         Defaults to auto; Codex sends Ctrl+Enter and other panels send Enter.",
+        "  --strategy <strategy>         Defaults to auto; Codex queues with Tab while working and submits with Enter when ready.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
       ],
@@ -2522,7 +2522,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels screen --panel <panel-id> [--limit <count>] [--json]",
         "  runpane panels input --panel <panel-id> (--text <text>|--keys <name,...>|--input-file <path|->) --yes [--json]",
         "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
-        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter] --yes [--json]",
+        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "  runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--json]",
         "  runpane panes git-status --pane <pane-id> [--json] [--pane-dir <path>]",
         "  runpane panes commit --pane <pane-id> --message <message> --yes [--json] [--pane-dir <path>]",
@@ -2903,7 +2903,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane panels output --panel <panel-id> [--limit <count>] [--json]",
         "  runpane panels input --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
         "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) --yes [--json]",
-        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter] --yes [--json]",
+        "  runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "  runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--json]",
         "",
         "Run \"runpane help panels create\" or another command-specific topic for options."
@@ -3050,11 +3050,11 @@ export const RUNPANE_CONTRACT = {
         "Submit an agent composer using the panel-appropriate key sequence.",
         "",
         "Usage:",
-        "  python -m runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter] --yes [--json]",
+        "  python -m runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json]",
         "",
         "Options:",
         "  --panel <panel-id>            Terminal panel id.",
-        "  --strategy <strategy>         Defaults to auto; Codex sends Ctrl+Enter and other panels send Enter.",
+        "  --strategy <strategy>         Defaults to auto; Codex queues with Tab while working and submits with Enter when ready.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
       ],
@@ -4234,6 +4234,7 @@ export const RUNPANE_CONTRACT = {
         "daemon",
         "remoteDaemonService",
         "remoteSetup",
+        "watchDefaults",
         "nextCommands"
       ],
       "properties": {
@@ -4557,6 +4558,42 @@ export const RUNPANE_CONTRACT = {
                 },
                 "additionalProperties": false
               }
+            }
+          },
+          "additionalProperties": false
+        },
+        "watchDefaults": {
+          "type": "object",
+          "required": [
+            "heartbeatSeconds",
+            "idleAfterMs",
+            "settleMs",
+            "blockedSettleMs",
+            "minIntervalMs",
+            "idleBackoff",
+            "kinds"
+          ],
+          "properties": {
+            "heartbeatSeconds": {
+              "type": "number"
+            },
+            "idleAfterMs": {
+              "type": "number"
+            },
+            "settleMs": {
+              "type": "number"
+            },
+            "blockedSettleMs": {
+              "type": "number"
+            },
+            "minIntervalMs": {
+              "type": "number"
+            },
+            "idleBackoff": {
+              "type": "boolean"
+            },
+            "kinds": {
+              "const": "all"
             }
           },
           "additionalProperties": false
@@ -5073,6 +5110,7 @@ export const RUNPANE_CONTRACT = {
                         "enum": [
                           "codex-ctrl-enter",
                           "enter",
+                          "tab",
                           "argument"
                         ]
                       },
@@ -5080,6 +5118,7 @@ export const RUNPANE_CONTRACT = {
                         "enum": [
                           "codex-ctrl-enter-cr",
                           "enter-cr",
+                          "tab",
                           "argument"
                         ]
                       },
@@ -6558,6 +6597,9 @@ export const RUNPANE_CONTRACT = {
         "ok": {
           "const": true
         },
+        "generation": {
+          "type": "number"
+        },
         "panelId": {
           "type": "string"
         },
@@ -6859,12 +6901,16 @@ export const RUNPANE_CONTRACT = {
           "type": "number"
         },
         "enter": {
-          "const": "cr"
+          "enum": [
+            "cr",
+            "tab"
+          ]
         },
         "sequenceName": {
           "enum": [
             "codex-ctrl-enter-cr",
-            "enter-cr"
+            "enter-cr",
+            "tab"
           ]
         },
         "verifiedSubmitted": {
@@ -7301,7 +7347,8 @@ export const RUNPANE_CONTRACT = {
           "enum": [
             "auto",
             "codex-ctrl-enter",
-            "enter"
+            "enter",
+            "tab"
           ]
         }
       },
@@ -7337,13 +7384,15 @@ export const RUNPANE_CONTRACT = {
         "strategy": {
           "enum": [
             "codex-ctrl-enter",
-            "enter"
+            "enter",
+            "tab"
           ]
         },
         "sequenceName": {
           "enum": [
             "codex-ctrl-enter-cr",
-            "enter-cr"
+            "enter-cr",
+            "tab"
           ]
         },
         "verifiedSubmitted": {
@@ -7998,10 +8047,10 @@ export const RUNPANE_CONTRACT = {
         },
         {
           "name": "panels submit-composer",
-          "summary": "Submit an agent composer with the correct key sequence, including Ctrl+Enter for Codex.",
+          "summary": "Submit an agent composer with the key for its current state.",
           "arguments": [
             "--panel <panel-id>",
-            "--strategy <auto|codex-ctrl-enter|enter>",
+            "--strategy <auto|codex-ctrl-enter|enter|tab>",
             "--yes",
             "--json"
           ]
@@ -9484,7 +9533,7 @@ export const RUNPANE_CONTRACT = {
       "panels submit-composer": {
         "name": "panels submit-composer",
         "summary": "Submit an agent composer using the panel-appropriate key sequence.",
-        "details": "Use this after sending text into an agent composer when plain Enter is not the right submit action. Agents should use --strategy auto; Pane owns per-agent submit sequences internally and verifies visible composer state when possible.",
+        "details": "Use this after sending text into an agent composer. Auto uses Tab to queue while Codex is working and Enter when ready; Pane verifies that the text left the composer.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -9496,7 +9545,7 @@ export const RUNPANE_CONTRACT = {
           },
           {
             "name": "--strategy",
-            "value": "<auto|codex-ctrl-enter|enter>",
+            "value": "<auto|codex-ctrl-enter|enter|tab>",
             "required": false,
             "description": "Composer submit key sequence strategy."
           },
@@ -10763,7 +10812,7 @@ export const RUNPANE_CONTRACT = {
         ],
         "notes": [
           "`delivered` is true only when Pane saw the message leave the composer.",
-          "It types the text and presses Enter, so it is for messages, not keys. To answer a menu, use `runpane panels input --panel <panel-id> --keys down,enter --yes`, then check the screen with `runpane agents status`."
+          "It types the text, then queues with Tab when Codex is working or submits with Enter when ready. It is for messages, not keys. To answer a menu, use `runpane panels input --panel <panel-id> --keys down,enter --yes`, then check the screen with `runpane agents status`."
         ]
       },
       "sessions list": {
