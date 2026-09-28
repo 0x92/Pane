@@ -2137,7 +2137,7 @@
         "",
         "For a Claude or Codex panel with no composer on screen, nothing is sent: the result is ok: false with blocked.kind composer-unknown.",
         "",
-        "Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and Enter goes as its own write once the paste has settled, even while the agent is working.",
+        "Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and the submit key goes as its own write once the paste has settled, even while the agent is working.",
         "",
         "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
         "",
@@ -3142,7 +3142,7 @@
         "",
         "For a Claude or Codex panel with no composer on screen, nothing is sent: the result is ok: false with blocked.kind composer-unknown.",
         "",
-        "Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and Enter goes as its own write once the paste has settled, even while the agent is working.",
+        "Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and the submit key goes as its own write once the paste has settled, even while the agent is working.",
         "",
         "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
         "",
@@ -9873,7 +9873,7 @@
       "panels submit": {
         "name": "panels submit",
         "summary": "Send and submit text to a terminal panel, including idle agent composers.",
-        "details": "Use this for ordinary interactive submissions. For Claude, Pane waits for the composer to appear and show the staged text, then sends Enter on its own and verifies that the composer cleared; Claude keeps an Enter that arrives together with the text as a newline. For an idle Codex composer, Pane stages the text, waits for Codex paste handling, sends the Codex submit sequence, and verifies that the turn started when visible evidence is available. Wrapper-launched agents are handled the same way once Pane knows the agent (declared, from the foreground process, or from the screen). A Claude or Codex panel with no composer on screen gets nothing: the result is `ok: false` with `blocked.kind: composer-unknown`. Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and Enter goes as its own write once the paste has settled, even while the agent is working. Other terminals receive a normalized CR Enter. Exact byte workflows remain on `panels input`.",
+        "details": "Use this for ordinary interactive submissions. For Claude, Pane waits for the composer to appear and show the staged text, then sends Enter on its own and verifies that the composer cleared; Claude keeps an Enter that arrives together with the text as a newline. For a Codex composer, Pane stages the text, waits for paste handling, then queues with Tab while working or submits with Enter when ready, and verifies delivery when visible evidence is available. Wrapper-launched agents are handled the same way once Pane knows the agent (declared, from the foreground process, or from the screen). A Claude or Codex panel with no composer on screen gets nothing: the result is `ok: false` with `blocked.kind: composer-unknown`. Multi-line or long (over 512 characters) text reaches a Claude or Codex composer as one bracketed paste: CRLF becomes LF, and the submit key goes as its own write once the paste has settled, even while the agent is working. Other terminals receive a normalized CR Enter. Exact byte workflows remain on `panels input`.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -9928,7 +9928,7 @@
         ],
         "notes": [
           "The response includes sequenceName, verifiedSubmitted, delivery and nextCommand. For Claude and Codex, `delivery.state` is `taken` (the agent started a turn with the text), `queued` (it holds the text until its current turn ends), `in-composer` (the text is still in the composer) or `unknown`, and `delivery.evidence` is `transcript` (the agent's own transcript) or `screen`. verifiedSubmitted is true for `taken` or `queued`; never resend those. If ok is false, inspect blocked and do not assume the turn started.",
-          "Do not follow `panels submit` with `panels submit-composer`; Claude and idle Codex composer submission is handled atomically.",
+          "Do not follow `panels submit` with `panels submit-composer`; Claude and Codex composer submission is handled atomically.",
           "Use `panels input` for Ctrl-C, escape sequences, or any workflow requiring exact bytes.",
           "On `blocked.kind: composer-unknown`, nothing was typed. Check `panels screen`; if the agent is at a prompt Pane does not recognise, use `panels input`.",
           "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",

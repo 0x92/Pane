@@ -2446,7 +2446,7 @@ async function submitComposerForPanel(
 ): Promise<RunpanePanelSubmitComposerResult> {
   const beforeScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
   const agentType = screenAgentType(beforeScreen);
-  const submit = resolveComposerSubmit(strategy, agentType, beforeScreen.state.activityStatus);
+  let submit = resolveComposerSubmit(strategy, agentType, beforeScreen.state.activityStatus);
   const probeBase = composerDeliveryProbe(panel, delivery.cwd, agentType, delivery.text);
   const probe = probeBase ? { ...probeBase, sentAtMs: Date.now() } : undefined;
   const outputGenerationBeforeSubmit = terminalPanelManager.getOutputGeneration(panel.id);
@@ -2459,9 +2459,9 @@ async function submitComposerForPanel(
   // current activity state; a busy Codex must still queue with Tab.
   if ((strategy ?? 'auto') === 'auto' && verification.stagedTextVisible) {
     const outputGenerationBeforeRetry = terminalPanelManager.getOutputGeneration(panel.id);
-    const retry = resolveComposerSubmit('auto', agentType, verification.latestScreen.state.activityStatus);
-    terminalPanelManager.writeToTerminal(panel.id, retry.input);
-    inputBytes += Buffer.byteLength(retry.input, 'utf8');
+    submit = resolveComposerSubmit('auto', agentType, verification.latestScreen.state.activityStatus);
+    terminalPanelManager.writeToTerminal(panel.id, submit.input);
+    inputBytes += Buffer.byteLength(submit.input, 'utf8');
     verification = await verifyComposerSubmitted(panel, verification.latestScreen, outputGenerationBeforeRetry, probe);
   }
 
