@@ -3990,19 +3990,19 @@ async function archiveSessionPanes(
       // Evaluate every Pane, including adopted ones that keep their worktree:
       // --merged selects by evidence, not by what archiving deletes.
       const safetyCheck = await computeArchiveSafety(services, pane);
-      const publicSafetyCheck = toPublicSafetyCheck(safetyCheck);
+      if (!removesWorktree) safetyCheck.worktreeWillRemain = true;
       const blockCode = classifyArchiveBlock(safetyCheck, true);
       if (blockCode) {
         items.push({
           ...base,
           outcome: 'skipped',
           skipped: { code: blockCode, message: describeArchiveBlock(blockCode, safetyCheck) },
-          safetyCheck: publicSafetyCheck,
+          safetyCheck,
         });
         continue;
       }
       if (request.dryRun) {
-        items.push({ ...base, outcome: 'would-archive', safetyCheck: publicSafetyCheck });
+        items.push({ ...base, outcome: 'would-archive', safetyCheck });
         continue;
       }
       const cleanup = await archivePaneAndRemoveWorktree(services, commandRegistry, pane, removesWorktree);
@@ -4011,7 +4011,7 @@ async function archiveSessionPanes(
         ...base,
         outcome: cleanupOk ? 'archived' : 'failed',
         error: cleanupOk ? undefined : 'Pane was archived but its worktree could not be removed.',
-        safetyCheck: publicSafetyCheck,
+        safetyCheck,
         ...cleanup,
       });
     } catch (error) {

@@ -161,11 +161,13 @@ export class NamedLockService implements PaneEventSink {
 
   /** Release the locks a panel holds; called when its terminal exits or is closed. */
   releaseOwnedByPanel(panelId: string): RunpaneLockRecord[] {
+    this.cancelWaiters(owner => owner.kind === 'pane' && owner.panelId === panelId);
     return this.releaseWhere(lock => lock.owner.kind === 'pane' && lock.owner.panelId === panelId);
   }
 
   /** Release the locks a Pane or any of its panels holds; called when the Pane is archived or deleted. */
   releaseOwnedByPane(paneId: string): RunpaneLockRecord[] {
+    this.cancelWaiters(owner => owner.kind === 'pane' && owner.paneId === paneId);
     return this.releaseWhere(lock => lock.owner.kind === 'pane' && lock.owner.paneId === paneId);
   }
 
@@ -233,6 +235,17 @@ export class NamedLockService implements PaneEventSink {
     next.set(key, lock);
     this.commit(next);
     return { ok: true, acquired: true, renewed: held !== undefined, waitedMs: now - startedAt, lock: cloneLock(lock) };
+  }
+
+  private cancelWaiters(matches: (owner: RunpaneLockOwner) => boolean): void {
+    for (const [key, queue] of this.waiters) {
+      for (const waiter of queue) {
+        if (!matches(waiter.input.owner)) continue;
+        clearTimeout(waiter.timer);
+        this.removeWaiter(key, waiter);
+        waiter.reject(new Error('Lock wait cancelled because its owner exited or was archived.'));
+      }
+    }
   }
 
   private releaseWhere(predicate: (lock: RunpaneLockRecord) => boolean): RunpaneLockRecord[] {

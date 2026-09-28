@@ -155,6 +155,18 @@ describe('NamedLockService', () => {
     await expect(secondWaiter).resolves.toMatchObject({ ok: true, lock: { owner: human }, waitedMs: 2 * MINUTE });
   });
 
+  it.each(['panel', 'pane'] as const)('cancels a waiting acquire when its %s owner leaves', async scope => {
+    const locks = createService();
+    await locks.acquire({ name: 'testing-account', ttlMs: MINUTE, owner: workerA });
+    const waiting = locks.acquire({ name: 'testing-account', ttlMs: MINUTE, waitMs: MINUTE, owner: workerB });
+    const cancelled = expect(waiting).rejects.toThrow('owner exited or was archived');
+    if (scope === 'panel') locks.releaseOwnedByPanel(workerB.panelId!);
+    else locks.send('session:deleted', { id: workerB.paneId! });
+    await cancelled;
+    locks.release({ name: 'testing-account', owner: workerA });
+    expect(locks.list()).toEqual([]);
+  });
+
   it('gives up a wait when it runs out and reports the holder', async () => {
     const locks = createService();
     await locks.acquire({ name: 'testing-account', ttlMs: 30 * MINUTE, owner: workerA });

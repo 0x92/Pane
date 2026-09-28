@@ -18,7 +18,7 @@ const TRASH_DIRECTORY = 'pane-trash';
 const INLINE_DELETE_GRACE_MS = 1_500;
 const GIT_TIMEOUT_MS = 30_000;
 
-const pendingDeletes = new Map<string, Promise<void>>();
+const pendingDeletes = new Map<string, Promise<boolean>>();
 
 /**
  * Removes a linked worktree without waiting for its files to be deleted.
@@ -71,7 +71,7 @@ export async function removeWorktreeViaTrash(
   const graceMs = options.inlineGraceMs ?? INLINE_DELETE_GRACE_MS;
   let graceTimer: ReturnType<typeof setTimeout> | undefined;
   const finished = await Promise.race([
-    deletion.then(() => true),
+    deletion,
     new Promise<boolean>(resolve => {
       graceTimer = setTimeout(() => resolve(false), graceMs);
     }),
@@ -114,12 +114,14 @@ async function sweepTrashRoot(trashRoot: string): Promise<void> {
   await Promise.all(entries.map(entry => deleteTrashEntry(path.join(trashRoot, entry))));
 }
 
-function deleteTrashEntry(trashPath: string): Promise<void> {
+function deleteTrashEntry(trashPath: string): Promise<boolean> {
   const pending = pendingDeletes.get(trashPath);
   if (pending) return pending;
   const deletion = fs.rm(trashPath, { recursive: true, force: true, maxRetries: 3 })
+    .then(() => true)
     .catch(error => {
       console.warn(`[WorktreeTrash] delete_failed trashPath=${JSON.stringify(trashPath)}:`, error);
+      return false;
     })
     .finally(() => {
       pendingDeletes.delete(trashPath);

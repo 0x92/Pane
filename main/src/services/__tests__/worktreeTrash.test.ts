@@ -47,6 +47,17 @@ describe('removeWorktreeViaTrash', () => {
     expect(readdirSync(join(repo, '.git', 'pane-trash'))).toEqual([]);
   });
 
+  it('reports pending after a delete failure and retries on the next sweep', async () => {
+    const { repo, worktree, runner, resolver } = repositoryWithWorktree();
+    const remove = vi.spyOn(fsPromises, 'rm').mockRejectedValue(new Error('file is busy'));
+    expect(await removeWorktreeViaTrash(worktree, repo, resolver, runner)).toBe('pending');
+    await waitForPendingWorktreeTrash();
+    expect(readdirSync(join(repo, '.git', 'pane-trash'))).toHaveLength(1);
+    remove.mockRestore();
+    await sweepWorktreeTrash(repo, resolver, runner);
+    expect(readdirSync(join(repo, '.git', 'pane-trash'))).toEqual([]);
+  });
+
   it('reports pending while the files are still being deleted, then deletes them', async () => {
     const { repo, worktree, runner, resolver } = repositoryWithWorktree();
     const realRm = fsPromises.rm.bind(fsPromises);
