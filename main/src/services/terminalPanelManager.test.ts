@@ -1526,11 +1526,15 @@ describe('TerminalPanelManager long prompt delivery', () => {
     manager.setupTerminalHandlers(live);
 
     expect(manager.isBracketedPasteEnabled(terminal.panelId)).toBe(false);
-    emit('\x1b[?1049h\x1b[?2004hClaude Code');
+    emit('\x1b[?1049h\x1b[?2004');
+    expect(manager.isBracketedPasteEnabled(terminal.panelId)).toBe(false);
+    emit('hClaude Code');
     expect(manager.isBracketedPasteEnabled(terminal.panelId)).toBe(true);
     emit('frame without mode changes');
     expect(manager.isBracketedPasteEnabled(terminal.panelId)).toBe(true);
-    emit('\x1b[?2004h\x1b[?2004l$ ');
+    emit('\x1b[?2004h\x1b[?');
+    emit('2004');
+    emit('l$ ');
     expect(manager.isBracketedPasteEnabled(terminal.panelId)).toBe(false);
     disposeFlowControlRecord(terminal.flowControl);
   });

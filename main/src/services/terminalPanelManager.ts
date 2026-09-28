@@ -266,6 +266,7 @@ interface TerminalProcess {
   initialInputHeld?: boolean;
   /** The program asked for bracketed paste (`CSI ?2004h`), so a paste reaches it as one. */
   bracketedPasteMode?: boolean;
+  pasteModeSequenceTail?: string;
   // DEC Mode 2026 synchronized-output block tracking — persists across chunks
   inSyncBlock: boolean;
   /** Alt-screen state as seen by filterSyncBlockClears (stream-ordered, may
@@ -1370,9 +1371,11 @@ export class TerminalPanelManager extends EventEmitter {
       // Detect alternate screen buffer enter/exit for universal TUI detection
       // (works on WSL where pty.process reports wsl.exe instead of the Linux foreground app)
       // \x1b[?1049h = enter alternate screen, \x1b[?1049l = leave alternate screen
-      if (data.includes('\x1b[?2004')) {
-        const lastEnable = data.lastIndexOf('\x1b[?2004h');
-        const lastDisable = data.lastIndexOf('\x1b[?2004l');
+      const pasteModeData = (terminal.pasteModeSequenceTail ?? '') + data;
+      terminal.pasteModeSequenceTail = pasteModeData.slice(-7);
+      if (pasteModeData.includes('\x1b[?2004')) {
+        const lastEnable = pasteModeData.lastIndexOf('\x1b[?2004h');
+        const lastDisable = pasteModeData.lastIndexOf('\x1b[?2004l');
         if (lastEnable !== lastDisable) terminal.bracketedPasteMode = lastEnable > lastDisable;
       }
 

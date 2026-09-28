@@ -15,7 +15,7 @@ import { decodeJsonLine, listDir, textContent, timestampMs, type TranscriptEntry
 const MAX_PROJECT_DIR_NAME = 200;
 
 function claudeProjectsRoot(): string {
-  return path.join(os.homedir(), '.claude', 'projects');
+  return path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
 }
 
 /** The directory name Claude Code files a working directory's transcripts under. */

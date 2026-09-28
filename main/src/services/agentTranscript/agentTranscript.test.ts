@@ -59,6 +59,8 @@ beforeEach(() => {
   worktree = path.join(home, 'repo-worktrees', 'task.one');
   fs.mkdirSync(worktree, { recursive: true });
   vi.stubEnv('HOME', home);
+  vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+  vi.stubEnv('CODEX_HOME', '');
 });
 
 afterEach(() => {
@@ -87,6 +89,19 @@ function writeCodex(name: string, rows: object[]): string {
 const sentAt = Date.parse('2026-09-27T18:34:10.000Z');
 const claudeLocator = (): TranscriptLocator => ({ agent: 'claude', cwd: worktree, sessionId: '11111111-2222-4333-8444-555555555504' });
 const codexLocator = (): TranscriptLocator => ({ agent: 'codex', cwd: worktree });
+
+it.each(['claude', 'codex'] as const)('reads %s transcripts from the configured agent home', async agent => {
+  const locator = agent === 'claude' ? claudeLocator() : codexLocator();
+  if (agent === 'claude') {
+    writeClaude(locator.sessionId!, [claude.assistant('reply', { type: 'text', text: 'Custom home reply' }, writtenAt.toISOString())]);
+  } else {
+    writeCodex('thread', [codex.meta(worktree, writtenAt.toISOString()), codex.assistant('Custom home reply', writtenAt.toISOString())]);
+  }
+  const customHome = path.join(home, 'custom-agent');
+  fs.renameSync(path.join(home, agent === 'claude' ? '.claude' : '.codex'), customHome);
+  vi.stubEnv(agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME', customHome);
+  expect(await lastAssistantMessage(locator, 1000)).toBe('Custom home reply');
+});
 
 describe('turnTextMatches', () => {
   it('compares text loosely: CRLF, whitespace runs and Claude paste wrappers', () => {

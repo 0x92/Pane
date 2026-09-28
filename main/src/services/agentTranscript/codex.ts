@@ -21,7 +21,7 @@ const META_READ_BYTES = 64 * 1024;
 const rolloutCwds = new Map<string, string | null>();
 
 function codexSessionsRoot(): string {
-  return path.join(os.homedir(), '.codex', 'sessions');
+  return path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
 }
 
 const userContent = textContent('input_text');
