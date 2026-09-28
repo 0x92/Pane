@@ -382,7 +382,10 @@ export class OrchestrationSessionManager extends EventEmitter {
     const record = this.store.read().sessions.find(session => session.id === sessionId);
     if (!record) return undefined;
     return {
-      panes: new Map(record.associations.map(association => [association.paneId, association.panelIds])),
+      panes: new Map(record.associations.filter(association => {
+        const pane = this.sessionManager.getSession(association.paneId);
+        return pane !== undefined && !pane.archived;
+      }).map(association => [association.paneId, association.panelIds])),
       ownPaneIds: new Set([record.internalSessionId]),
       ownPanelIds: new Set(Object.values(record.panelIds)),
     };

@@ -678,6 +678,11 @@ describe('OrchestrationSessionManager', () => {
     expect(membership?.ownPaneIds).toEqual(new Set([named.session.internalSessionId]));
     expect(membership?.ownPanelIds).toEqual(new Set(Object.values(named.session.panelIds)));
 
+    fixture.sessions.set(pane.id, { ...pane, archived: true });
+    expect(fixture.manager.workspaceMembership(named.session.id)?.panes).toEqual(new Map([[otherPane.id, []]]));
+    fixture.sessions.delete(otherPane.id);
+    expect(fixture.manager.workspaceMembership(named.session.id)?.panes.size).toBe(0);
+
     await fixture.manager.detach({ sessionId: named.session.id });
     expect(changes).toEqual([
       { sessionId: named.session.id, kind: 'associated', sessionName: 'Watched', paneIds: [pane.id] },
