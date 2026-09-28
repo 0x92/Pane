@@ -4443,6 +4443,8 @@ describe('runpane IPC handlers', () => {
         home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pane-last-message-home-')));
         tempDirs.push(home);
         vi.stubEnv('HOME', home);
+        vi.stubEnv('USERPROFILE', home);
+        vi.stubEnv('CLAUDE_CONFIG_DIR', '');
       });
 
       afterEach(() => {
