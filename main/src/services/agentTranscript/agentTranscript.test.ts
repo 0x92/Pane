@@ -59,6 +59,7 @@ beforeEach(() => {
   worktree = path.join(home, 'repo-worktrees', 'task.one');
   fs.mkdirSync(worktree, { recursive: true });
   vi.stubEnv('HOME', home);
+  vi.stubEnv('USERPROFILE', home);
   vi.stubEnv('CLAUDE_CONFIG_DIR', '');
   vi.stubEnv('CODEX_HOME', '');
 });
