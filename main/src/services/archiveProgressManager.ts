@@ -22,6 +22,8 @@ export interface ArchiveTask {
   startTime: Date;
   endTime?: Date;
   error?: string;
+  /** Once the worktree is removed: whether its files are deleted, or still being deleted in the background. */
+  trashDeletion?: 'pending' | 'done';
   executeCallback?: () => Promise<void>;
 }
 
@@ -35,6 +37,7 @@ export interface SerializedArchiveTask {
   startTime: string;
   endTime?: string;
   error?: string;
+  trashDeletion?: 'pending' | 'done';
 }
 
 export class ArchiveProgressManager extends EventEmitter {
@@ -133,6 +136,11 @@ export class ArchiveProgressManager extends EventEmitter {
     }
   }
 
+  setTrashDeletion(sessionId: string, trashDeletion: 'pending' | 'done'): void {
+    const task = this.activeTasks.get(sessionId);
+    if (task) task.trashDeletion = trashDeletion;
+  }
+
   getActiveTasks(): SerializedArchiveTask[] {
     // Return a serializable version without the executeCallback
     return Array.from(this.activeTasks.values()).map(task => ({
@@ -143,7 +151,8 @@ export class ArchiveProgressManager extends EventEmitter {
       status: task.status,
       startTime: task.startTime.toISOString(),
       endTime: task.endTime?.toISOString(),
-      error: task.error
+      error: task.error,
+      trashDeletion: task.trashDeletion,
     }));
   }
 

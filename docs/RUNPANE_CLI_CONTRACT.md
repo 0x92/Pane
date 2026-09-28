@@ -126,6 +126,9 @@ runpane sessions set-agent --session <id|name> --agent <codex|claude|cursor> [--
 runpane sessions associate --session <id|name> --pane <pane-id> [--json] [--pane-dir <path>]
 runpane sessions detach --session <id|name> [--pane <pane-id>] [--json] [--pane-dir <path>]
 runpane sessions overview --session <id|name> [--json] [--pane-dir <path>]
+runpane lock acquire --name testing-account --ttl 30m --wait 1800000 --note "call QA" --json
+runpane lock release --name testing-account --json
+runpane lock list --json
 runpane agents start --repo active --name fix-login --agent claude --prompt "Fix the login redirect" --yes --json
 runpane agents status --pane <pane-id> --json
 runpane agents send --pane <pane-id> --text "Also add a test" --yes --json
@@ -174,7 +177,7 @@ The wrapper must stream Pane stdout/stderr without reformatting because `pane --
 
 For `panes create --wait-ready`, `initialInput.delivery` says where the prompt went: `taken` or `queued` (from the agent's transcript, its screen, or `argv` for a launch-argument prompt), `in-composer`, or `unknown`. `initialInput.verifiedSubmitted` is true exactly when it is `taken` or `queued`. Routing input does not by itself verify submission.
 
-`runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. Add `--dry-run` to inspect the same evidence without archiving. Successful archives wait for worktree removal and report `worktreeCleanup`.
+`runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. A branch whose upstream is gone counts as pushed when a merged GitHub pull request has HEAD as its head (`safetyCheck.mergedViaPr`). Add `--dry-run` to inspect the same evidence without archiving. `--remove-worktree` applies the same check and removal to an adopted worktree; local branches are always kept. Successful archives report `worktreeCleanup: completed` once the worktree is gone from its path and from git; `trashDeletion: pending` means its files are still being deleted in the background. `runpane panes archive --session <id|name> --merged` archives every Session Pane that is clean and pushed or merged, and reports a reason for each skipped Pane.
 
 `runpane panes rename` trims and updates a Pane's display name without changing its worktree, branch, panels, or focus, and returns the updated pane summary.
 
@@ -187,6 +190,10 @@ For `panes create --wait-ready`, `initialInput.delivery` says where the prompt w
 `runpane panels input` sends exact input bytes to one terminal panel. Prefer `--input-file` for newlines, Ctrl-C, quotes, or shell-sensitive text.
 
 `runpane panes create --prompt` is an alias for `--initial-input`; request JSON and daemon payloads should use the canonical `initialInput` field.
+
+`runpane panes create --branch <name>` creates the Pane's worktree on exactly that new branch, slashes included (for example `agents/w5a`). The name is checked with `git check-ref-format --branch`, creation fails if the branch already exists, and Pane never renames it to make it unique. `--worktree-name` still names the directory and defaults to `--name`. `--base` is an alias for `--base-branch`, and `--prompt-file` for `--initial-input-file`. `panes create --base <ref> --branch <name> --prompt-file <file>` replaces `git worktree add` plus `panes adopt`.
+
+`runpane panes adopt --launch` accepts `--prompt`, `--prompt-file`, `--wait-ready`, and `--ready-timeout-ms`, and reports `readiness`, `initialInput`, and `nextCommand` like `panes create`. A prompt without `--launch` is an error rather than being dropped.
 
 If composer submission cannot be verified without risking a duplicate, the create item is unsuccessful with `initialInput.staged`, `initialInput.attempts`, `initialInput.blocked.kind: submission_unverified`, and an actionable `nextCommand`. The CLI-facing `--prompt` alias maps to this canonical `initialInput` result.
 
@@ -209,6 +216,8 @@ When running from WSL while Pane is installed on Windows, the Linux wrapper may 
 `sessions detach` detach a Pane from a named Session.
 
 `sessions overview` read a live status, activity, git, and pull request overview for a named Session.
+
+`runpane lock acquire|release|list` coordinate a resource shared between agents, such as one test account. The caller's Pane and panel own the lock; it is scoped to the owner's Session (or global outside one), renews for the same owner, and is released on TTL expiry, owner panel exit, or owner Pane archive. `--wait` blocks in the daemon until the lock comes free.
 
 `runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task in a repository, check on it, and send it a follow-up.
 
@@ -255,7 +264,7 @@ Brief tools:
 - `panes list`: List Pane sessions, optionally scoped to a saved repository.
 - `panes cost`: Report estimated token cost per Pane, with per-model breakdown and cache efficiency.
 - `panes create`: Create user-visible Panes (Pane sessions) backed by Pane-managed worktrees for feature/PR work and open terminal-backed tool tabs.
-- `panes archive`: Archive a Pane exactly like the UI Archive action, including safe removal of its Pane-managed git worktree.
+- `panes archive`: Archive a Pane exactly like the UI Archive action, including safe removal of its Pane-managed git worktree, or archive every merged Pane in a Session.
 - `panes pin`: Declaratively pin a Pane (the Pane UI's favorite/pin star) without changing focus.
 - `panes unpin`: Declaratively unpin a Pane (the Pane UI's favorite/pin star) without changing focus.
 - `panes rename`: Rename a Pane without changing its worktree, branch, panels, or focus.
@@ -310,14 +319,15 @@ These flags are consumed by local daemon-control commands:
 --path <path>
 --name <name>
 --worktree-name <name>
---base-branch <branch>
+--branch <name>
+--base-branch <ref> (aliases: --base)
 --folder <name>
 --resume <agent-session-id>
 --agent <codex|claude|cursor>
 --tool-command <command>
 --title <title>
 --initial-input <text> (aliases: --prompt)
---initial-input-file <path|->
+--initial-input-file <path|-> (aliases: --prompt-file)
 --from-json <path|->
 --timeout-ms <milliseconds>
 --ready-timeout-ms <milliseconds>
@@ -344,6 +354,9 @@ These flags are consumed by local daemon-control commands:
 --min-interval <milliseconds>
 --body-file <path|->
 --session <id|name>
+--ttl <duration>
+--wait <milliseconds>
+--note <text>
 --message <message>
 --query <text>
 --doc <path>
@@ -364,6 +377,8 @@ These flags are consumed by local daemon-control commands:
 --no-pinned
 --no-associate
 --force
+--remove-worktree
+--merged
 --launch
 --as-file-pointer
 --follow

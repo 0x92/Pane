@@ -142,6 +142,8 @@ interface OrchestrationPaneOverview {
     prTitle?: string;
     prState?: string;
   };
+  /** The newest `runpane report` among the Pane's panels, with the panel that sent it. */
+  report?: AgentReport & { panelId: string };
 }
 
 interface RunpaneSessionOverviewResult {
@@ -152,6 +154,45 @@ interface RunpaneSessionOverviewResult {
   activity: OrchestrationActivity[];
   report?: OrchestrationReport & { freshness: 'current' | 'stale' };
   refreshedAt: string;
+  /** Absent from daemons that predate named locks. */
+  locks?: LockRecord[];
+}
+
+interface LockOwner {
+  kind: 'pane' | 'external';
+  paneId?: string;
+  panelId?: string;
+  label?: string;
+}
+
+interface LockRecord {
+  name: string;
+  scope: 'session' | 'global';
+  sessionId?: string;
+  owner: LockOwner;
+  note?: string;
+  acquiredAt: string;
+  expiresAt: string;
+  ttlMs: number;
+}
+
+interface LockOwnerInput {
+  paneId?: string;
+  panelId?: string;
+  label?: string;
+}
+
+type LockAcquireResult =
+  | { ok: true; acquired: true; renewed: boolean; waitedMs: number; lock: LockRecord }
+  | { ok: false; acquired: false; timedOut: boolean; waitedMs: number; heldBy: LockOwner; expiresAt: string; lock: LockRecord };
+
+type LockReleaseResult =
+  | { ok: true; released: boolean; forced: boolean; lock?: LockRecord }
+  | { ok: false; released: false; reason: 'not-owner'; heldBy: LockOwner; expiresAt: string; lock: LockRecord };
+
+interface LockListResult {
+  ok: true;
+  locks: LockRecord[];
 }
 
 interface RepoSummary {
@@ -217,6 +258,8 @@ interface PaneAdoptRequest {
     launch?: boolean;
   }>;
   dryRun?: boolean;
+  waitReady?: boolean;
+  readyTimeoutMs?: number;
   noFocus?: boolean;
   focus?: boolean;
   source?: 'user' | 'agent';
@@ -226,6 +269,7 @@ interface PaneAdoptRequest {
 interface PaneCreateItem {
   name: string;
   worktreeName?: string;
+  branch?: string;
   baseBranch?: string;
   sessionPrompt?: string;
   pinned?: boolean;
@@ -364,6 +408,15 @@ interface PaneArchiveRequest {
   force?: boolean;
   source?: 'user' | 'agent';
   dryRun?: boolean;
+  removeWorktree?: boolean;
+}
+
+interface PaneArchiveBulkRequest {
+  sessionId: string;
+  merged: true;
+  source?: 'user' | 'agent';
+  dryRun?: boolean;
+  removeWorktree?: boolean;
 }
 
 interface PanePinRequest {
@@ -418,19 +471,27 @@ interface PaneArchiveSafetyCheck {
   unpushedCommitDetails?: Array<{ sha: string; subject: string }>;
   reason?: 'external-worktree' | 'main-repo' | 'missing-project-context' | 'git-error';
   worktreeWillRemain?: true;
+  upstreamGone?: boolean;
+  mergedViaPr?: { number: number; headOid: string };
 }
+
+type PaneArchiveBlockCode = 'uncommitted-changes' | 'unpushed-commits' | 'uncommitted-and-unpushed' | 'status-unknown';
 
 interface PaneArchiveBlockedResult {
   ok: false;
   generation?: number;
   paneId: string;
   blocked: {
-    code: 'uncommitted-changes' | 'unpushed-commits' | 'uncommitted-and-unpushed' | 'status-unknown';
+    code: PaneArchiveBlockCode;
     message: string;
     safetyCheck: PaneArchiveSafetyCheck;
   };
   nextCommand: string;
 }
+
+/** Released CLIs decode exactly these values; new detail goes in new optional fields such as `trashDeletion`. */
+type WorktreeCleanupState = 'completed' | 'failed' | 'timeout' | 'not-applicable';
+type WorktreeTrashDeletion = 'pending' | 'done';
 
 interface PaneArchiveSuccessResult {
   ok: boolean;
@@ -438,9 +499,34 @@ interface PaneArchiveSuccessResult {
   paneId: string;
   archived: true;
   forced: boolean;
-  worktreeCleanup: 'completed' | 'failed' | 'timeout' | 'not-applicable';
+  worktreeCleanup: WorktreeCleanupState;
+  trashDeletion?: WorktreeTrashDeletion;
   worktreePath?: string;
   safetyCheck: PaneArchiveSafetyCheck;
+}
+
+interface PaneArchiveBulkItem {
+  paneId: string;
+  name?: string;
+  outcome: 'archived' | 'would-archive' | 'skipped' | 'failed';
+  skipped?: { code: PaneArchiveBlockCode | 'missing-pane' | 'already-archived' | 'main-repo'; message: string };
+  error?: string;
+  safetyCheck?: PaneArchiveSafetyCheck;
+  worktreeCleanup?: WorktreeCleanupState;
+  trashDeletion?: WorktreeTrashDeletion;
+  worktreePath?: string;
+}
+
+interface PaneArchiveBulkResult {
+  ok: boolean;
+  sessionId: string;
+  merged: true;
+  dryRun?: true;
+  removeWorktree: boolean;
+  archived: number;
+  skipped: number;
+  failed: number;
+  items: PaneArchiveBulkItem[];
 }
 
 interface PaneArchiveDryRunResult {
@@ -780,6 +866,7 @@ interface PaneToolInput {
 interface PaneCreateItemInput {
   name: string;
   worktreeName?: string;
+  branch?: string;
   baseBranch?: string;
   sessionPrompt?: string;
   pinned?: boolean;
@@ -903,8 +990,13 @@ const archiveSafetySchema: BoundarySchema<PaneArchiveSafetyCheck> = boundary.obj
   }))),
   reason: boundary.optional(boundary.enumeration('external-worktree', 'main-repo', 'missing-project-context', 'git-error')),
   worktreeWillRemain: boundary.optional(boundary.literal(true)),
+  upstreamGone: boundary.optional(boundary.boolean),
+  mergedViaPr: boundary.optional(boundary.object({
+    number: boundary.number,
+    headOid: boundary.string,
+  })),
 });
-const agentReportSchema: BoundarySchema<AgentReport> = boundary.object({
+const agentReportFields = {
   state: boundary.enumeration('ready', 'blocked', 'failed', 'done'),
   pr: boundary.optional(boundary.number),
   head: boundary.optional(boundary.string),
@@ -913,7 +1005,8 @@ const agentReportSchema: BoundarySchema<AgentReport> = boundary.object({
   summaryPath: boundary.optional(boundary.string),
   question: boundary.optional(boundary.string),
   reportedAt: boundary.string,
-});
+};
+const agentReportSchema: BoundarySchema<AgentReport> = boundary.object(agentReportFields);
 const reportResultSchema: BoundarySchema<ReportResult> = boundary.object({
   ok: boundary.literal(true),
   generation: boundary.optional(boundary.number),
@@ -941,6 +1034,9 @@ const panelLastMessageResultSchema: BoundarySchema<PanelLastMessageResult> = bou
     message: boundary.string,
   }),
 );
+const archiveBlockCodeSchema = boundary.enumeration('uncommitted-changes', 'unpushed-commits', 'uncommitted-and-unpushed', 'status-unknown');
+const worktreeCleanupSchema = boundary.enumeration('completed', 'failed', 'timeout', 'not-applicable');
+const trashDeletionSchema = boundary.enumeration('pending', 'done');
 const panelSummarySchema: BoundarySchema<PanelSummary> = boundary.object({
   id: boundary.string,
   panelId: boundary.string,
@@ -1070,6 +1166,61 @@ const orchestrationPaneOverviewSchema: BoundarySchema<OrchestrationPaneOverview>
     prTitle: boundary.optional(boundary.string),
     prState: boundary.optional(boundary.string),
   })),
+  report: boundary.optional(boundary.object({ ...agentReportFields, panelId: boundary.nonEmptyString })),
+});
+const lockOwnerSchema: BoundarySchema<LockOwner> = boundary.object({
+  kind: boundary.enumeration('pane', 'external'),
+  paneId: boundary.optional(boundary.nonEmptyString),
+  panelId: boundary.optional(boundary.nonEmptyString),
+  label: boundary.optional(boundary.string),
+});
+const lockRecordSchema: BoundarySchema<LockRecord> = boundary.object({
+  name: boundary.nonEmptyString,
+  scope: boundary.enumeration('session', 'global'),
+  sessionId: boundary.optional(boundary.nonEmptyString),
+  owner: lockOwnerSchema,
+  note: boundary.optional(boundary.string),
+  acquiredAt: boundary.nonEmptyString,
+  expiresAt: boundary.nonEmptyString,
+  ttlMs: boundary.number,
+});
+const lockAcquireResultSchema: BoundarySchema<LockAcquireResult> = boundary.union(
+  boundary.object({
+    ok: boundary.literal(true),
+    acquired: boundary.literal(true),
+    renewed: boundary.boolean,
+    waitedMs: boundary.number,
+    lock: lockRecordSchema,
+  }),
+  boundary.object({
+    ok: boundary.literal(false),
+    acquired: boundary.literal(false),
+    timedOut: boundary.boolean,
+    waitedMs: boundary.number,
+    heldBy: lockOwnerSchema,
+    expiresAt: boundary.nonEmptyString,
+    lock: lockRecordSchema,
+  }),
+);
+const lockReleaseResultSchema: BoundarySchema<LockReleaseResult> = boundary.union(
+  boundary.object({
+    ok: boundary.literal(true),
+    released: boundary.boolean,
+    forced: boundary.boolean,
+    lock: boundary.optional(lockRecordSchema),
+  }),
+  boundary.object({
+    ok: boundary.literal(false),
+    released: boundary.literal(false),
+    reason: boundary.literal('not-owner'),
+    heldBy: lockOwnerSchema,
+    expiresAt: boundary.nonEmptyString,
+    lock: lockRecordSchema,
+  }),
+);
+const lockListResultSchema: BoundarySchema<LockListResult> = boundary.object({
+  ok: boundary.literal(true),
+  locks: boundary.array(lockRecordSchema),
 });
 const runpaneSessionOverviewResultSchema: BoundarySchema<RunpaneSessionOverviewResult> = boundary.object({
   ok: boundary.literal(true),
@@ -1082,6 +1233,7 @@ const runpaneSessionOverviewResultSchema: BoundarySchema<RunpaneSessionOverviewR
     freshness: boundary.enumeration('current', 'stale'),
   })),
   refreshedAt: boundary.nonEmptyString,
+  locks: boundary.optional(boundary.array(lockRecordSchema)),
 });
 
 function orchestrationReportSchemaFields() {
@@ -1206,7 +1358,7 @@ const paneArchiveResultSchema: BoundarySchema<PaneArchiveResult> = boundary.unio
     generation: boundary.optional(boundary.number),
     paneId: boundary.string,
     blocked: boundary.object({
-      code: boundary.enumeration('uncommitted-changes', 'unpushed-commits', 'uncommitted-and-unpushed', 'status-unknown'),
+      code: archiveBlockCodeSchema,
       message: boundary.string,
       safetyCheck: archiveSafetySchema,
     }),
@@ -1220,7 +1372,7 @@ const paneArchiveResultSchema: BoundarySchema<PaneArchiveResult> = boundary.unio
     forced: boundary.boolean,
     safetyCheck: archiveSafetySchema,
     blocked: boundary.optional(boundary.object({
-      code: boundary.enumeration('uncommitted-changes', 'unpushed-commits', 'uncommitted-and-unpushed', 'status-unknown'),
+      code: archiveBlockCodeSchema,
       message: boundary.string,
       safetyCheck: archiveSafetySchema,
     })),
@@ -1231,11 +1383,44 @@ const paneArchiveResultSchema: BoundarySchema<PaneArchiveResult> = boundary.unio
     paneId: boundary.string,
     archived: boundary.literal(true),
     forced: boundary.boolean,
-    worktreeCleanup: boundary.enumeration('completed', 'failed', 'timeout', 'not-applicable'),
+    worktreeCleanup: worktreeCleanupSchema,
+    trashDeletion: boundary.optional(trashDeletionSchema),
     worktreePath: boundary.optional(boundary.string),
     safetyCheck: archiveSafetySchema,
   }),
 );
+const paneArchiveBulkResultSchema: BoundarySchema<PaneArchiveBulkResult> = boundary.object({
+  ok: boundary.boolean,
+  sessionId: boundary.string,
+  merged: boundary.literal(true),
+  dryRun: boundary.optional(boundary.literal(true)),
+  removeWorktree: boundary.boolean,
+  archived: boundary.number,
+  skipped: boundary.number,
+  failed: boundary.number,
+  items: boundary.array(boundary.object({
+    paneId: boundary.string,
+    name: boundary.optional(boundary.string),
+    outcome: boundary.enumeration('archived', 'would-archive', 'skipped', 'failed'),
+    skipped: boundary.optional(boundary.object({
+      code: boundary.enumeration(
+        'uncommitted-changes',
+        'unpushed-commits',
+        'uncommitted-and-unpushed',
+        'status-unknown',
+        'missing-pane',
+        'already-archived',
+        'main-repo',
+      ),
+      message: boundary.string,
+    })),
+    error: boundary.optional(boundary.string),
+    safetyCheck: boundary.optional(archiveSafetySchema),
+    worktreeCleanup: boundary.optional(worktreeCleanupSchema),
+    trashDeletion: boundary.optional(trashDeletionSchema),
+    worktreePath: boundary.optional(boundary.string),
+  })),
+});
 const panePinResultSchema: BoundarySchema<PanePinResult> = boundary.object({
   ok: boundary.literal(true),
   generation: boundary.optional(boundary.number),
@@ -1480,6 +1665,7 @@ const paneCreateRequestInputSchema: BoundarySchema<PaneCreateRequestInput> = bou
   panes: boundary.array(boundary.object({
     name: boundary.string,
     worktreeName: boundary.optional(boundary.string),
+    branch: boundary.optional(boundary.string),
     baseBranch: boundary.optional(boundary.string),
     sessionPrompt: boundary.optional(boundary.string),
     pinned: boundary.optional(boundary.boolean),
@@ -1508,6 +1694,8 @@ const paneAdoptRequestInputSchema: BoundarySchema<PaneAdoptRequestInput> = bound
     launch: boundary.optional(boundary.boolean),
   })),
   dryRun: boundary.optional(boundary.boolean),
+  waitReady: boundary.optional(boundary.boolean),
+  readyTimeoutMs: boundary.optional(boundary.number),
   noFocus: boundary.optional(boundary.boolean),
   focus: boundary.optional(boundary.boolean),
   source: boundary.optional(boundary.enumeration('user', 'agent')),
@@ -1651,8 +1839,116 @@ export async function runSessionsOverview(parsed: ParsedArgs): Promise<number> {
   for (const pane of result.panes) {
     const details = pane.missing ? 'missing' : pane.archived ? 'archived' : pane.panels.map(panel => `${panel.title}=${panel.state}`).join(', ') || 'no terminal panels';
     console.log(`  ${pane.name}: ${details}`);
+    if (pane.report) {
+      console.log(`    report ${describeReport(pane.report)} (panel ${pane.report.panelId}, ${pane.report.reportedAt})`);
+    }
+  }
+  for (const lock of result.locks ?? []) {
+    console.log(`  lock ${formatLockLine(lock)}`);
   }
   return 0;
+}
+
+/** One daemon call waits at most this long; longer waits chain calls, each blocking in the daemon. */
+const LOCK_WAIT_PER_CALL_MS = 120_000;
+
+export async function runLockAcquire(parsed: ParsedArgs): Promise<number> {
+  const name = requireLockName(parsed, 'acquire');
+  if (parsed.lockTtlMs === undefined) throw new Error('runpane lock acquire requires --ttl <duration>, such as --ttl 30m.');
+  const request = { name, ttlMs: parsed.lockTtlMs, note: parsed.note, owner: lockOwnerFromParsed(parsed, false) };
+  const waitMs = parsed.lockWaitMs ?? 0;
+  const startedAt = Date.now();
+  let result: LockAcquireResult;
+  for (;;) {
+    const callWaitMs = Math.min(Math.max(0, waitMs - (Date.now() - startedAt)), LOCK_WAIT_PER_CALL_MS);
+    result = await invokeDaemon('runpane:locks:acquire', [{ ...request, waitMs: callWaitMs }], lockAcquireResultSchema, {
+      paneDir: parsed.paneDir,
+      timeoutMs: callWaitMs + 15_000,
+    });
+    // Only a call that waited out its whole window without the lock coming free chains another.
+    if (result.ok || !result.timedOut || Date.now() - startedAt >= waitMs) break;
+  }
+  const final: LockAcquireResult = { ...result, waitedMs: Date.now() - startedAt };
+  if (parsed.json) {
+    printJson(final);
+  } else if (final.ok) {
+    console.log(`${final.renewed ? 'Renewed' : 'Acquired'} lock ${formatLockLine(final.lock)}`);
+  } else {
+    console.log(`Lock ${final.lock.name} is held by ${formatLockOwner(final.heldBy)} until ${final.expiresAt}${final.lock.note ? ` (${final.lock.note})` : ''}.`);
+  }
+  return final.ok ? 0 : 1;
+}
+
+export async function runLockRelease(parsed: ParsedArgs): Promise<number> {
+  const name = requireLockName(parsed, 'release');
+  const request = {
+    name,
+    force: parsed.force || undefined,
+    sessionId: parsed.sessionId?.trim() || undefined,
+    owner: lockOwnerFromParsed(parsed, parsed.force === true),
+  };
+  const result = await invokeDaemon('runpane:locks:release', [request], lockReleaseResultSchema, { paneDir: parsed.paneDir });
+  if (parsed.json) {
+    printJson(result);
+  } else if (!result.ok) {
+    console.log(`Lock ${name} is held by ${formatLockOwner(result.heldBy)} until ${result.expiresAt}; only its owner can release it. Rerun with --force to release it anyway.`);
+  } else if (result.released) {
+    console.log(`${result.forced ? 'Force-released' : 'Released'} lock ${name}.`);
+  } else {
+    console.log(`Lock ${name} was not held.`);
+  }
+  return result.ok ? 0 : 1;
+}
+
+export async function runLockList(parsed: ParsedArgs): Promise<number> {
+  const sessionId = parsed.sessionId?.trim() || undefined;
+  const result = await invokeDaemon('runpane:locks:list', [{ sessionId }], lockListResultSchema, { paneDir: parsed.paneDir });
+  if (parsed.json) {
+    printJson(result);
+    return 0;
+  }
+  for (const lock of result.locks) console.log(formatLockLine(lock));
+  if (result.locks.length === 0) console.log('No locks held.');
+  return 0;
+}
+
+function requireLockName(parsed: ParsedArgs, action: 'acquire' | 'release'): string {
+  const name = parsed.name?.trim();
+  if (!name) throw new Error(`runpane lock ${action} requires --name <name>.`);
+  return name;
+}
+
+/**
+ * The caller owns the lock: --pane/--panel when given, else the Pane terminal
+ * it runs in ($PANE_SESSION_ID/$PANE_PANEL_ID). Outside Pane, --note names the owner.
+ */
+function lockOwnerFromParsed(parsed: ParsedArgs, forced: boolean): LockOwnerInput {
+  const explicit = Boolean(parsed.paneId || parsed.panelId);
+  const paneId = explicit ? parsed.paneId : process.env.PANE_SESSION_ID?.trim() || undefined;
+  const panelId = explicit ? parsed.panelId : process.env.PANE_PANEL_ID?.trim() || undefined;
+  const owner: LockOwnerInput = {};
+  if (paneId || panelId) {
+    if (paneId) owner.paneId = paneId;
+    if (panelId) owner.panelId = panelId;
+    return owner;
+  }
+  const label = parsed.note?.trim();
+  if (!label && !forced) {
+    throw new Error('Outside a Pane terminal, pass --note <text> to say who holds the lock (or --pane/--panel to act for a Pane).');
+  }
+  if (label) owner.label = label;
+  return owner;
+}
+
+function formatLockOwner(owner: LockOwner): string {
+  if (owner.kind === 'external') return `external "${owner.label ?? ''}"`;
+  return owner.panelId ? `pane ${owner.paneId} panel ${owner.panelId}` : `pane ${owner.paneId}`;
+}
+
+function formatLockLine(lock: LockRecord): string {
+  const scope = lock.scope === 'session' ? `session ${lock.sessionId}` : 'global';
+  const note = lock.note ? ` (${lock.note})` : '';
+  return `${lock.name} [${scope}] held by ${formatLockOwner(lock.owner)} until ${lock.expiresAt}${note}`;
 }
 
 function sessionSelectorFromParsed(parsed: ParsedArgs): SessionSelectorValue {
@@ -1938,6 +2234,9 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
     if (!parsed.repo || !parsed.repoPath || !parsed.name) {
       throw new Error('runpane panes adopt requires --repo, --path, and --name.');
     }
+    if (!parsed.launch && (parsed.initialInput !== undefined || parsed.initialInputFile !== undefined || parsed.waitReady)) {
+      throw new Error('runpane panes adopt only sends a prompt or waits for readiness with --launch. Add --launch to start the agent now.');
+    }
     const tool = await buildToolSpec(parsed, 'panes adopt');
     request = {
     repo: parsed.repo,
@@ -1952,6 +2251,8 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
       launch: parsed.launch || undefined,
     }],
     dryRun: parsed.dryRun || undefined,
+    waitReady: parsed.waitReady || undefined,
+    readyTimeoutMs: parsed.readyTimeoutMs,
     noFocus: parsed.noFocus || undefined,
     focus: parsed.focus || undefined,
     source: parsed.source === 'user' || parsed.source === 'agent' ? parsed.source : undefined,
@@ -1961,7 +2262,7 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
   await confirmPaneAdopt(parsed, request);
   const result = await invokeDaemon('runpane:panes:adopt', [request], paneCreateResultSchema, {
     paneDir: parsed.paneDir,
-    timeoutMs: 120_000,
+    timeoutMs: 120_000 + (request.waitReady ? (request.readyTimeoutMs ?? 30_000) : 0),
   });
   if (parsed.json) printJson(result);
   else printPaneCreateResult(result);
@@ -1969,8 +2270,11 @@ export async function runPanesAdopt(parsed: ParsedArgs): Promise<number> {
 }
 
 export async function runPanesArchive(parsed: ParsedArgs): Promise<number> {
+  if (parsed.sessionId) {
+    return runPanesArchiveSession(parsed, parsed.sessionId);
+  }
   if (!parsed.paneId) {
-    throw new Error('runpane panes archive requires --pane.');
+    throw new Error('runpane panes archive requires --pane (or --session with --merged).');
   }
 
   const request: PaneArchiveRequest = {
@@ -1979,8 +2283,9 @@ export async function runPanesArchive(parsed: ParsedArgs): Promise<number> {
   if (parsed.force) request.force = true;
   if (parsed.source === 'user' || parsed.source === 'agent') request.source = parsed.source;
   if (parsed.dryRun) request.dryRun = true;
+  if (parsed.removeWorktree) request.removeWorktree = true;
 
-  await confirmPaneArchive(parsed, request);
+  await confirmPaneArchive(parsed, `Archive pane ${request.paneId}${request.force ? ' (including any uncommitted or unpushed work)' : ''}`);
 
   const result = await invokeDaemon('runpane:panes:archive', [request], paneArchiveResultSchema, {
     paneDir: parsed.paneDir,
@@ -1991,6 +2296,32 @@ export async function runPanesArchive(parsed: ParsedArgs): Promise<number> {
     printJson(result);
   } else {
     printPaneArchiveResult(result);
+  }
+
+  return result.ok ? 0 : 1;
+}
+
+async function runPanesArchiveSession(parsed: ParsedArgs, sessionId: string): Promise<number> {
+  if (!parsed.merged) {
+    throw new Error('runpane panes archive --session requires --merged.');
+  }
+  const request: PaneArchiveBulkRequest = { sessionId, merged: true };
+  if (parsed.source === 'user' || parsed.source === 'agent') request.source = parsed.source;
+  if (parsed.dryRun) request.dryRun = true;
+  if (parsed.removeWorktree) request.removeWorktree = true;
+
+  await confirmPaneArchive(parsed, `Archive every merged or pushed Pane in Session ${sessionId}`);
+
+  const result = await invokeDaemon('runpane:panes:archive', [request], paneArchiveBulkResultSchema, {
+    paneDir: parsed.paneDir,
+    // Each Pane refreshes its upstream and may wait for its worktree removal.
+    timeoutMs: 600_000,
+  });
+
+  if (parsed.json) {
+    printJson(result);
+  } else {
+    printPaneArchiveBulkResult(result);
   }
 
   return result.ok ? 0 : 1;
@@ -2520,6 +2851,7 @@ export async function buildPaneCreateRequest(parsed: ParsedArgs): Promise<PaneCr
     panes: [{
       name: parsed.name,
       worktreeName: parsed.worktreeName,
+      branch: parsed.branch,
       baseBranch: parsed.baseBranch,
       pinned: resolvePinnedOverride(parsed) ?? true,
       tool,
@@ -2632,7 +2964,7 @@ async function buildToolSpec(parsed: ParsedArgs, command = 'panes create'): Prom
 
 function resolveInitialInput(parsed: ParsedArgs): string | undefined {
   if (parsed.initialInput && parsed.initialInputFile) {
-    throw new Error('Use either --initial-input/--prompt or --initial-input-file, not both.');
+    throw new Error('Use either --initial-input/--prompt or --initial-input-file/--prompt-file, not both.');
   }
 
   if (parsed.initialInputFile) {
@@ -2677,7 +3009,7 @@ async function confirmPaneAdopt(parsed: ParsedArgs, request: PaneAdoptRequest): 
   }
 }
 
-async function confirmPaneArchive(parsed: ParsedArgs, request: PaneArchiveRequest): Promise<void> {
+async function confirmPaneArchive(parsed: ParsedArgs, question: string): Promise<void> {
   if (parsed.dryRun || parsed.yes) {
     return;
   }
@@ -2688,8 +3020,7 @@ async function confirmPaneArchive(parsed: ParsedArgs, request: PaneArchiveReques
 
   const rl = createInterface({ input, output });
   try {
-    const suffix = request.force ? ' (including any uncommitted or unpushed work)' : '';
-    const answer = (await rl.question(`Archive pane ${request.paneId}${suffix}? [y/N] `)).trim().toLowerCase();
+    const answer = (await rl.question(`${question}? [y/N] `)).trim().toLowerCase();
     if (answer !== 'y' && answer !== 'yes') {
       throw new Error('Cancelled.');
     }
@@ -2995,8 +3326,30 @@ function printPaneArchiveResult(result: PaneArchiveResult): void {
     return;
   }
 
-  console.log(`Archived pane ${result.paneId}${result.forced ? ' (forced)' : ''}. Worktree cleanup: ${result.worktreeCleanup}.`);
+  const trash = result.trashDeletion === 'pending' ? ' (files are still being deleted in the background)' : '';
+  console.log(`Archived pane ${result.paneId}${result.forced ? ' (forced)' : ''}. Worktree cleanup: ${result.worktreeCleanup}${trash}.`);
   printArchiveSkipReason(result.safetyCheck);
+  if (result.safetyCheck.mergedViaPr) {
+    console.log(`Merged via PR #${result.safetyCheck.mergedViaPr.number} (head ${result.safetyCheck.mergedViaPr.headOid}).`);
+  }
+}
+
+function printPaneArchiveBulkResult(result: PaneArchiveBulkResult): void {
+  const verb = result.dryRun ? 'Would archive' : 'Archived';
+  console.log(`${verb} ${result.archived} Pane(s) in Session ${result.sessionId}; skipped ${result.skipped}; failed ${result.failed}.`);
+  for (const item of result.items) {
+    const label = item.name ? `${item.name} (${item.paneId})` : item.paneId;
+    if (item.outcome === 'skipped') {
+      console.log(`  skipped ${label}: ${item.skipped?.code ?? 'unknown'} - ${item.skipped?.message ?? ''}`);
+    } else if (item.outcome === 'failed') {
+      console.error(`  failed ${label}: ${item.error ?? 'unknown error'}`);
+    } else {
+      const merged = item.safetyCheck?.mergedViaPr ? ` merged via PR #${item.safetyCheck.mergedViaPr.number}` : '';
+      const trash = item.trashDeletion === 'pending' ? ', files deleting in background' : '';
+      const cleanup = item.worktreeCleanup ? ` worktree ${item.worktreeCleanup}${trash}` : '';
+      console.log(`  ${item.outcome} ${label}${merged}${cleanup}`);
+    }
+  }
 }
 
 function printArchiveSkipReason(
@@ -3013,7 +3366,10 @@ function printArchiveCommitEvidence(
 ): void {
   printArchiveSkipReason(safetyCheck, print);
   if (safetyCheck.upstream) {
-    print(`Upstream: ${safetyCheck.upstream}${safetyCheck.upstreamRefreshed ? ' (refreshed)' : ''}`);
+    print(`Upstream: ${safetyCheck.upstream}${safetyCheck.upstreamRefreshed ? ' (refreshed)' : ''}${safetyCheck.upstreamGone ? ' (gone from the remote)' : ''}`);
+  }
+  if (safetyCheck.mergedViaPr) {
+    print(`Merged via PR #${safetyCheck.mergedViaPr.number} (head ${safetyCheck.mergedViaPr.headOid})`);
   }
   for (const commit of safetyCheck.unpushedCommitDetails ?? []) {
     print(`Unpushed: ${commit.sha} ${commit.subject}`);
@@ -3144,6 +3500,7 @@ function parsePaneCreateItemPayload(value: PaneCreateItemInput, index: number): 
   return {
     name: value.name,
     worktreeName: value.worktreeName,
+    branch: value.branch,
     baseBranch: value.baseBranch,
     sessionPrompt: value.sessionPrompt,
     pinned: value.pinned,

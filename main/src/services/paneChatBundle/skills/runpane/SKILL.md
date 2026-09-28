@@ -81,6 +81,12 @@ While one workstream waits, continue the others.
 - Create panes and panels in the background with `--source agent` and
   `--no-focus` where supported. Check the returned focus state. If a pane
   steals focus anyway, report it with `runpane doctor --report`.
+- For work on a named branch,
+  `runpane panes create --base <ref> --branch <name> --prompt-file <file>`
+  replaces `git worktree add` plus `panes adopt`. Pane creates the worktree on
+  exactly that branch, slashes included, and fails if the branch already
+  exists. Adopt only a worktree that already exists; to send it a prompt,
+  pass `--launch --prompt-file <file>`.
 
 ## Dispatch
 
@@ -288,3 +294,14 @@ Report one dashboard line set per workstream:
 
 A workstream is done when it is ready to merge. Merging needs its own exact
 authorization.
+
+## Close out
+
+Archiving removes a Pane's worktree, so it needs the user's cleanup approval.
+Once PRs merge, preview with
+`runpane panes archive --session <id|name> --merged --dry-run --json`, then
+rerun with `--yes`. It archives only Panes that are clean and pushed, or whose
+branch merged through a PR whose head is `HEAD` (`safetyCheck.mergedViaPr`),
+and gives every other Pane a `skipped.code`. Adopted worktrees are kept unless
+you add `--remove-worktree`. Local branches are always kept. Never add
+`--force` to discard work without the user's approval.

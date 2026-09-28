@@ -24,6 +24,9 @@ from .installers import (
 from .local_control import (
     has_cadence_value_flag,
     run_agents_doctor,
+    run_lock_acquire,
+    run_lock_list,
+    run_lock_release,
     run_panels_create,
     run_panels_input,
     run_panels_last_message,
@@ -79,6 +82,10 @@ CHANNELS = set(RUNPANE_CONTRACT["enums"]["channels"])
 AGENTS = set(RUNPANE_CONTRACT["enums"]["agents"])
 COMMAND_GROUP_HELP_TOPICS = {"panes", "panels", "workspace"}
 COMMAND_GROUP_HELP_TOPICS.add("sessions")
+COMMAND_GROUP_HELP_TOPICS.add("lock")
+LOCK_DURATION_PATTERN = re.compile(r"^(\d+)(ms|s|m|h)?$")
+LOCK_DURATION_UNIT_MS = {"ms": 1, "s": 1_000, "m": 60_000, "h": 3_600_000}
+MAX_LOCK_DURATION_MS = 86_400_000
 
 REMOTE_VALUE_FLAGS = {flag["name"] for flag in RUNPANE_CONTRACT["flags"]["remoteValue"]}
 REMOTE_BOOLEAN_FLAGS = {flag["name"] for flag in RUNPANE_CONTRACT["flags"]["remoteBoolean"]}
@@ -124,6 +131,7 @@ class ParsedArgs:
     repo_path: Optional[str] = None
     name: Optional[str] = None
     worktree_name: Optional[str] = None
+    branch: Optional[str] = None
     base_branch: Optional[str] = None
     agent: Optional[str] = None
     tool_command: Optional[str] = None
@@ -150,6 +158,8 @@ class ParsedArgs:
     no_associate: bool = False
     composer_strategy: Optional[str] = None
     force: bool = False
+    remove_worktree: bool = False
+    merged: bool = False
     watch_as: Optional[str] = None
     watch_since: Optional[int] = None
     watch_from: Optional[str] = None
@@ -189,6 +199,9 @@ class ParsedArgs:
     summary: Optional[str] = None
     summary_file: Optional[str] = None
     question: Optional[str] = None
+    lock_ttl_ms: Optional[int] = None
+    lock_wait_ms: Optional[int] = None
+    note: Optional[str] = None
     help_topic: Optional[str] = None
     remote_setup_args: List[str] = field(default_factory=list)
 
@@ -272,6 +285,12 @@ def dispatch_parsed_command(parsed: ParsedArgs, telemetry_context: WrapperTeleme
         return run_sessions_detach(parsed)
     if parsed.command == "sessions overview":
         return run_sessions_overview(parsed)
+    if parsed.command == "lock acquire":
+        return run_lock_acquire(parsed)
+    if parsed.command == "lock release":
+        return run_lock_release(parsed)
+    if parsed.command == "lock list":
+        return run_lock_list(parsed)
     if parsed.command == "panes list":
         return run_panes_list(parsed)
     if parsed.command == "panes cost":
@@ -483,6 +502,8 @@ def parse_args(argv: List[str]) -> ParsedArgs:
         parsed.target = "client"
 
     parse_flags(args, parsed)
+    if parsed.command == "panes archive":
+        validate_panes_archive_args(parsed)
     if parsed.command == "watch" and parsed.follow and parsed.timeout_ms == 0:
         raise ValueError("--timeout-ms must be greater than 0 with --follow.")
     if parsed.command == "watch" and parsed.session_id is not None and parsed.watch_pane_ids:
@@ -515,6 +536,30 @@ def validate_report_args(parsed: ParsedArgs) -> None:
         raise ValueError("runpane report accepts either --summary or --summary-file, not both.")
     if parsed.report_state == "blocked" and not (parsed.question or "").strip():
         raise ValueError('runpane report --state blocked requires --question "<what you need answered>".')
+
+
+def validate_panes_archive_args(parsed: ParsedArgs) -> None:
+    if parsed.pane_id and parsed.session_id:
+        raise ValueError("runpane panes archive accepts either --pane or --session, not both.")
+    if parsed.merged and not parsed.session_id:
+        raise ValueError("--merged requires --session.")
+    if parsed.session_id and not parsed.merged:
+        raise ValueError("runpane panes archive --session requires --merged.")
+    if parsed.session_id and parsed.force:
+        raise ValueError(
+            "runpane panes archive --session does not accept --force; archive one Pane with --pane to discard its work."
+        )
+
+
+def parse_lock_ttl(value: str) -> int:
+    """A lock TTL such as 90s, 30m, or 2h; a bare number is milliseconds."""
+    match = LOCK_DURATION_PATTERN.match(value.strip())
+    if not match:
+        raise ValueError("--ttl must be a duration such as 90s, 30m, or 2h (a bare number is milliseconds).")
+    ttl_ms = int(match.group(1)) * LOCK_DURATION_UNIT_MS[match.group(2) or "ms"]
+    if ttl_ms < 1_000 or ttl_ms > MAX_LOCK_DURATION_MS:
+        raise ValueError("--ttl must be between 1s and 24h.")
+    return ttl_ms
 
 
 def parse_non_negative_int_flag(flag: str, value: str) -> int:
@@ -648,6 +693,12 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
     if flag == "--as-file-pointer":
         parsed.as_file_pointer = True
         return
+    if flag == "--remove-worktree":
+        parsed.remove_worktree = True
+        return
+    if flag == "--merged":
+        parsed.merged = True
+        return
     if flag == "--follow":
         parsed.follow = True
         return
@@ -720,7 +771,10 @@ def parse_local_value_flag(parsed: ParsedArgs, flag: str, value: str) -> None:
     if flag == "--worktree-name":
         parsed.worktree_name = value
         return
-    if flag == "--base-branch":
+    if flag == "--branch":
+        parsed.branch = value
+        return
+    if flag in {"--base-branch", "--base"}:
         parsed.base_branch = value
         return
     if flag == "--agent":
@@ -743,7 +797,7 @@ def parse_local_value_flag(parsed: ParsedArgs, flag: str, value: str) -> None:
     if flag == "--input-file":
         parsed.panel_input_file = value
         return
-    if flag == "--initial-input-file":
+    if flag in {"--initial-input-file", "--prompt-file"}:
         parsed.initial_input_file = value
         return
     if flag == "--from-json":
@@ -908,6 +962,18 @@ def parse_local_value_flag(parsed: ParsedArgs, flag: str, value: str) -> None:
     if flag == "--question":
         parsed.question = value
         return
+    if flag == "--ttl":
+        parsed.lock_ttl_ms = parse_lock_ttl(value)
+        return
+    if flag == "--wait":
+        wait_ms = parse_non_negative_int_flag(flag, value)
+        if wait_ms > MAX_LOCK_DURATION_MS:
+            raise ValueError("--wait must be at most 86400000 (24h).")
+        parsed.lock_wait_ms = wait_ms
+        return
+    if flag == "--note":
+        parsed.note = value
+        return
     raise ValueError(f"Unknown option for {parsed.command}: {flag}")
 
 
@@ -928,6 +994,9 @@ def is_runpane_local_command(command: str) -> bool:
         "sessions associate",
         "sessions detach",
         "sessions overview",
+        "lock acquire",
+        "lock release",
+        "lock list",
         "workspace state",
         "watch",
         "panes list",

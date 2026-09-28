@@ -31,6 +31,100 @@ export interface RunpaneSessionResult {
 
 export interface RunpaneSessionOverviewResult extends OrchestrationSessionOverview {
   ok: true;
+  /** Named locks scoped to this Session or held by one of its Panes. */
+  locks: RunpaneLockRecord[];
+}
+
+/**
+ * Who holds a named lock. A Pane owner is the calling Pane and, usually, its
+ * panel; an external owner is a caller outside any Pane, identified by the
+ * `--note` text it acquired with.
+ */
+export interface RunpaneLockOwner {
+  kind: 'pane' | 'external';
+  paneId?: string;
+  panelId?: string;
+  label?: string;
+}
+
+export interface RunpaneLockRecord {
+  name: string;
+  /** `session` when the owner Pane belonged to a Session at acquire time; otherwise `global`. */
+  scope: 'session' | 'global';
+  sessionId?: string;
+  owner: RunpaneLockOwner;
+  note?: string;
+  acquiredAt: string;
+  expiresAt: string;
+  ttlMs: number;
+}
+
+export interface RunpaneLockOwnerInput {
+  paneId?: string;
+  panelId?: string;
+  label?: string;
+}
+
+export interface RunpaneLockAcquireRequest {
+  name: string;
+  ttlMs: number;
+  /** Block in the daemon for up to this long (clamped per call) while another owner holds the lock. */
+  waitMs?: number;
+  note?: string;
+  owner: RunpaneLockOwnerInput;
+}
+
+export type RunpaneLockAcquireResult =
+  | {
+      ok: true;
+      acquired: true;
+      renewed: boolean;
+      waitedMs: number;
+      lock: RunpaneLockRecord;
+    }
+  | {
+      ok: false;
+      acquired: false;
+      /** True when the call waited its whole wait window without the lock coming free. */
+      timedOut: boolean;
+      waitedMs: number;
+      heldBy: RunpaneLockOwner;
+      expiresAt: string;
+      lock: RunpaneLockRecord;
+    };
+
+export interface RunpaneLockReleaseRequest {
+  name: string;
+  force?: boolean;
+  /** Session selector (id or exact name) to release a Session-scoped lock from outside that Session. */
+  sessionId?: string;
+  owner: RunpaneLockOwnerInput;
+}
+
+export type RunpaneLockReleaseResult =
+  | {
+      ok: true;
+      released: boolean;
+      forced: boolean;
+      lock?: RunpaneLockRecord;
+    }
+  | {
+      ok: false;
+      released: false;
+      reason: 'not-owner';
+      heldBy: RunpaneLockOwner;
+      expiresAt: string;
+      lock: RunpaneLockRecord;
+    };
+
+export interface RunpaneLockListRequest {
+  /** Session selector (id or exact name); limits the list to that Session's locks. */
+  sessionId?: string;
+}
+
+export interface RunpaneLockListResult {
+  ok: true;
+  locks: RunpaneLockRecord[];
 }
 
 export type RunpaneWorkspaceEntryKind =
@@ -266,6 +360,8 @@ export type RunpaneToolSpec = RunpaneAgentToolSpec | RunpaneCommandToolSpec;
 export interface RunpanePaneCreateItem {
   name: string;
   worktreeName?: string;
+  /** Exact new branch name for the Pane's worktree; defaults to the worktree name. */
+  branch?: string;
   baseBranch?: string;
   sessionPrompt?: string;
   pinned?: boolean;
@@ -302,6 +398,8 @@ export interface RunpanePaneAdoptRequest {
   repo: RunpaneRepoSelector;
   panes: RunpanePaneAdoptItem[];
   dryRun?: boolean;
+  waitReady?: boolean;
+  readyTimeoutMs?: number;
   noFocus?: boolean;
   focus?: boolean;
   source?: RunpanePanelCreateSource;
@@ -533,9 +631,31 @@ export interface RunpanePaneArchiveRequest {
   force?: boolean;
   source?: RunpanePanelCreateSource;
   dryRun?: boolean;
+  /** Also check and remove an adopted (externally owned) worktree. Pane-managed worktrees are always removed. */
+  removeWorktree?: boolean;
 }
 
+/** Archives every Pane associated with a named Session whose work is safe to discard locally. */
+export interface RunpanePaneArchiveBulkRequest {
+  sessionId: string;
+  /** The only bulk filter today: Panes that are clean and pushed, or merged via a pull request. */
+  merged: true;
+  source?: RunpanePanelCreateSource;
+  dryRun?: boolean;
+  removeWorktree?: boolean;
+}
+
+/**
+ * Released runpane CLIs decode exactly these values, so never add one.
+ * - `completed`: the worktree is gone from its path and from git.
+ * - `failed`: removal failed; the worktree may still be on disk.
+ * - `timeout`: removal (or the archive script before it) is still running in the background.
+ * - `not-applicable`: nothing was removed (a main-repo Pane, or an adopted worktree without `removeWorktree`).
+ */
 export type RunpaneWorktreeCleanupState = 'completed' | 'failed' | 'timeout' | 'not-applicable';
+
+/** After `completed`: whether the removed worktree's files are deleted, or still being deleted from the trash. */
+export type RunpaneWorktreeTrashDeletion = 'pending' | 'done';
 
 export type RunpanePaneArchiveBlockCode =
   | 'uncommitted-changes'
@@ -566,6 +686,15 @@ export interface RunpanePaneArchiveSafetyCheck {
   reason?: RunpanePaneArchiveSafetyCheckReason;
   /** Set when archive will not remove the worktree because cleanup does not apply to this Pane. */
   worktreeWillRemain?: true;
+  /** The branch had an upstream that no longer exists on the remote. */
+  upstreamGone?: boolean;
+  /** A merged pull request whose head is exactly this worktree's HEAD; its commits do not count as unpushed. */
+  mergedViaPr?: RunpanePaneArchiveMergedPr;
+}
+
+export interface RunpanePaneArchiveMergedPr {
+  number: number;
+  headOid: string;
 }
 
 export interface RunpanePaneArchiveCommit {
@@ -594,6 +723,7 @@ export interface RunpanePaneArchiveSuccessResult {
   archived: true;
   forced: boolean;
   worktreeCleanup: RunpaneWorktreeCleanupState;
+  trashDeletion?: RunpaneWorktreeTrashDeletion;
   worktreePath?: string;
   safetyCheck: RunpanePaneArchiveSafetyCheck;
 }
@@ -612,6 +742,36 @@ export type RunpanePaneArchiveResult =
   | RunpanePaneArchiveSuccessResult
   | RunpanePaneArchiveBlockedResult
   | RunpanePaneArchiveDryRunResult;
+
+export type RunpanePaneArchiveBulkSkipCode =
+  | RunpanePaneArchiveBlockCode
+  | 'missing-pane'
+  | 'already-archived'
+  | 'main-repo';
+
+export interface RunpanePaneArchiveBulkItem {
+  paneId: string;
+  name?: string;
+  outcome: 'archived' | 'would-archive' | 'skipped' | 'failed';
+  skipped?: { code: RunpanePaneArchiveBulkSkipCode; message: string };
+  error?: string;
+  safetyCheck?: RunpanePaneArchiveSafetyCheck;
+  worktreeCleanup?: RunpaneWorktreeCleanupState;
+  trashDeletion?: RunpaneWorktreeTrashDeletion;
+  worktreePath?: string;
+}
+
+export interface RunpanePaneArchiveBulkResult {
+  ok: boolean;
+  sessionId: string;
+  merged: true;
+  dryRun?: true;
+  removeWorktree: boolean;
+  archived: number;
+  skipped: number;
+  failed: number;
+  items: RunpanePaneArchiveBulkItem[];
+}
 
 export interface RunpanePanelSummary {
   id: string;

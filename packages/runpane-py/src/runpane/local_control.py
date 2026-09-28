@@ -135,7 +135,131 @@ def run_sessions_overview(parsed: Any) -> int:
                 for panel in pane.get("panels", [])
             ) or "no terminal panels"
         print(f"  {pane.get('name')}: {details}")
+        report = pane.get("report")
+        if report:
+            print(f"    report {describe_report(report)} (panel {report.get('panelId')}, {report.get('reportedAt')})")
+    for lock in result.get("locks") or []:
+        print(f"  lock {format_lock_line(lock)}")
     return 0
+
+
+# One daemon call waits at most this long; longer waits chain calls, each blocking in the daemon.
+LOCK_WAIT_PER_CALL_MS = 120_000
+
+
+def run_lock_acquire(parsed: Any) -> int:
+    name = _require_lock_name(parsed, "acquire")
+    if parsed.lock_ttl_ms is None:
+        raise ValueError("runpane lock acquire requires --ttl <duration>, such as --ttl 30m.")
+    request: Dict[str, Any] = {
+        "name": name,
+        "ttlMs": parsed.lock_ttl_ms,
+        **optional_value("note", parsed.note),
+        "owner": _lock_owner(parsed, False),
+    }
+    wait_ms = parsed.lock_wait_ms or 0
+    started_at = time.monotonic()
+    while True:
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        call_wait_ms = min(max(0, wait_ms - elapsed_ms), LOCK_WAIT_PER_CALL_MS)
+        result = invoke_daemon(
+            "runpane:locks:acquire",
+            [{**request, "waitMs": call_wait_ms}],
+            pane_dir=parsed.pane_dir,
+            timeout_ms=call_wait_ms + 15_000,
+        )
+        # Only a call that waited out its whole window without the lock coming free chains another.
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        if result.get("ok") or not result.get("timedOut") or elapsed_ms >= wait_ms:
+            break
+    result = {**result, "waitedMs": int((time.monotonic() - started_at) * 1000)}
+    if parsed.json:
+        print_json(result)
+    elif result.get("ok"):
+        action = "Renewed" if result.get("renewed") else "Acquired"
+        print(f"{action} lock {format_lock_line(result.get('lock') or {})}")
+    else:
+        lock = result.get("lock") or {}
+        note = f" ({lock.get('note')})" if lock.get("note") else ""
+        print(f"Lock {lock.get('name')} is held by {format_lock_owner(result.get('heldBy') or {})} until {result.get('expiresAt')}{note}.")
+    return 0 if result.get("ok") else 1
+
+
+def run_lock_release(parsed: Any) -> int:
+    name = _require_lock_name(parsed, "release")
+    request: Dict[str, Any] = {
+        "name": name,
+        **optional_value("force", True if parsed.force else None),
+        **optional_value("sessionId", (parsed.session_id or "").strip() or None),
+        "owner": _lock_owner(parsed, bool(parsed.force)),
+    }
+    result = invoke_daemon("runpane:locks:release", [request], pane_dir=parsed.pane_dir)
+    if parsed.json:
+        print_json(result)
+    elif not result.get("ok"):
+        print(
+            f"Lock {name} is held by {format_lock_owner(result.get('heldBy') or {})} until {result.get('expiresAt')}; "
+            "only its owner can release it. Rerun with --force to release it anyway."
+        )
+    elif result.get("released"):
+        print(f"{'Force-released' if result.get('forced') else 'Released'} lock {name}.")
+    else:
+        print(f"Lock {name} was not held.")
+    return 0 if result.get("ok") else 1
+
+
+def run_lock_list(parsed: Any) -> int:
+    request = optional_value("sessionId", (parsed.session_id or "").strip() or None)
+    result = invoke_daemon("runpane:locks:list", [request], pane_dir=parsed.pane_dir)
+    if parsed.json:
+        print_json(result)
+        return 0
+    locks = result.get("locks") or []
+    for lock in locks:
+        print(format_lock_line(lock))
+    if not locks:
+        print("No locks held.")
+    return 0
+
+
+def _require_lock_name(parsed: Any, action: str) -> str:
+    name = (parsed.name or "").strip()
+    if not name:
+        raise ValueError(f"runpane lock {action} requires --name <name>.")
+    return name
+
+
+def _lock_owner(parsed: Any, forced: bool) -> Dict[str, Any]:
+    """The caller owns the lock: --pane/--panel, else $PANE_SESSION_ID/$PANE_PANEL_ID; outside Pane, --note."""
+    explicit = bool(parsed.pane_id or parsed.panel_id)
+    pane_id = parsed.pane_id if explicit else (os.environ.get("PANE_SESSION_ID") or "").strip() or None
+    panel_id = parsed.panel_id if explicit else (os.environ.get("PANE_PANEL_ID") or "").strip() or None
+    if pane_id or panel_id:
+        return {**optional_value("paneId", pane_id), **optional_value("panelId", panel_id)}
+    label = (parsed.note or "").strip()
+    if not label and not forced:
+        raise ValueError(
+            "Outside a Pane terminal, pass --note <text> to say who holds the lock "
+            "(or --pane/--panel to act for a Pane)."
+        )
+    return optional_value("label", label or None)
+
+
+def format_lock_owner(owner: Dict[str, Any]) -> str:
+    if owner.get("kind") == "external":
+        return f'external "{owner.get("label") or ""}"'
+    if owner.get("panelId"):
+        return f"pane {owner.get('paneId')} panel {owner.get('panelId')}"
+    return f"pane {owner.get('paneId')}"
+
+
+def format_lock_line(lock: Dict[str, Any]) -> str:
+    scope = f"session {lock.get('sessionId')}" if lock.get("scope") == "session" else "global"
+    note = f" ({lock.get('note')})" if lock.get("note") else ""
+    return (
+        f"{lock.get('name')} [{scope}] held by {format_lock_owner(lock.get('owner') or {})} "
+        f"until {lock.get('expiresAt')}{note}"
+    )
 
 
 def _session_selector(parsed: Any) -> Dict[str, str]:
@@ -417,17 +541,21 @@ def run_panes_create(parsed: Any) -> int:
 
 
 def run_panes_archive(parsed: Any) -> int:
+    if parsed.session_id:
+        return run_panes_archive_session(parsed, parsed.session_id)
     if not parsed.pane_id:
-        raise ValueError("runpane panes archive requires --pane.")
+        raise ValueError("runpane panes archive requires --pane (or --session with --merged).")
 
     request: Dict[str, Any] = {
         "paneId": parsed.pane_id,
         **optional_value("force", True if parsed.force else None),
         **optional_value("source", parsed.source if parsed.source in ("user", "agent") else None),
         **optional_value("dryRun", True if parsed.dry_run else None),
+        **optional_value("removeWorktree", True if parsed.remove_worktree else None),
     }
 
-    confirm_pane_archive(parsed, request)
+    suffix = " (including any uncommitted or unpushed work)" if request.get("force") else ""
+    confirm_pane_archive(parsed, f"Archive pane {request.get('paneId')}{suffix}")
 
     result = invoke_daemon(
         "runpane:panes:archive",
@@ -440,6 +568,35 @@ def run_panes_archive(parsed: Any) -> int:
         print_json(result)
     else:
         print_pane_archive_result(result)
+
+    return 0 if result.get("ok") else 1
+
+
+def run_panes_archive_session(parsed: Any, session_id: str) -> int:
+    if not parsed.merged:
+        raise ValueError("runpane panes archive --session requires --merged.")
+    request: Dict[str, Any] = {
+        "sessionId": session_id,
+        "merged": True,
+        **optional_value("source", parsed.source if parsed.source in ("user", "agent") else None),
+        **optional_value("dryRun", True if parsed.dry_run else None),
+        **optional_value("removeWorktree", True if parsed.remove_worktree else None),
+    }
+
+    confirm_pane_archive(parsed, f"Archive every merged or pushed Pane in Session {session_id}")
+
+    result = invoke_daemon(
+        "runpane:panes:archive",
+        [request],
+        pane_dir=parsed.pane_dir,
+        # Each Pane refreshes its upstream and may wait for its worktree removal.
+        timeout_ms=600_000,
+    )
+
+    if parsed.json:
+        print_json(result)
+    else:
+        print_pane_archive_bulk_result(result)
 
     return 0 if result.get("ok") else 1
 
@@ -908,6 +1065,7 @@ def build_pane_create_request(parsed: Any) -> Dict[str, Any]:
         "panes": [{
             "name": parsed.name,
             **optional_value("worktreeName", parsed.worktree_name),
+            **optional_value("branch", parsed.branch),
             **optional_value("baseBranch", parsed.base_branch),
             "pinned": pinned,
             "tool": build_tool_spec(parsed),
@@ -986,7 +1144,7 @@ def build_tool_spec(parsed: Any, command: str = "panes create") -> Dict[str, Any
 
 def resolve_initial_input(parsed: Any) -> Optional[str]:
     if parsed.initial_input and parsed.initial_input_file:
-        raise ValueError("Use either --initial-input/--prompt or --initial-input-file, not both.")
+        raise ValueError("Use either --initial-input/--prompt or --initial-input-file/--prompt-file, not both.")
     if parsed.initial_input_file:
         return read_input_source(parsed.initial_input_file)
     return parsed.initial_input
@@ -1016,14 +1174,13 @@ def confirm_pane_create(parsed: Any, request: Dict[str, Any]) -> None:
         raise ValueError("Cancelled.")
 
 
-def confirm_pane_archive(parsed: Any, request: Dict[str, Any]) -> None:
+def confirm_pane_archive(parsed: Any, question: str) -> None:
     if parsed.dry_run or parsed.yes:
         return
     if not is_interactive_shell():
         raise ValueError("runpane panes archive mutates Pane state. Rerun with --yes in non-interactive shells.")
 
-    suffix = " (including any uncommitted or unpushed work)" if request.get("force") else ""
-    answer = input(f"Archive pane {request.get('paneId')}{suffix}? [y/N] ").strip().lower()
+    answer = input(f"{question}? [y/N] ").strip().lower()
     if answer not in {"y", "yes"}:
         raise ValueError("Cancelled.")
 
@@ -1379,8 +1536,34 @@ def print_pane_archive_result(result: Dict[str, Any]) -> None:
         return
 
     forced = " (forced)" if result.get("forced") else ""
-    print(f"Archived pane {result.get('paneId')}{forced}. Worktree cleanup: {result.get('worktreeCleanup')}.")
+    trash = " (files are still being deleted in the background)" if result.get("trashDeletion") == "pending" else ""
+    print(f"Archived pane {result.get('paneId')}{forced}. Worktree cleanup: {result.get('worktreeCleanup')}{trash}.")
     print_archive_skip_reason(result.get("safetyCheck") or {})
+    merged = (result.get("safetyCheck") or {}).get("mergedViaPr")
+    if merged:
+        print(f"Merged via PR #{merged.get('number')} (head {merged.get('headOid')}).")
+
+
+def print_pane_archive_bulk_result(result: Dict[str, Any]) -> None:
+    verb = "Would archive" if result.get("dryRun") else "Archived"
+    print(
+        f"{verb} {result.get('archived')} Pane(s) in Session {result.get('sessionId')}; "
+        f"skipped {result.get('skipped')}; failed {result.get('failed')}."
+    )
+    for item in result.get("items") or []:
+        label = f"{item.get('name')} ({item.get('paneId')})" if item.get("name") else item.get("paneId")
+        outcome = item.get("outcome")
+        if outcome == "skipped":
+            skipped = item.get("skipped") or {}
+            print(f"  skipped {label}: {skipped.get('code', 'unknown')} - {skipped.get('message', '')}")
+        elif outcome == "failed":
+            print(f"  failed {label}: {item.get('error') or 'unknown error'}", file=sys.stderr)
+        else:
+            merged_pr = (item.get("safetyCheck") or {}).get("mergedViaPr")
+            merged = f" merged via PR #{merged_pr.get('number')}" if merged_pr else ""
+            trash = ", files deleting in background" if item.get("trashDeletion") == "pending" else ""
+            cleanup = f" worktree {item.get('worktreeCleanup')}{trash}" if item.get("worktreeCleanup") else ""
+            print(f"  {outcome} {label}{merged}{cleanup}")
 
 
 def print_archive_skip_reason(safety_check: Dict[str, Any], file: Any = None) -> None:
@@ -1397,7 +1580,11 @@ def print_archive_commit_evidence(safety_check: Dict[str, Any], file: Any = None
     upstream = safety_check.get("upstream")
     if upstream:
         refreshed = " (refreshed)" if safety_check.get("upstreamRefreshed") else ""
-        print(f"Upstream: {upstream}{refreshed}", file=destination)
+        gone = " (gone from the remote)" if safety_check.get("upstreamGone") else ""
+        print(f"Upstream: {upstream}{refreshed}{gone}", file=destination)
+    merged = safety_check.get("mergedViaPr")
+    if merged:
+        print(f"Merged via PR #{merged.get('number')} (head {merged.get('headOid')})", file=destination)
     for commit in safety_check.get("unpushedCommitDetails") or []:
         print(f"Unpushed: {commit.get('sha')} {commit.get('subject')}", file=destination)
 

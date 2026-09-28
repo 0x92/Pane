@@ -16,9 +16,12 @@ import { panelManager as terminalPanelStore } from '../test/setup';
 import { terminalPanelManager } from '../services/terminalPanelManager';
 import { databaseService as panelDatabase } from '../services/database';
 import { ArchiveProgressManager } from '../services/archiveProgressManager';
+import { removeWorktreeViaTrash, waitForPendingWorktreeTrash } from '../services/worktreeTrash';
 import { WorkspaceJournal } from '../services/workspaceJournal';
 import { OrchestrationSessionManager } from '../services/orchestrationSessionManager';
 import { WorkspaceCursorStore } from '../services/workspaceCursorStore';
+import { NamedLockService } from '../services/namedLockService';
+import { NamedLockStore } from '../services/namedLockStore';
 import { usageManager } from '../services/usage/usageManager';
 import { CommandRunner } from '../utils/commandRunner';
 import { PathResolver } from '../utils/pathResolver';
@@ -273,20 +276,20 @@ function registerSessionsDeleteStub(
   registry: PaneCommandRegistry,
   services: AppServices,
   options: {
-    onArchive?: () => Promise<void> | void;
+    onArchive?: (sessionId: string) => Promise<void> | void;
     result?: { success: boolean; error?: string };
   } = {},
 ): ReturnType<typeof vi.fn> {
-  const handler = vi.fn(async (sessionId: string) => {
+  const handler = vi.fn(async (sessionId: string, _options?: { removeExternalWorktree?: boolean }) => {
     if (options.result) {
       return options.result;
     }
     if (services.archiveProgressManager) {
       services.archiveProgressManager.addTask(sessionId, 'issue-252', 'issue-252-worktree', 'Pane', async () => {
-        await options.onArchive?.();
+        await options.onArchive?.(sessionId);
       });
     } else {
-      setImmediate(() => options.onArchive?.());
+      setImmediate(() => options.onArchive?.(sessionId));
     }
     return { success: true };
   });
@@ -514,11 +517,108 @@ describe('runpane IPC handlers', () => {
       expect(result).toMatchObject({ ok: true, items: [expect.not.objectContaining({ association: expect.anything() })] });
     });
 
-    it('adopts a wrapper launch with its declared agent and runs the command unchanged', async () => {
-      const repoPath = createTempGitRepo('wrapper-adopt-repo');
+    function createAdoptWorktree(name: string) {
+      const repoPath = createTempGitRepo(`${name}-repo`);
       execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: repoPath, stdio: 'ignore' });
-      const worktreePath = path.join(path.dirname(repoPath), 'wrapper-adopt-worktree');
-      execFileSync('git', ['worktree', 'add', '-b', 'wrapper-adopt', worktreePath], { cwd: repoPath, stdio: 'ignore' });
+      const worktreePath = path.join(path.dirname(repoPath), `${name}-worktree`);
+      execFileSync('git', ['worktree', 'add', '-b', name, worktreePath], { cwd: repoPath, stdio: 'ignore' });
+      return { repoPath, worktreePath };
+    }
+
+    it('launches an adopted agent with a prompt and reports its delivery like create', async () => {
+      const { repoPath, worktreePath } = createAdoptWorktree('prompt-adopt');
+      const services = adoptionServices(repoPath, worktreePath);
+      // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+      const claudePanel = {
+        ...terminalPanel,
+        title: 'Claude Code',
+        state: { isActive: false, customState: { agentType: 'claude', initialInputSentAt: '2026-01-01T00:02:00.000Z' } },
+      } as ToolPanel;
+      vi.mocked(panelManager.createPanel).mockResolvedValue(claudePanel);
+      vi.mocked(panelManager.getPanel).mockReturnValue(claudePanel);
+      vi.mocked(terminalPanelManager.initializeTerminal).mockResolvedValue(undefined);
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue({
+        ...terminalSnapshot(`${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n`, 'idle', 'claude'),
+      });
+
+      const result = await createRegistry(services).invoke('runpane:panes:adopt', [{
+        repo: { id: project.id },
+        waitReady: true,
+        readyTimeoutMs: 100,
+        panes: [{
+          path: worktreePath,
+          name: 'Adopted',
+          tool: { agent: 'claude', initialInput: 'Read and follow prompt.md' },
+          launch: true,
+        }],
+      }]);
+
+      expect(panelManager.createPanel).toHaveBeenCalledWith(expect.objectContaining({
+        initialState: expect.objectContaining({
+          initialCommand: RUNPANE_CONTRACT.agentTemplates.claude.command,
+          initialInput: 'Read and follow prompt.md',
+          initialInputMode: 'argument',
+          agentType: 'claude',
+        }),
+        activate: false,
+      }));
+      expect(terminalPanelManager.writeToTerminal).not.toHaveBeenCalled();
+      expect(result, JSON.stringify(result)).toMatchObject({
+        ok: true,
+        items: [{
+          ok: true,
+          sessionId: session.id,
+          panelId: claudePanel.id,
+          readiness: { ok: true, condition: 'ready' },
+          initialInput: { delivered: true, submitted: true, strategy: 'argument', verifiedSubmitted: true },
+          nextCommand: expect.stringContaining(`--panel ${claudePanel.id}`),
+        }],
+      });
+    });
+
+    it('sends a resumed conversation its prompt through the composer', async () => {
+      const { repoPath, worktreePath } = createAdoptWorktree('resume-prompt-adopt');
+      const services = adoptionServices(repoPath, worktreePath);
+      vi.mocked(panelManager.createPanel).mockResolvedValue(terminalPanel);
+      vi.mocked(terminalPanelManager.initializeTerminal).mockResolvedValue(undefined);
+
+      const result = await createRegistry(services).invoke('runpane:panes:adopt', [{
+        repo: { id: project.id },
+        panes: [{
+          path: worktreePath,
+          name: 'Adopted',
+          tool: { agent: 'codex', initialInput: 'Continue with step 2' },
+          resume: 'thread-1',
+          launch: true,
+        }],
+      }]);
+
+      expect(result).toMatchObject({ ok: true, items: [{ ok: true }] });
+      const initialState = vi.mocked(panelManager.createPanel).mock.calls[0][0].initialState;
+      expect(initialState).toMatchObject({
+        initialCommand: RUNPANE_CONTRACT.agentTemplates.codex.command,
+        initialInput: 'Continue with step 2',
+        initialInputSubmitStrategy: 'codex-ctrl-enter',
+        agentSessionId: 'thread-1',
+        hasClaudeSessionId: false,
+      });
+      expect(initialState).not.toHaveProperty('initialInputMode');
+    });
+
+    it('refuses an adopt prompt without launch instead of dropping it', async () => {
+      const { repoPath, worktreePath } = createAdoptWorktree('unlaunched-prompt-adopt');
+      const services = adoptionServices(repoPath, worktreePath);
+
+      await expect(createRegistry(services).invoke('runpane:panes:adopt', [{
+        repo: { id: project.id },
+        panes: [{ path: worktreePath, name: 'Adopted', tool: { agent: 'codex', initialInput: 'Do the thing' } }],
+      }])).rejects.toThrow('has a prompt but no launch');
+      expect(services.sessionManager.createSession).not.toHaveBeenCalled();
+      expect(panelManager.createPanel).not.toHaveBeenCalled();
+    });
+
+    it('adopts a wrapper launch with its declared agent and runs the command unchanged', async () => {
+      const { repoPath, worktreePath } = createAdoptWorktree('wrapper-adopt');
       const services = adoptionServices(repoPath, worktreePath);
       vi.mocked(panelManager.createPanel).mockResolvedValue(terminalPanel);
       vi.mocked(terminalPanelManager.initializeTerminal).mockResolvedValue(undefined);
@@ -545,9 +645,95 @@ describe('runpane IPC handlers', () => {
           agentDetection: 'declared',
           launchMode: 'wrapped',
           isCliPanel: true,
-          hasClaudeSessionId: false,
         }),
       }));
+    });
+
+    it('stages a wrapped adopt\'s long prompt in the composer and never rewrites the wrapper command', async () => {
+      const { repoPath, worktreePath } = createAdoptWorktree('wrapper-prompt-adopt');
+      const services = adoptionServices(repoPath, worktreePath);
+      // Longer than the 512-character threshold and multi-line, as a --prompt-file brief is.
+      const longPrompt = `Implement step one.\n${'Keep the wrapper command exactly as given. '.repeat(20).trim()}`;
+      const rule = '─'.repeat(40);
+      const claudeComposer = (content: string) => `${rule}\n❯ ${content}\n${rule}\n`;
+      const adoptedPanel = (request: CreatePanelRequest): ToolPanel => ({
+        ...terminalPanel,
+        title: request.title ?? '',
+        // SAFETY: The terminal panel mock keeps the terminal customState it was created with.
+        state: { isActive: false, customState: { ...(request.initialState as TerminalPanelState) } },
+      });
+      vi.mocked(terminalPanelManager.initializeTerminal).mockResolvedValue(undefined);
+      vi.mocked(terminalPanelManager.isBracketedPasteEnabled).mockReturnValue(true);
+      vi.mocked(panelManager.createPanel).mockImplementation(async request => adoptedPanel(request));
+      vi.mocked(panelManager.getPanel).mockImplementation(() => {
+        const request = vi.mocked(panelManager.createPanel).mock.calls[0]?.[0];
+        return request ? adoptedPanel(request) : undefined;
+      });
+      let staged = false;
+      let enters = 0;
+      vi.mocked(terminalPanelManager.writeToTerminal).mockImplementation((_panelId, data) => {
+        if (data === '\r') enters += 1;
+        else staged = true;
+      });
+      vi.mocked(terminalPanelManager.getOutputGeneration).mockImplementation(() => (staged ? enters + 1 : 0));
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockImplementation(() => terminalSnapshot(
+        !staged ? claudeComposer('') : enters === 0 ? claudeComposer('[Pasted text #1 +1 lines]') : `✻ Working\n${claudeComposer('')}`,
+        enters === 0 ? 'idle' : 'active',
+        'claude',
+      ));
+
+      // Git validates the worktree on real I/O first; only then do fake timers drive the delivery waits.
+      const realSetTimeout = globalThis.setTimeout;
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      try {
+        let settled = false;
+        const pending = Promise.resolve(createRegistry(services).invoke('runpane:panes:adopt', [{
+          repo: { id: project.id },
+          waitReady: true,
+          readyTimeoutMs: 100,
+          panes: [{
+            path: worktreePath,
+            name: 'Farm',
+            tool: { command: 'agent-farm run free-range', agentType: 'claude', initialInput: longPrompt },
+            launch: true,
+          }],
+        }])).finally(() => { settled = true; });
+        for (let step = 0; step < 400 && !settled; step++) {
+          await new Promise(resolve => realSetTimeout(resolve, 5));
+          await vi.advanceTimersByTimeAsync(250);
+        }
+        const result = await pending;
+
+        // SAFETY: createPanel was invoked for a terminal panel, so initialState is the terminal customState.
+        const initialState = vi.mocked(panelManager.createPanel).mock.calls[0]?.[0].initialState as TerminalPanelState;
+        expect(initialState).toMatchObject({
+          initialCommand: 'agent-farm run free-range',
+          launchCommand: 'agent-farm run free-range',
+          launchMode: 'wrapped',
+          agentDetection: 'declared',
+          agentType: 'claude',
+          initialInput: longPrompt,
+          initialInputSubmitStrategy: 'enter',
+        });
+        // Neither a launch argument nor a `$(cat <prompt file>)` word is added to the wrapper.
+        expect(initialState.initialInputMode).toBeUndefined();
+        expect(initialState.initialInputFile).toBeUndefined();
+        expect(vi.mocked(terminalPanelManager.writeToTerminal).mock.calls).toEqual([
+          [terminalPanel.id, `\x1b[200~${longPrompt}\x1b[201~`],
+          [terminalPanel.id, '\r'],
+        ]);
+        expect(result, JSON.stringify(result)).toMatchObject({
+          ok: true,
+          items: [{
+            ok: true,
+            tool: { command: 'agent-farm run free-range', agent: 'claude' },
+            readiness: { ok: true },
+            initialInput: { submitted: true, verifiedSubmitted: true, delivery: { state: expect.stringMatching(/^(taken|queued)$/) } },
+          }],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('refuses --resume for a wrapper command', async () => {
@@ -3083,6 +3269,80 @@ describe('runpane IPC handlers', () => {
     });
   });
 
+  describe('panes create --branch', () => {
+    function branchServices(existingBranches: string[] = []): AppServices {
+      const repoPath = createTempGitRepo('branch-repo');
+      execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: repoPath, stdio: 'ignore' });
+      execFileSync('git', ['branch', 'release/foo'], { cwd: repoPath, stdio: 'ignore' });
+      for (const branch of existingBranches) {
+        execFileSync('git', ['branch', branch], { cwd: repoPath, stdio: 'ignore' });
+      }
+      const branchProject = { ...project, path: repoPath };
+      // SAFETY: This session-manager double implements the project-context lookup the create handler uses.
+      return createServices({
+        databaseService: { ...createServices().databaseService, getAllProjects: vi.fn(() => [branchProject]) },
+        sessionManager: {
+          ...createServices().sessionManager,
+          getProjectContextByProjectId: vi.fn(() => ({ commandRunner: new CommandRunner(branchProject) })),
+        } as never,
+      });
+    }
+
+    it('passes the exact requested branch and base to pane creation', async () => {
+      vi.mocked(panelManager.createPanel).mockResolvedValue(terminalPanel);
+      const services = branchServices();
+
+      const result = await createRegistry(services).invoke('runpane:panes:create', [{
+        repo: { id: project.id },
+        panes: [{ name: 'w5a', branch: 'agents/x', baseBranch: 'release/foo', tool: { agent: 'codex' } }],
+      }]);
+
+      expect(result).toMatchObject({ ok: true, items: [{ ok: true }] });
+      expect(services.taskQueue?.createSessionAndWait).toHaveBeenCalledWith(
+        expect.objectContaining({ worktreeTemplate: 'w5a', branchName: 'agents/x', baseBranch: 'release/foo' }),
+        expect.anything(),
+      );
+    });
+
+    it('fails an existing or invalid branch before queueing, including in dry runs', async () => {
+      const services = branchServices(['agents/taken']);
+      const registry = createRegistry(services);
+
+      const existing = await registry.invoke('runpane:panes:create', [{
+        repo: { id: project.id },
+        panes: [{ name: 'w5a', branch: 'agents/taken', tool: { agent: 'codex' } }],
+      }]);
+      const invalid = await registry.invoke('runpane:panes:create', [{
+        repo: { id: project.id },
+        dryRun: true,
+        panes: [
+          { name: 'ok', branch: 'agents/new', tool: { agent: 'codex' } },
+          { name: 'bad', branch: 'agents/bad..name', tool: { agent: 'codex' } },
+        ],
+      }]);
+
+      expect(existing).toMatchObject({
+        ok: false,
+        items: [{ ok: false, error: { message: expect.stringContaining("Branch 'agents/taken' already exists") } }],
+      });
+      expect(invalid).toMatchObject({
+        ok: false,
+        items: [{ ok: true, name: 'ok' }, { ok: false, name: 'bad', error: { message: expect.stringContaining('check-ref-format') } }],
+      });
+      expect(services.taskQueue?.createSessionAndWait).not.toHaveBeenCalled();
+    });
+
+    it('refuses the same branch twice in one request', async () => {
+      await expect(createRegistry(branchServices()).invoke('runpane:panes:create', [{
+        repo: { id: project.id },
+        panes: [
+          { name: 'a', branch: 'agents/x', tool: { agent: 'codex' } },
+          { name: 'b', branch: 'agents/x', tool: { agent: 'codex' } },
+        ],
+      }])).rejects.toThrow("names branch 'agents/x' more than once");
+    });
+  });
+
   it('creates a pinned pane without focusing it', async () => {
     vi.mocked(panelManager.createPanel).mockResolvedValue({
       ...terminalPanel,
@@ -5209,6 +5469,479 @@ describe('runpane IPC handlers', () => {
         worktreeCleanup: 'completed',
       });
     });
+
+    it('reports completed with pending trash deletion as a successful archive while a large worktree is still deleting', async () => {
+      const repoPath = createTempGitRepo('queued-cleanup-repo');
+      execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: repoPath, stdio: 'ignore' });
+      const queuedSession: Session = { ...session, worktreePath: repoPath };
+      const archiveProgressManager = new ArchiveProgressManager();
+      // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+      const services = createServices({
+        // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+        sessionManager: {
+          ...createServices().sessionManager,
+          getSession: vi.fn(() => queuedSession),
+        } as never,
+        archiveProgressManager,
+      } as never);
+      const registry = createRegistry(services);
+      registerSessionsDeleteStub(registry, services, {
+        onArchive: (sessionId) => archiveProgressManager.setTrashDeletion(sessionId, 'pending'),
+      });
+
+      const result = await registry.invoke('runpane:panes:archive', [{ paneId: session.id }]);
+
+      expect(result).toMatchObject({ ok: true, archived: true, worktreeCleanup: 'completed', trashDeletion: 'pending' });
+    });
+
+    it('only emits worktreeCleanup values that released runpane CLIs can decode', async () => {
+      // The enum shipped in runpane <= 2.4.133; its decoders reject anything else.
+      const releasedWorktreeCleanup = ['completed', 'failed', 'timeout', 'not-applicable'];
+      const successSchema = RUNPANE_CONTRACT.jsonSchemas.paneArchiveResult.oneOf[0];
+      expect(successSchema.properties.worktreeCleanup.enum).toEqual(releasedWorktreeCleanup);
+
+      const realSetTimeout = globalThis.setTimeout;
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const emitted: unknown[] = [];
+        const scenarios: Array<{
+          external?: boolean;
+          onArchive: (manager: ArchiveProgressManager, sessionId: string) => Promise<void> | void;
+        }> = [
+          { onArchive: () => undefined },
+          { onArchive: (manager, sessionId) => manager.setTrashDeletion(sessionId, 'pending') },
+          { onArchive: () => { throw new Error('removal failed'); } },
+          // Removal still running when the 30s wait ends.
+          { onArchive: () => new Promise<void>(() => undefined) },
+          { external: true, onArchive: () => undefined },
+        ];
+        for (const scenario of scenarios) {
+          const repoPath = createTempGitRepo('released-enum-repo');
+          execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: repoPath, stdio: 'ignore' });
+          const pane: Session = { ...session, worktreePath: repoPath, worktreeOwnership: scenario.external ? 'external' : 'pane' };
+          const archiveProgressManager = new ArchiveProgressManager();
+          // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+          const services = createServices({
+            // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+            sessionManager: {
+              ...createServices().sessionManager,
+              getSession: vi.fn(() => pane),
+            } as never,
+            archiveProgressManager,
+          } as never);
+          const registry = createRegistry(services);
+          registerSessionsDeleteStub(registry, services, {
+            onArchive: (sessionId) => scenario.onArchive(archiveProgressManager, sessionId),
+          });
+
+          let settled = false;
+          const pending = Promise.resolve(registry.invoke('runpane:panes:archive', [{ paneId: session.id }]))
+            .finally(() => { settled = true; });
+          // git runs on real I/O; step fake time until the archive's 30s cleanup wait resolves.
+          for (let step = 0; step < 400 && !settled; step++) {
+            await new Promise(resolve => realSetTimeout(resolve, 10));
+            await vi.advanceTimersByTimeAsync(1_000);
+          }
+          const result = JSON.parse(JSON.stringify(await pending));
+          emitted.push(result.worktreeCleanup);
+          expect(result.ok, `ok for ${result.worktreeCleanup}`).toBe(result.worktreeCleanup !== 'failed');
+        }
+        expect(emitted).toEqual(['completed', 'completed', 'failed', 'timeout', 'not-applicable']);
+        for (const value of emitted) expect(releasedWorktreeCleanup).toContain(value);
+      } finally {
+        vi.useRealTimers();
+      }
+    }, 60_000);
+
+    describe('adopted worktrees with --remove-worktree', () => {
+      function createRepoWithLinkedWorktree(name: string) {
+        const repoPath = createTempGitRepo(name);
+        execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: repoPath, stdio: 'ignore' });
+        const worktreePath = path.join(path.dirname(repoPath), `${name}-adopted`);
+        execFileSync('git', ['worktree', 'add', '-q', '-b', 'adopted-feature', worktreePath], { cwd: repoPath, stdio: 'ignore' });
+        return { repoPath, worktreePath };
+      }
+
+      function createAdoptedServices(repoPath: string, adopted: Session): AppServices {
+        const commandRunner = new CommandRunner({ path: repoPath });
+        const archiveProgressManager = new ArchiveProgressManager();
+        // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+        return createServices({
+          // SAFETY: This test fixture intentionally supplies the minimal session manager surface exercised by archive.
+          sessionManager: {
+            ...createServices().sessionManager,
+            getSession: vi.fn(() => adopted),
+            getProjectForSession: vi.fn(() => ({ ...project, path: repoPath })),
+            getProjectContext: vi.fn(() => ({ commandRunner })),
+          } as never,
+          // SAFETY: This test fixture intentionally supplies the minimal worktree manager surface exercised by archive.
+          worktreeManager: {
+            getUpstream: vi.fn(async () => null),
+            getSessionComparisonBranch: vi.fn(async () => 'main'),
+          } as never,
+          archiveProgressManager,
+        } as never);
+      }
+
+      it('evaluates safety and removes an adopted worktree into the trash, keeping its branch', async () => {
+        const { repoPath, worktreePath } = createRepoWithLinkedWorktree('adopted-clean');
+        const adopted: Session = { ...session, worktreePath, worktreeOwnership: 'external' };
+        const services = createAdoptedServices(repoPath, adopted);
+        const registry = createRegistry(services);
+        const commandRunner = new CommandRunner({ path: repoPath });
+        const sessionsDelete = registerSessionsDeleteStub(registry, services, {
+          // Mirror sessions:delete, which removes the worktree and records the outcome.
+          onArchive: async (sessionId) => {
+            const outcome = await removeWorktreeViaTrash(worktreePath, repoPath, new PathResolver({ path: repoPath }), commandRunner);
+            services.archiveProgressManager?.setTrashDeletion(sessionId, outcome);
+          },
+        });
+
+        const result = await registry.invoke('runpane:panes:archive', [{ paneId: session.id, removeWorktree: true }]);
+        await waitForPendingWorktreeTrash();
+
+        expect(sessionsDelete).toHaveBeenCalledWith(session.id, { removeExternalWorktree: true });
+        expect(result).toMatchObject({
+          ok: true,
+          archived: true,
+          worktreeCleanup: 'completed',
+          worktreePath,
+          safetyCheck: {
+            performed: true,
+            hasUncommittedChanges: false,
+            hasUntrackedFiles: false,
+            unpushedCommits: 0,
+          },
+        });
+        expect(fs.existsSync(worktreePath)).toBe(false);
+        expect(execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repoPath, encoding: 'utf8' })).not.toContain('adopted-clean-adopted');
+        expect(execFileSync('git', ['branch', '--list', 'adopted-feature'], { cwd: repoPath, encoding: 'utf8' })).toContain('adopted-feature');
+        expect(fs.readdirSync(path.join(repoPath, '.git', 'pane-trash'))).toEqual([]);
+      });
+
+      it('blocks an adopted worktree with uncommitted work and keeps --remove-worktree in the next command', async () => {
+        const { repoPath, worktreePath } = createRepoWithLinkedWorktree('adopted-dirty');
+        fs.writeFileSync(path.join(worktreePath, 'draft.txt'), 'unsaved work');
+        const adopted: Session = { ...session, worktreePath, worktreeOwnership: 'external' };
+        const services = createAdoptedServices(repoPath, adopted);
+        const registry = createRegistry(services);
+        const sessionsDelete = registerSessionsDeleteStub(registry, services);
+
+        const result = await registry.invoke('runpane:panes:archive', [{ paneId: session.id, removeWorktree: true }]);
+
+        expect(sessionsDelete).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          ok: false,
+          blocked: { code: 'uncommitted-changes', safetyCheck: { performed: true, hasUntrackedFiles: true } },
+          nextCommand: `runpane panes archive --pane ${session.id} --remove-worktree --force --yes --json`,
+        });
+        expect(fs.existsSync(worktreePath)).toBe(true);
+      });
+
+      it('reports why the check was skipped without --remove-worktree, and merged-PR evidence with it or in a Session close-out', async () => {
+        const { repoPath, worktreePath } = createRepoWithLinkedWorktree('adopted-merged');
+        execFileSync('git', ['commit', '--allow-empty', '-m', 'squash-merged work'], { cwd: worktreePath, stdio: 'ignore' });
+        const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath, encoding: 'utf8' }).trim();
+        const realExecFile = CommandRunner.prototype.execFile;
+        const ghCalls: string[][] = [];
+        const execFileSpy = vi.spyOn(CommandRunner.prototype, 'execFile').mockImplementation(async function (this: CommandRunner, file, args, cwd, options) {
+          if (file !== 'gh') return realExecFile.call(this, file, args, cwd, options);
+          ghCalls.push([...args]);
+          return { stdout: JSON.stringify([{ number: 42, headRefOid: head }]), stderr: '', exitCode: 0 };
+        });
+        try {
+          const adopted: Session = { ...session, worktreePath, worktreeOwnership: 'external' };
+          const services = createAdoptedServices(repoPath, adopted);
+          const registry = createRegistry(services);
+          const sessionsDelete = registerSessionsDeleteStub(registry, services);
+
+          // Without --remove-worktree the adopted worktree stays, so nothing is checked.
+          const kept = JSON.parse(JSON.stringify(await registry.invoke('runpane:panes:archive', [{ paneId: session.id, dryRun: true }])));
+          expect(kept).toMatchObject({
+            ok: true,
+            wouldArchive: true,
+            safetyCheck: { performed: false, reason: 'external-worktree', worktreeWillRemain: true },
+          });
+          expect(kept.safetyCheck).not.toHaveProperty('mergedViaPr');
+          expect(ghCalls).toEqual([]);
+
+          // With it, the same Pane gets #832's check, and the squash-merged branch counts as pushed.
+          const removed = JSON.parse(JSON.stringify(await registry.invoke('runpane:panes:archive', [{ paneId: session.id, dryRun: true, removeWorktree: true }])));
+          expect(removed).toMatchObject({
+            ok: true,
+            wouldArchive: true,
+            safetyCheck: { performed: true, unpushedCommits: 0, mergedViaPr: { number: 42, headOid: head } },
+          });
+          expect(removed.safetyCheck).not.toHaveProperty('reason');
+          expect(removed.safetyCheck).not.toHaveProperty('worktreeWillRemain');
+
+          // A Session close-out checks every Pane; the adopted one keeps its worktree without --remove-worktree.
+          const get = vi.fn(async () => ({
+            id: 'orchestration-1',
+            name: 'refactor',
+            associations: [{ paneId: session.id, panelIds: [], attachedAt: '2026-01-01T00:00:00.000Z' }],
+          }));
+          // SAFETY: This test fixture supplies the one Sessions manager method the bulk archive calls.
+          const bulkServices: AppServices = { ...services, orchestrationSessionManager: { get } as never };
+          const bulkRegistry = createRegistry(bulkServices);
+          registerSessionsDeleteStub(bulkRegistry, bulkServices);
+          await expect(bulkRegistry.invoke('runpane:panes:archive', [{ sessionId: 'refactor', merged: true, dryRun: true }])).resolves.toMatchObject({
+            ok: true,
+            removeWorktree: false,
+            archived: 1,
+            items: [{
+              paneId: session.id,
+              outcome: 'would-archive',
+              safetyCheck: { performed: true, mergedViaPr: { number: 42, headOid: head }, worktreeWillRemain: true },
+            }],
+          });
+          expect(sessionsDelete).not.toHaveBeenCalled();
+          expect(fs.existsSync(worktreePath)).toBe(true);
+        } finally {
+          execFileSpy.mockRestore();
+        }
+      });
+
+      it('refuses to remove an adopted path that is the repository main checkout', async () => {
+        const { repoPath } = createRepoWithLinkedWorktree('adopted-main');
+        const adopted: Session = { ...session, worktreePath: repoPath, worktreeOwnership: 'external' };
+        const services = createAdoptedServices(repoPath, adopted);
+        const registry = createRegistry(services);
+        const sessionsDelete = registerSessionsDeleteStub(registry, services);
+
+        await expect(registry.invoke('runpane:panes:archive', [{ paneId: session.id, removeWorktree: true }]))
+          .rejects.toThrow(/main checkout/);
+        expect(sessionsDelete).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('merged pull request evidence', () => {
+      function createFeatureBranchRepo(name: string) {
+        const repoPath = createTempGitRepo(name);
+        execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: repoPath, stdio: 'ignore' });
+        execFileSync('git', ['checkout', '-q', '-b', 'feature'], { cwd: repoPath, stdio: 'ignore' });
+        execFileSync('git', ['commit', '--allow-empty', '-m', 'squash-merged work'], { cwd: repoPath, stdio: 'ignore' });
+        const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoPath, encoding: 'utf8' }).trim();
+        return { repoPath, head };
+      }
+
+      type GhResponse = { stdout: string } | Error;
+
+      /** A real CommandRunner whose `gh` calls return a canned response; git runs for real. */
+      function createRunnerWithGh(repoPath: string, gh: GhResponse) {
+        const commandRunner = new CommandRunner({ path: repoPath });
+        const realExecFile = commandRunner.execFile.bind(commandRunner);
+        const ghCalls: string[][] = [];
+        vi.spyOn(commandRunner, 'execFile').mockImplementation(async (file, args, cwd, options) => {
+          if (file !== 'gh') return realExecFile(file, args, cwd, options);
+          ghCalls.push([...args]);
+          if (gh instanceof Error) throw gh;
+          return { stdout: gh.stdout, stderr: '', exitCode: 0 };
+        });
+        return { commandRunner, ghCalls };
+      }
+
+      function createMergedServices(featureSession: Session, commandRunner: CommandRunner, upstream: string | null = null): AppServices {
+        // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+        return createServices({
+          // SAFETY: This test fixture intentionally supplies the minimal session manager surface exercised by archive.
+          sessionManager: {
+            ...createServices().sessionManager,
+            getSession: vi.fn(() => featureSession),
+            getProjectContext: vi.fn(() => ({ commandRunner })),
+          } as never,
+          // SAFETY: This test fixture intentionally supplies the minimal worktree manager surface exercised by archive.
+          worktreeManager: {
+            getUpstream: vi.fn(async () => upstream),
+            getSessionComparisonBranch: vi.fn(async () => 'main'),
+          } as never,
+          archiveProgressManager: new ArchiveProgressManager(),
+        } as never);
+      }
+
+      it('counts a squash-merged branch with no upstream as safe when a merged PR has HEAD as its head', async () => {
+        const { repoPath, head } = createFeatureBranchRepo('squash-merged-repo');
+        const { commandRunner, ghCalls } = createRunnerWithGh(repoPath, {
+          stdout: JSON.stringify([{ number: 7, headRefOid: 'a'.repeat(40) }, { number: 42, headRefOid: head }]),
+        });
+        const services = createMergedServices({ ...session, worktreePath: repoPath }, commandRunner);
+        const registry = createRegistry(services);
+        const sessionsDelete = registerSessionsDeleteStub(registry, services);
+
+        const result = await registry.invoke('runpane:panes:archive', [{ paneId: session.id, dryRun: true }]);
+
+        expect(sessionsDelete).not.toHaveBeenCalled();
+        expect(ghCalls).toEqual([['pr', 'list', '--head', 'feature', '--state', 'merged', '--json', 'number,headRefOid', '--limit', '20']]);
+        expect(result).toMatchObject({
+          ok: true,
+          wouldArchive: true,
+          safetyCheck: {
+            performed: true,
+            hasUpstream: false,
+            unpushedCommits: 0,
+            unpushedCommitDetails: [],
+            mergedViaPr: { number: 42, headOid: head },
+          },
+        });
+        expect(JSON.parse(JSON.stringify(result))).not.toHaveProperty('blocked');
+      });
+
+      it('treats an upstream deleted on the remote as gone and archives with merged PR evidence', async () => {
+        const { repoPath, head } = createFeatureBranchRepo('upstream-gone-repo');
+        const remotePath = path.join(path.dirname(repoPath), 'upstream-gone-remote.git');
+        execFileSync('git', ['init', '--bare', '-q', remotePath], { stdio: 'ignore' });
+        execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: repoPath, stdio: 'ignore' });
+        execFileSync('git', ['push', '-q', '-u', 'origin', 'feature'], { cwd: repoPath, stdio: 'ignore' });
+        // GitHub deletes the head branch after merging; the local tracking ref goes stale.
+        execFileSync('git', ['update-ref', '-d', 'refs/heads/feature'], { cwd: remotePath, stdio: 'ignore' });
+        const { commandRunner } = createRunnerWithGh(repoPath, {
+          stdout: JSON.stringify([{ number: 42, headRefOid: head }]),
+        });
+        const services = createMergedServices({ ...session, worktreePath: repoPath }, commandRunner, 'origin/feature');
+        const registry = createRegistry(services);
+        const sessionsDelete = registerSessionsDeleteStub(registry, services);
+
+        const result = await registry.invoke('runpane:panes:archive', [{ paneId: session.id }]);
+
+        expect(sessionsDelete).toHaveBeenCalledWith(session.id);
+        expect(result).toMatchObject({
+          ok: true,
+          archived: true,
+          safetyCheck: {
+            performed: true,
+            hasUpstream: true,
+            upstream: 'origin/feature',
+            upstreamGone: true,
+            unpushedCommits: 0,
+            mergedViaPr: { number: 42, headOid: head },
+          },
+        });
+      });
+
+      it('finds no evidence when gh is missing or no merged PR head matches HEAD', async () => {
+        const { repoPath } = createFeatureBranchRepo('no-evidence-repo');
+        for (const gh of [
+          new Error('spawn gh ENOENT'),
+          { stdout: JSON.stringify([{ number: 42, headRefOid: 'b'.repeat(40) }]) },
+          { stdout: 'not json' },
+        ]) {
+          const { commandRunner } = createRunnerWithGh(repoPath, gh);
+          const services = createMergedServices({ ...session, worktreePath: repoPath }, commandRunner);
+          const registry = createRegistry(services);
+          const sessionsDelete = registerSessionsDeleteStub(registry, services);
+
+          const result = await registry.invoke('runpane:panes:archive', [{ paneId: session.id }]);
+
+          expect(sessionsDelete).not.toHaveBeenCalled();
+          expect(result).toMatchObject({
+            ok: false,
+            blocked: {
+              code: 'unpushed-commits',
+              safetyCheck: { unpushedCommits: 1, unpushedCommitDetails: [{ subject: 'squash-merged work' }] },
+            },
+          });
+          expect(JSON.parse(JSON.stringify(result))).not.toHaveProperty('blocked.safetyCheck.mergedViaPr');
+        }
+      });
+    });
+
+    describe('--session --merged', () => {
+      function createBulkServices(panes: Session[], associations: string[]) {
+        const byId = new Map(panes.map(pane => [pane.id, pane]));
+        const get = vi.fn(async () => ({
+          id: 'orchestration-1',
+          name: 'refactor',
+          associations: associations.map(paneId => ({ paneId, panelIds: [], attachedAt: '2026-01-01T00:00:00.000Z' })),
+        }));
+        // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+        const services = createServices({
+          // SAFETY: This test fixture intentionally supplies the minimal session manager surface exercised by archive.
+          sessionManager: {
+            ...createServices().sessionManager,
+            getSession: vi.fn((paneId: string) => byId.get(paneId)),
+            getProjectContext: vi.fn(() => ({ commandRunner: new CommandRunner({ path: os.tmpdir() }) })),
+          } as never,
+          // SAFETY: This test fixture intentionally supplies the minimal Sessions manager surface exercised by archive.
+          orchestrationSessionManager: { get } as never,
+          archiveProgressManager: new ArchiveProgressManager(),
+        } as never);
+        return { services, get };
+      }
+
+      function createBulkPanes(): Session[] {
+        const cleanRepo = createTempGitRepo('bulk-clean');
+        execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: cleanRepo, stdio: 'ignore' });
+        const dirtyRepo = createTempGitRepo('bulk-dirty');
+        execFileSync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: dirtyRepo, stdio: 'ignore' });
+        fs.writeFileSync(path.join(dirtyRepo, 'draft.txt'), 'unsaved work');
+        return [
+          { ...session, id: 'pane-clean', name: 'clean', worktreePath: cleanRepo },
+          { ...session, id: 'pane-dirty', name: 'dirty', worktreePath: dirtyRepo },
+          { ...session, id: 'pane-archived', name: 'archived', archived: true },
+          { ...session, id: 'pane-main', name: 'main', isMainRepo: true },
+        ];
+      }
+
+      it('dry-runs the Session archive and reports a reason for every skipped Pane', async () => {
+        const panes = createBulkPanes();
+        const { services, get } = createBulkServices(panes, ['pane-clean', 'pane-dirty', 'pane-archived', 'pane-main', 'pane-missing', 'pane-clean']);
+        const registry = createRegistry(services);
+        const sessionsDelete = registerSessionsDeleteStub(registry, services);
+
+        const result = await registry.invoke('runpane:panes:archive', [{ sessionId: 'refactor', merged: true, dryRun: true }]);
+
+        expect(get).toHaveBeenCalledWith({ sessionId: 'refactor' });
+        expect(sessionsDelete).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          ok: true,
+          sessionId: 'orchestration-1',
+          merged: true,
+          dryRun: true,
+          removeWorktree: false,
+          archived: 1,
+          skipped: 4,
+          failed: 0,
+          items: [
+            { paneId: 'pane-clean', name: 'clean', outcome: 'would-archive', safetyCheck: { performed: true, unpushedCommits: 0 } },
+            { paneId: 'pane-dirty', outcome: 'skipped', skipped: { code: 'uncommitted-changes' }, safetyCheck: { hasUntrackedFiles: true } },
+            { paneId: 'pane-archived', outcome: 'skipped', skipped: { code: 'already-archived' } },
+            { paneId: 'pane-main', outcome: 'skipped', skipped: { code: 'main-repo' } },
+            { paneId: 'pane-missing', outcome: 'skipped', skipped: { code: 'missing-pane' } },
+          ],
+        });
+      });
+
+      it('archives only the safe Panes of the Session', async () => {
+        const panes = createBulkPanes();
+        const { services } = createBulkServices(panes, ['pane-clean', 'pane-dirty']);
+        const registry = createRegistry(services);
+        const sessionsDelete = registerSessionsDeleteStub(registry, services);
+
+        const result = await registry.invoke('runpane:panes:archive', [{ sessionId: 'refactor', merged: true }]);
+
+        expect(sessionsDelete).toHaveBeenCalledTimes(1);
+        expect(sessionsDelete).toHaveBeenCalledWith('pane-clean');
+        expect(result).toMatchObject({
+          ok: true,
+          archived: 1,
+          skipped: 1,
+          items: [
+            { paneId: 'pane-clean', outcome: 'archived', worktreeCleanup: 'completed' },
+            { paneId: 'pane-dirty', outcome: 'skipped', skipped: { code: 'uncommitted-changes' } },
+          ],
+        });
+      });
+
+      it('rejects a Session archive without --merged or with --force', async () => {
+        const { services } = createBulkServices([], []);
+        const registry = createRegistry(services);
+        registerSessionsDeleteStub(registry, services);
+
+        await expect(registry.invoke('runpane:panes:archive', [{ sessionId: 'refactor' }])).rejects.toThrow(/merged/);
+        await expect(registry.invoke('runpane:panes:archive', [{ sessionId: 'refactor', merged: true, force: true }])).rejects.toThrow(/force/);
+        await expect(registry.invoke('runpane:panes:archive', [{ sessionId: 'refactor', merged: true, paneId: 'pane-clean' }])).rejects.toThrow(/either paneId or sessionId/);
+      });
+    });
   });
 
   describe('runpane:panes:focus', () => {
@@ -5338,6 +6071,236 @@ describe('runpane IPC handlers', () => {
 
       expect(window.show).not.toHaveBeenCalled();
       expect(window.webContents.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('runpane:locks', () => {
+    const otherPane: Session = { ...session, id: 'session-2', name: 'issue-253' };
+    const otherPanel: ToolPanel = { ...terminalPanel, id: 'panel-2', sessionId: otherPane.id };
+    const orchestrationSession = {
+      id: 'orch-1',
+      name: 'Release QA',
+      internalSessionId: '__orchestration_session_release__',
+      associations: [{ paneId: session.id, panelIds: [], attachedAt: '2026-01-01T00:00:00.000Z' }],
+    };
+
+    function createLockServices(overrides: Partial<AppServices> = {}) {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-runpane-locks-'));
+      tempDirs.push(directory);
+      const namedLockService = new NamedLockService(new NamedLockStore(path.join(directory, 'locks.json')));
+      const base = createServices();
+      vi.mocked(base.sessionManager.getSession).mockImplementation((paneId: string) =>
+        [session, otherPane].find(pane => pane.id === paneId)
+      );
+      const orchestrationSessionManager = {
+        sessionIdForPane: vi.fn(async (paneId: string) => (paneId === session.id ? orchestrationSession.id : undefined)),
+        get: vi.fn(async (selector: { sessionId?: string }) => {
+          if (selector.sessionId !== orchestrationSession.id && selector.sessionId !== orchestrationSession.name) {
+            throw new Error(`Session ${selector.sessionId} not found`);
+          }
+          return orchestrationSession;
+        }),
+        overview: vi.fn(async () => ({
+          session: orchestrationSession,
+          status: 'idle',
+          panes: [],
+          activity: [],
+          refreshedAt: '2026-01-01T00:00:00.000Z',
+        })),
+      };
+      return createServices({
+        namedLockService,
+        sessionManager: base.sessionManager,
+        // SAFETY: The stub implements the three manager methods the lock and overview handlers call.
+        orchestrationSessionManager: orchestrationSessionManager as never,
+        ...overrides,
+      });
+    }
+
+    beforeEach(() => {
+      vi.mocked(panelManager.getPanel).mockImplementation((panelId: string) =>
+        [terminalPanel, otherPanel].find(panel => panel.id === panelId)
+      );
+    });
+
+    it('scopes a Session member\'s lock to its Session and refuses a second owner', async () => {
+      const registry = createRegistry(createLockServices());
+
+      const acquired = await registry.invoke('runpane:locks:acquire', [{
+        name: 'testing-account',
+        ttlMs: 1_800_000,
+        note: ' call QA ',
+        owner: { paneId: session.id, panelId: terminalPanel.id },
+      }]);
+      expect(acquired).toMatchObject({
+        ok: true,
+        acquired: true,
+        renewed: false,
+        lock: {
+          name: 'testing-account',
+          scope: 'session',
+          sessionId: orchestrationSession.id,
+          owner: { kind: 'pane', paneId: session.id, panelId: terminalPanel.id },
+          note: 'call QA',
+        },
+      });
+
+      const external = await registry.invoke('runpane:locks:acquire', [{
+        name: 'testing-account',
+        ttlMs: 60_000,
+        owner: { label: 'nightly QA script' },
+      }]);
+      expect(external).toMatchObject({ ok: true, lock: { scope: 'global', owner: { kind: 'external', label: 'nightly QA script' } } });
+
+      const contended = await registry.invoke('runpane:locks:acquire', [{
+        name: 'testing-account',
+        ttlMs: 60_000,
+        owner: { paneId: session.id },
+      }]);
+      expect(contended).toMatchObject({
+        ok: false,
+        heldBy: { kind: 'pane', paneId: session.id, panelId: terminalPanel.id },
+        lock: { sessionId: orchestrationSession.id },
+      });
+    });
+
+    it('resolves the owner Pane from a panel id and reports the holder to a contender', async () => {
+      const registry = createRegistry(createLockServices());
+      await registry.invoke('runpane:locks:acquire', [{ name: 'staging-db', ttlMs: 60_000, owner: { panelId: otherPanel.id } }]);
+
+      const contended = await registry.invoke('runpane:locks:acquire', [{
+        name: 'staging-db',
+        ttlMs: 60_000,
+        owner: { label: 'human' },
+      }]);
+      expect(contended).toMatchObject({
+        ok: false,
+        acquired: false,
+        timedOut: false,
+        heldBy: { kind: 'pane', paneId: otherPane.id, panelId: otherPanel.id },
+      });
+    });
+
+    it('rejects unknown owners and callers with no identity', async () => {
+      const registry = createRegistry(createLockServices());
+      await expect(registry.invoke('runpane:locks:acquire', [{ name: 'x', ttlMs: 60_000, owner: {} }]))
+        .rejects.toThrow(/pass --note/);
+      await expect(registry.invoke('runpane:locks:acquire', [{ name: 'x', ttlMs: 60_000, owner: { paneId: 'missing' } }]))
+        .rejects.toThrow(/No Pane pane found/);
+      await expect(registry.invoke('runpane:locks:acquire', [{ name: 'x', ttlMs: 60_000, owner: { paneId: session.id, panelId: otherPanel.id } }]))
+        .rejects.toThrow(/does not belong to Pane/);
+      await expect(registry.invoke('runpane:locks:acquire', [{ name: 'bad name', ttlMs: 60_000, owner: { label: 'me' } }]))
+        .rejects.toThrow(/Lock names/);
+    });
+
+    it('releases only for the owner unless forced, including from outside the Session', async () => {
+      const registry = createRegistry(createLockServices());
+      const owner = { paneId: session.id, panelId: terminalPanel.id };
+      await registry.invoke('runpane:locks:acquire', [{ name: 'testing-account', ttlMs: 60_000, owner }]);
+
+      await expect(registry.invoke('runpane:locks:release', [{
+        name: 'testing-account',
+        sessionId: orchestrationSession.name,
+        owner: { label: 'human' },
+      }])).resolves.toMatchObject({ ok: false, reason: 'not-owner', heldBy: { paneId: session.id } });
+
+      await expect(registry.invoke('runpane:locks:release', [{
+        name: 'testing-account',
+        sessionId: orchestrationSession.name,
+        force: true,
+        owner: {},
+      }])).resolves.toMatchObject({ ok: true, released: true, forced: true });
+
+      await registry.invoke('runpane:locks:acquire', [{ name: 'testing-account', ttlMs: 60_000, owner }]);
+      await expect(registry.invoke('runpane:locks:release', [{ name: 'testing-account', owner }]))
+        .resolves.toMatchObject({ ok: true, released: true, forced: false });
+    });
+
+    it('waits in the daemon and is granted the lock when the holder releases', async () => {
+      const registry = createRegistry(createLockServices());
+      await registry.invoke('runpane:locks:acquire', [{ name: 'testing-account', ttlMs: 60_000, owner: { label: 'first' } }]);
+
+      const waiting = registry.invoke('runpane:locks:acquire', [{
+        name: 'testing-account',
+        ttlMs: 60_000,
+        waitMs: 30_000,
+        owner: { label: 'second' },
+      }]);
+      await registry.invoke('runpane:locks:release', [{ name: 'testing-account', owner: { label: 'first' } }]);
+
+      await expect(waiting).resolves.toMatchObject({ ok: true, acquired: true, lock: { owner: { label: 'second' } } });
+    });
+
+    it('lists all locks or one Session\'s locks, and shows them in the Session overview', async () => {
+      const registry = createRegistry(createLockServices());
+      await registry.invoke('runpane:locks:acquire', [{ name: 'testing-account', ttlMs: 60_000, owner: { paneId: session.id } }]);
+      await registry.invoke('runpane:locks:acquire', [{ name: 'staging-db', ttlMs: 60_000, owner: { paneId: otherPane.id } }]);
+
+      await expect(registry.invoke('runpane:locks:list', [{}])).resolves.toMatchObject({
+        ok: true,
+        locks: [{ name: 'staging-db', scope: 'global' }, { name: 'testing-account', scope: 'session' }],
+      });
+      await expect(registry.invoke('runpane:locks:list', [{ sessionId: orchestrationSession.name }])).resolves.toEqual({
+        ok: true,
+        locks: [expect.objectContaining({ name: 'testing-account', sessionId: orchestrationSession.id })],
+      });
+      await expect(registry.invoke('runpane:sessions:overview', [{ sessionId: orchestrationSession.id }])).resolves.toMatchObject({
+        ok: true,
+        locks: [{ name: 'testing-account', owner: { paneId: session.id } }],
+      });
+      await expect(registry.invoke('runpane:locks:list', [{ sessionId: 'nope' }])).rejects.toThrow(/not found/);
+    });
+
+    it('shows a member\'s worker report and the Session\'s locks together in the overview, and drops the lock when its panel exits', async () => {
+      const report = { state: 'ready', pr: 747, head: 'fc5dce9', summary: 'Tests pass.', reportedAt: '2026-09-27T18:00:00.000Z', panelId: terminalPanel.id };
+      const base = createLockServices();
+      const namedLockService = base.namedLockService;
+      if (!namedLockService) throw new Error('lock service fixture is missing');
+      const services = createLockServices({
+        namedLockService,
+        // SAFETY: The stub implements the manager methods the lock and overview handlers call.
+        orchestrationSessionManager: {
+          ...base.orchestrationSessionManager,
+          overview: vi.fn(async () => ({
+            session: orchestrationSession,
+            status: 'idle',
+            panes: [{ paneId: session.id, name: session.name, archived: false, missing: false, panels: [], report }],
+            activity: [],
+            refreshedAt: '2026-01-01T00:00:00.000Z',
+          })),
+        } as never,
+      });
+      const registry = createRegistry(services);
+      await registry.invoke('runpane:locks:acquire', [{
+        name: 'testing-account',
+        ttlMs: 60_000,
+        owner: { paneId: session.id, panelId: terminalPanel.id },
+      }]);
+
+      await expect(registry.invoke('runpane:sessions:overview', [{ sessionId: orchestrationSession.id }])).resolves.toMatchObject({
+        ok: true,
+        panes: [{ paneId: session.id, report }],
+        locks: [{ name: 'testing-account', owner: { paneId: session.id, panelId: terminalPanel.id } }],
+      });
+
+      namedLockService.send('panel:event', {
+        type: 'terminal:exit',
+        source: { panelId: terminalPanel.id, sessionId: session.id, panelType: 'terminal' },
+        data: { exitCode: 0 },
+      });
+
+      await expect(registry.invoke('runpane:sessions:overview', [{ sessionId: orchestrationSession.id }])).resolves.toMatchObject({
+        panes: [{ paneId: session.id, report }],
+        locks: [],
+      });
+    });
+
+    it('exposes the lock channels to runpane doctor', async () => {
+      const registry = createRegistry(createLockServices());
+      const result = await registry.invoke('runpane:doctor');
+      // SAFETY: The doctor result carries a daemon.channels string array.
+      const daemon = (result as { daemon: { channels: string[] } }).daemon;
+      expect(daemon.channels).toEqual(expect.arrayContaining(['runpane:locks:acquire', 'runpane:locks:release', 'runpane:locks:list']));
     });
   });
 });

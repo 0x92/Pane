@@ -298,8 +298,8 @@ export const RUNPANE_CONTRACT = {
       "name": "panes create",
       "summary": "Create user-visible Panes (Pane sessions) backed by Pane-managed worktrees for feature/PR work and open terminal-backed tool tabs.",
       "usage": [
-        "runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--base-branch <branch>] [options] [--pane-dir <path>]",
-        "runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--source user|agent] [--focus|--no-focus] [--base-branch <branch>] [options] [--pane-dir <path>]",
+        "runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [options] [--pane-dir <path>]",
+        "runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--source user|agent] [--focus|--no-focus] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [options] [--pane-dir <path>]",
         "runpane panes create --from-json <path|-> [--yes] [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
@@ -316,8 +316,8 @@ export const RUNPANE_CONTRACT = {
       "name": "panes adopt",
       "summary": "Adopt an existing externally managed git worktree as a Pane without changing the worktree.",
       "usage": [
-        "runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [--resume <id>] [--folder <name>] [--launch] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]",
-        "runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--folder <name>] [--launch] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]"
+        "runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [--resume <id>] [--folder <name>] [--launch [--prompt <text>|--prompt-file <path|->] [--wait-ready] [--ready-timeout-ms <ms>]] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]",
+        "runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--folder <name>] [--launch [--prompt <text>|--prompt-file <path|->] [--wait-ready] [--ready-timeout-ms <ms>]] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "additive": true,
@@ -330,9 +330,10 @@ export const RUNPANE_CONTRACT = {
     },
     {
       "name": "panes archive",
-      "summary": "Archive a Pane (session) exactly like the UI Archive action, including safe removal of its Pane-managed git worktree.",
+      "summary": "Archive a Pane (session) exactly like the UI Archive action, including safe removal of its Pane-managed git worktree, or archive every merged Pane in a Session.",
       "usage": [
-        "runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--dry-run] --yes [--json] [--pane-dir <path>]"
+        "runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--remove-worktree] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "runpane panes archive --session <id|name> --merged [--remove-worktree] [--source user|agent] [--dry-run] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "toolsets": [
@@ -341,7 +342,9 @@ export const RUNPANE_CONTRACT = {
       ],
       "jsonSchemas": [
         "paneArchiveRequest",
-        "paneArchiveResult"
+        "paneArchiveBulkRequest",
+        "paneArchiveResult",
+        "paneArchiveBulkResult"
       ]
     },
     {
@@ -1132,6 +1135,51 @@ export const RUNPANE_CONTRACT = {
       "jsonSchemas": [
         "sessionOverviewResult"
       ]
+    },
+    {
+      "name": "lock acquire",
+      "summary": "Acquire a named lock on a resource shared between agents, such as one test account, optionally waiting for it.",
+      "usage": [
+        "runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]"
+      ],
+      "mutates": true,
+      "additive": true,
+      "idempotent": true,
+      "toolsets": [
+        "sessions"
+      ],
+      "jsonSchemas": [
+        "lockAcquireRequest",
+        "lockAcquireResult"
+      ]
+    },
+    {
+      "name": "lock release",
+      "summary": "Release a named lock you hold, or force-release another owner's lock.",
+      "usage": [
+        "runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]"
+      ],
+      "mutates": true,
+      "idempotent": true,
+      "toolsets": [
+        "sessions"
+      ],
+      "jsonSchemas": [
+        "lockReleaseResult"
+      ]
+    },
+    {
+      "name": "lock list",
+      "summary": "List held named locks, optionally only one Session's.",
+      "usage": [
+        "runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]"
+      ],
+      "toolsets": [
+        "sessions"
+      ],
+      "jsonSchemas": [
+        "lockListResult"
+      ]
     }
   ],
   "flags": {
@@ -1252,7 +1300,7 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--name",
         "value": "<name>",
-        "description": "Name for the registered repository or created/renamed pane session."
+        "description": "Name for the registered repository, created/renamed pane session, or named lock."
       },
       {
         "name": "--worktree-name",
@@ -1260,9 +1308,17 @@ export const RUNPANE_CONTRACT = {
         "description": "Worktree name to request. Defaults to --name."
       },
       {
+        "name": "--branch",
+        "value": "<name>",
+        "description": "Exact new branch name for the created worktree, slashes included. Must not exist yet; defaults to the worktree name."
+      },
+      {
         "name": "--base-branch",
-        "value": "<branch>",
-        "description": "Base branch for the created worktree."
+        "value": "<ref>",
+        "aliases": [
+          "--base"
+        ],
+        "description": "Ref the created worktree branches from. --base is an alias."
       },
       {
         "name": "--folder",
@@ -1300,7 +1356,10 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--initial-input-file",
         "value": "<path|->",
-        "description": "Read initial input from a file or stdin."
+        "aliases": [
+          "--prompt-file"
+        ],
+        "description": "Read initial input from a file or stdin. --prompt-file is an alias."
       },
       {
         "name": "--from-json",
@@ -1315,7 +1374,7 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--ready-timeout-ms",
         "value": "<milliseconds>",
-        "description": "Readiness wait timeout for panes create --wait-ready."
+        "description": "Readiness wait timeout for panes create/adopt --wait-ready."
       },
       {
         "name": "--concurrency",
@@ -1433,6 +1492,21 @@ export const RUNPANE_CONTRACT = {
         "description": "Named orchestration Session id or exact name."
       },
       {
+        "name": "--ttl",
+        "value": "<duration>",
+        "description": "How long a named lock is held before it expires: a number with ms, s, m, or h (such as 30m); a bare number is milliseconds. At least 1s, at most 24h."
+      },
+      {
+        "name": "--wait",
+        "value": "<milliseconds>",
+        "description": "How long lock acquire waits for a held lock to come free; 0 (the default) returns at once."
+      },
+      {
+        "name": "--note",
+        "value": "<text>",
+        "description": "What a named lock is for. Outside a Pane terminal it also names the owner, so pass the same note to release it."
+      },
+      {
         "name": "--message",
         "value": "<message>",
         "description": "Commit message for panes commit."
@@ -1524,7 +1598,15 @@ export const RUNPANE_CONTRACT = {
       },
       {
         "name": "--force",
-        "description": "Archive even if the pane's branch has uncommitted, untracked, or unpushed changes."
+        "description": "Archive even if the pane's branch has uncommitted, untracked, or unpushed changes; for lock release, release another owner's lock."
+      },
+      {
+        "name": "--remove-worktree",
+        "description": "Also check and remove an adopted Pane's worktree when archiving it. The local branch is kept."
+      },
+      {
+        "name": "--merged",
+        "description": "With panes archive --session, archive only Panes that are clean and pushed, or merged via a pull request."
       },
       {
         "name": "--launch",
@@ -1612,12 +1694,16 @@ export const RUNPANE_CONTRACT = {
         "  runpane sessions associate --session <id|name> --pane <pane-id> [--json] [--pane-dir <path>]",
         "  runpane sessions detach --session <id|name> [--pane <pane-id>] [--json] [--pane-dir <path>]",
         "  runpane sessions overview --session <id|name> [--json] [--pane-dir <path>]",
+        "  runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "  runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "  runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
         "  runpane panes list [--repo <selector>] [--json]",
         "  runpane panes cost [--repo <selector>] [--pane <pane-id>] [--json]",
         "  runpane workspace state [--repo <selector>] [--json]",
         "  runpane watch --follow",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [--source user|agent] [--focus|--no-focus] [--wait-ready]",
-        "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--dry-run] --yes",
+        "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--remove-worktree] [--dry-run] --yes",
+        "  runpane panes archive --session <id|name> --merged [--remove-worktree] [--dry-run] --yes",
         "  runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] --yes",
         "  runpane panels list --pane <pane-id> [--json]",
         "  runpane panels output --panel <panel-id> [--limit <count>] [--json]",
@@ -1805,7 +1891,8 @@ export const RUNPANE_CONTRACT = {
         "  runpane panes list [--repo <selector>] [--json]",
         "  runpane panes cost [--repo <selector>] [--pane <pane-id>] [--json]",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [options]",
-        "  runpane panes archive --pane <pane-id> [--force] [--source user|agent] [--dry-run] --yes [--json]",
+        "  runpane panes archive --pane <pane-id> [--force] [--remove-worktree] [--source user|agent] [--dry-run] --yes [--json]",
+        "  runpane panes archive --session <id|name> --merged [--remove-worktree] [--dry-run] --yes [--json]",
         "  runpane panes pin --pane <pane-id> --yes [--dry-run] [--json]",
         "  runpane panes unpin --pane <pane-id> --yes [--dry-run] [--json]",
         "  runpane panes rename --pane <pane-id> --name <new-name> --yes [--dry-run] [--json]",
@@ -1899,8 +1986,8 @@ export const RUNPANE_CONTRACT = {
       ],
       "panes create": [
         "Usage:",
-        "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [options]",
-        "  runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--base-branch <branch>] [options]",
+        "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base <ref>] [--branch <name>] [--prompt-file <path|->] [options]",
+        "  runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [options]",
         "  runpane panes create --from-json <path|-> [--yes] [--json]",
         "",
         "Creates user-visible Panes (Pane sessions) for feature/PR work in a saved repository and opens a terminal-backed tool tab. Pane creates and owns the worktree/branch for each new Pane.",
@@ -1910,8 +1997,9 @@ export const RUNPANE_CONTRACT = {
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
         "  --name <name>                  Pane/session name",
-        "  --worktree-name <name>         Worktree name; defaults to --name",
-        "  --base-branch <branch>         Base branch for the worktree",
+        "  --worktree-name <name>         Worktree directory name; defaults to --name",
+        "  --branch <name>                Exact new branch name (slashes kept); must not exist; defaults to the worktree name",
+        "  --base-branch <ref>            Ref to branch from; --base is an alias",
         "  --agent <codex|claude|cursor>  Built-in terminal template; with --tool-command, the agent it runs",
         "  --tool-command <command>       Custom terminal command",
         "  --title <title>                Terminal tab title",
@@ -1919,6 +2007,7 @@ export const RUNPANE_CONTRACT = {
         "  --prompt <text>                Alias for --initial-input",
         "  --initial-input-file <path|->  Read initial input from a file or stdin",
         "  --as-file-pointer              Send `Read and follow <prompt file>` instead of the prompt",
+        "  --prompt-file <path|->         Alias for --initial-input-file",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
         "  --wait-ready                   Wait for terminal readiness before returning",
@@ -1940,22 +2029,26 @@ export const RUNPANE_CONTRACT = {
         "  runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [options]",
         "  runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [options]",
         "",
-        "Adopts an existing externally managed git worktree without creating, syncing, or deleting it.",
+        "Adopts an existing externally managed git worktree without creating, syncing, or deleting it. Archiving only removes its worktree with `panes archive --remove-worktree`. To start new work on a named branch, use `panes create --base <ref> --branch <name>` instead of `git worktree add` plus adopt.",
         "",
-        "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
+        "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --prompt <text> or --prompt-file <path|-> and --wait-ready require --launch; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
         "",
         "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
       ],
       "panes archive": [
         "Usage:",
-        "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--dry-run] --yes [--json]",
+        "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--remove-worktree] [--dry-run] --yes [--json]",
+        "  runpane panes archive --session <id|name> --merged [--remove-worktree] [--source user|agent] [--dry-run] --yes [--json]",
         "",
-        "Archives a Pane (session) exactly like the UI Archive action, including removal of its Pane-managed git worktree. Refreshes the configured upstream before checking for unpushed commits and reports exact commit evidence. Refuses unsafe archives unless --force is passed. Use --dry-run to print the evidence without mutating Pane state.",
+        "Archives a Pane (session) exactly like the UI Archive action, including removal of its Pane-managed git worktree. Refreshes the configured upstream before checking for unpushed commits and reports exact commit evidence. When the branch has no upstream or its upstream is gone, a merged GitHub pull request whose head is HEAD (found with `gh`) counts as pushed. Refuses unsafe archives unless --force is passed. An adopted worktree is kept unless --remove-worktree is passed, which applies the same safety check and removal. The local branch is always kept. With --session and --merged, archives every Pane associated with the Session whose work is clean and pushed or merged, and reports a reason for each Pane it skips. Use --dry-run to print the evidence without mutating Pane state.",
         "",
         "Options:",
         "  --pane <pane-id>               Pane/session id to archive",
         "  --source <user|agent>          Mark mutation source",
         "  --force                        Archive even if the pane has uncommitted, untracked, or unpushed changes",
+        "  --remove-worktree              Also check and remove an adopted Pane's worktree (the branch is kept)",
+        "  --session <id|name>            Archive the Panes associated with this Session (requires --merged)",
+        "  --merged                       Only archive Panes that are clean and pushed, or merged via a PR",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output",
         "  --dry-run                      Refresh and print archive safety evidence without archiving",
@@ -2618,6 +2711,60 @@ export const RUNPANE_CONTRACT = {
         "  --limit <count>                Maximum characters to return; defaults to 20000 (the end is kept)",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output"
+      ],
+      "lock": [
+        "Usage:",
+        "  runpane lock <acquire|release|list> [options]",
+        "",
+        "Named locks coordinate a resource shared between agents, such as one test account.",
+        "The caller is the owner: the Pane and panel from $PANE_SESSION_ID and $PANE_PANEL_ID.",
+        "A lock is scoped to the owner's Session when its Pane belongs to one; otherwise it is global.",
+        "It is released on --ttl expiry, when the owner panel exits, or when the owner Pane is archived."
+      ],
+      "lock acquire": [
+        "Usage:",
+        "runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
+      ],
+      "lock release": [
+        "Usage:",
+        "runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
+      ],
+      "lock list": [
+        "Usage:",
+        "runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
       ]
     },
     "pip": {
@@ -2641,7 +2788,8 @@ export const RUNPANE_CONTRACT = {
         "  runpane workspace state [--repo <selector>] [--json]",
         "  runpane watch --follow",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [--source user|agent] [--focus|--no-focus] [--wait-ready]",
-        "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--dry-run] --yes",
+        "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--remove-worktree] [--dry-run] --yes",
+        "  runpane panes archive --session <id|name> --merged [--remove-worktree] [--dry-run] --yes",
         "  python -m runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] --yes",
         "  runpane panels list --pane <pane-id> [--json]",
         "  runpane panels output --panel <panel-id> [--limit <count>] [--json]",
@@ -2675,6 +2823,9 @@ export const RUNPANE_CONTRACT = {
         "  runpane panes move --pane <pane-id> --folder <folder-id> --yes [--json] [--pane-dir <path>]",
         "  runpane folders list --repo <repo-id> [--json] [--pane-dir <path>]",
         "  runpane folders create --repo <repo-id> --name <name> --yes [--json] [--pane-dir <path>]",
+        "  runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "  runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "  runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
         "  runpane help [command]",
         "",
         "Quick start:",
@@ -2818,7 +2969,8 @@ export const RUNPANE_CONTRACT = {
         "  runpane panes list [--repo <selector>] [--json]",
         "  runpane panes cost [--repo <selector>] [--pane <pane-id>] [--json]",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [options]",
-        "  runpane panes archive --pane <pane-id> [--force] [--source user|agent] [--dry-run] --yes [--json]",
+        "  runpane panes archive --pane <pane-id> [--force] [--remove-worktree] [--source user|agent] [--dry-run] --yes [--json]",
+        "  runpane panes archive --session <id|name> --merged [--remove-worktree] [--dry-run] --yes [--json]",
         "  runpane panes pin --pane <pane-id> --yes [--dry-run] [--json]",
         "  runpane panes unpin --pane <pane-id> --yes [--dry-run] [--json]",
         "  runpane panes rename --pane <pane-id> --name <new-name> --yes [--dry-run] [--json]",
@@ -2912,8 +3064,8 @@ export const RUNPANE_CONTRACT = {
       ],
       "panes create": [
         "Usage:",
-        "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [options]",
-        "  python -m runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--base-branch <branch>] [options]",
+        "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base <ref>] [--branch <name>] [--prompt-file <path|->] [options]",
+        "  python -m runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [options]",
         "  runpane panes create --from-json <path|-> [--yes] [--json]",
         "",
         "Creates user-visible Panes (Pane sessions) for feature/PR work in a saved repository and opens a terminal-backed tool tab. Pane creates and owns the worktree/branch for each new Pane.",
@@ -2923,8 +3075,9 @@ export const RUNPANE_CONTRACT = {
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
         "  --name <name>                  Pane/session name",
-        "  --worktree-name <name>         Worktree name; defaults to --name",
-        "  --base-branch <branch>         Base branch for the worktree",
+        "  --worktree-name <name>         Worktree directory name; defaults to --name",
+        "  --branch <name>                Exact new branch name (slashes kept); must not exist; defaults to the worktree name",
+        "  --base-branch <ref>            Ref to branch from; --base is an alias",
         "  --agent <codex|claude|cursor>  Built-in terminal template; with --tool-command, the agent it runs",
         "  --tool-command <command>       Custom terminal command",
         "  --title <title>                Terminal tab title",
@@ -2932,6 +3085,7 @@ export const RUNPANE_CONTRACT = {
         "  --prompt <text>                Alias for --initial-input",
         "  --initial-input-file <path|->  Read initial input from a file or stdin",
         "  --as-file-pointer              Send `Read and follow <prompt file>` instead of the prompt",
+        "  --prompt-file <path|->         Alias for --initial-input-file",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
         "  --wait-ready                   Wait for terminal readiness before returning",
@@ -2953,22 +3107,26 @@ export const RUNPANE_CONTRACT = {
         "  runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [options]",
         "  runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [options]",
         "",
-        "Adopts an existing externally managed git worktree without creating, syncing, or deleting it.",
+        "Adopts an existing externally managed git worktree without creating, syncing, or deleting it. Archiving only removes its worktree with `panes archive --remove-worktree`. To start new work on a named branch, use `panes create --base <ref> --branch <name>` instead of `git worktree add` plus adopt.",
         "",
-        "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
+        "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --prompt <text> or --prompt-file <path|-> and --wait-ready require --launch; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
         "",
         "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
       ],
       "panes archive": [
         "Usage:",
-        "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--dry-run] --yes [--json]",
+        "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--remove-worktree] [--dry-run] --yes [--json]",
+        "  runpane panes archive --session <id|name> --merged [--remove-worktree] [--source user|agent] [--dry-run] --yes [--json]",
         "",
-        "Archives a Pane (session) exactly like the UI Archive action, including removal of its Pane-managed git worktree. Refreshes the configured upstream before checking for unpushed commits and reports exact commit evidence. Refuses unsafe archives unless --force is passed. Use --dry-run to print the evidence without mutating Pane state.",
+        "Archives a Pane (session) exactly like the UI Archive action, including removal of its Pane-managed git worktree. Refreshes the configured upstream before checking for unpushed commits and reports exact commit evidence. When the branch has no upstream or its upstream is gone, a merged GitHub pull request whose head is HEAD (found with `gh`) counts as pushed. Refuses unsafe archives unless --force is passed. An adopted worktree is kept unless --remove-worktree is passed, which applies the same safety check and removal. The local branch is always kept. With --session and --merged, archives every Pane associated with the Session whose work is clean and pushed or merged, and reports a reason for each Pane it skips. Use --dry-run to print the evidence without mutating Pane state.",
         "",
         "Options:",
         "  --pane <pane-id>",
         "  --source <user|agent>",
         "  --force",
+        "  --remove-worktree",
+        "  --session <id|name>",
+        "  --merged",
         "  --pane-dir <path>",
         "  --json",
         "  --dry-run",
@@ -3592,6 +3750,60 @@ export const RUNPANE_CONTRACT = {
         "  --limit <count>                Maximum characters to return; defaults to 20000 (the end is kept)",
         "  --pane-dir <path>              Connect to a specific Pane data directory",
         "  --json                         Print machine-readable output"
+      ],
+      "lock": [
+        "Usage:",
+        "  python -m runpane lock <acquire|release|list> [options]",
+        "",
+        "Named locks coordinate a resource shared between agents, such as one test account.",
+        "The caller is the owner: the Pane and panel from $PANE_SESSION_ID and $PANE_PANEL_ID.",
+        "A lock is scoped to the owner's Session when its Pane belongs to one; otherwise it is global.",
+        "It is released on --ttl expiry, when the owner panel exits, or when the owner Pane is archived."
+      ],
+      "lock acquire": [
+        "Usage:",
+        "python -m runpane lock acquire --name <name> --ttl <duration> [--wait <milliseconds>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
+      ],
+      "lock release": [
+        "Usage:",
+        "python -m runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
+      ],
+      "lock list": [
+        "Usage:",
+        "python -m runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
+        "",
+        "Options:",
+        "  --name <name>                Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\".",
+        "  --ttl <duration>             Time to live, such as 90s, 30m, or 2h; a bare number is milliseconds.",
+        "  --wait <milliseconds>        Wait this long for a held lock to come free (acquire).",
+        "  --note <text>                What the lock is for; outside a Pane it also names the owner.",
+        "  --pane <pane-id>             Act for this Pane instead of $PANE_SESSION_ID.",
+        "  --panel <panel-id>           Act for this panel instead of $PANE_PANEL_ID.",
+        "  --force                      Release a lock another owner holds (release).",
+        "  --session <id|name>          Named Session whose locks to list or release.",
+        "  --json                       Print JSON output."
       ]
     }
   },
@@ -3685,6 +3897,9 @@ export const RUNPANE_CONTRACT = {
       "runpane sessions associate --session <id|name> --pane <pane-id> [--json] [--pane-dir <path>]",
       "runpane sessions detach --session <id|name> [--pane <pane-id>] [--json] [--pane-dir <path>]",
       "runpane sessions overview --session <id|name> [--json] [--pane-dir <path>]",
+      "runpane lock acquire --name testing-account --ttl 30m --wait 1800000 --note \"call QA\" --json",
+      "runpane lock release --name testing-account --json",
+      "runpane lock list --json",
       "runpane agents start --repo active --name fix-login --agent claude --prompt \"Fix the login redirect\" --yes --json",
       "runpane agents status --pane <pane-id> --json",
       "runpane agents send --pane <pane-id> --text \"Also add a test\" --yes --json",
@@ -3715,13 +3930,15 @@ export const RUNPANE_CONTRACT = {
       "`runpane panes cost` reports estimated token costs per Pane for the last 30 days, including per-model breakdowns and cache efficiency; unscoped output includes an Unattributed bucket that reconciles against workspace totals.",
       "`runpane panes create` connects to the running local Pane daemon, resolves the requested saved base repository, creates user-visible Pane sessions backed by Pane-managed worktrees/branches, opens terminal-backed tool tabs, and optionally sends initial input to the started tool. Built-in agent panes and `--source agent` default to background/no-focus unless `--focus` is passed. New Panes are pinned into the UI's favorite/pin set by default; pass `--no-pinned` to opt out. Panes created interactively in the Pane UI are unaffected. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.",
       "For `panes create --wait-ready`, `initialInput.delivery` says where the prompt went: `taken` or `queued` (from the agent's transcript, its screen, or `argv` for a launch-argument prompt), `in-composer`, or `unknown`. `initialInput.verifiedSubmitted` is true exactly when it is `taken` or `queued`. Routing input does not by itself verify submission.",
-      "`runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. Add `--dry-run` to inspect the same evidence without archiving. Successful archives wait for worktree removal and report `worktreeCleanup`.",
+      "`runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. A branch whose upstream is gone counts as pushed when a merged GitHub pull request has HEAD as its head (`safetyCheck.mergedViaPr`). Add `--dry-run` to inspect the same evidence without archiving. `--remove-worktree` applies the same check and removal to an adopted worktree; local branches are always kept. Successful archives report `worktreeCleanup: completed` once the worktree is gone from its path and from git; `trashDeletion: pending` means its files are still being deleted in the background. `runpane panes archive --session <id|name> --merged` archives every Session Pane that is clean and pushed or merged, and reports a reason for each skipped Pane.",
       "`runpane panes rename` trims and updates a Pane's display name without changing its worktree, branch, panels, or focus, and returns the updated pane summary.",
       "`runpane panes focus` raises the Pane window and selects a Pane (and optionally one of its panels) exactly like clicking it in the UI. Because it steals the user's window focus, run it only on an explicit user request to open, focus, show, or switch to a Pane; never focus a Pane proactively, the same doctrine that keeps `panes create` background/no-focus for `--source agent`.",
       "`runpane panels list` lists tool panels inside one Pane session.",
       "`runpane panels output` reads bounded recent terminal output from one panel and strips common terminal control noise for agent use.",
       "`runpane panels input` sends exact input bytes to one terminal panel. Prefer `--input-file` for newlines, Ctrl-C, quotes, or shell-sensitive text.",
       "`runpane panes create --prompt` is an alias for `--initial-input`; request JSON and daemon payloads should use the canonical `initialInput` field.",
+      "`runpane panes create --branch <name>` creates the Pane's worktree on exactly that new branch, slashes included (for example `agents/w5a`). The name is checked with `git check-ref-format --branch`, creation fails if the branch already exists, and Pane never renames it to make it unique. `--worktree-name` still names the directory and defaults to `--name`. `--base` is an alias for `--base-branch`, and `--prompt-file` for `--initial-input-file`. `panes create --base <ref> --branch <name> --prompt-file <file>` replaces `git worktree add` plus `panes adopt`.",
+      "`runpane panes adopt --launch` accepts `--prompt`, `--prompt-file`, `--wait-ready`, and `--ready-timeout-ms`, and reports `readiness`, `initialInput`, and `nextCommand` like `panes create`. A prompt without `--launch` is an error rather than being dropped.",
       "If composer submission cannot be verified without risking a duplicate, the create item is unsuccessful with `initialInput.staged`, `initialInput.attempts`, `initialInput.blocked.kind: submission_unverified`, and an actionable `nextCommand`. The CLI-facing `--prompt` alias maps to this canonical `initialInput` result.",
       "When running from WSL while Pane is installed on Windows, the Linux wrapper may look for a missing `/tmp/pane-daemon.../daemon.sock` or resolve to a Windows shim such as Volta. In that case invoke the Windows wrapper through PowerShell from a Windows cwd, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane repos list --json'`.",
       "`runpane watch` waits for workspace transitions from the daemon journal without polling. `--follow` keeps waiting and prints one line per event: READY, BLOCKED, IDLE, STUCK, NEW, GONE, EXIT, plus HEARTBEAT every 60 seconds as proof of life. Defaults are responsive: no settle, no batching, all kinds, IDLE every `--idle-after`. Expensive consumers opt into `--kinds` (drop `agent.busy`; BUSY carries no action), `--settle <ms>` (READY only after a quiet window; a BUSY inside it cancels the line), `--blocked-settle <ms>`, `--min-interval <ms>` (batch non-urgent lines; BLOCKED bypasses it), and `--idle-backoff` (10m, 30m, 1h, 3h, then daily). Two profiles cover orchestrators. Unattended: `runpane watch --follow --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff`, which budgets about 6 wake-ups per active pane per hour worst case, usually 1-3, and can deliver READY up to about 13 minutes late. User present: the same kinds with `--settle 60000 --blocked-settle 15000 --min-interval 120000` and no `--idle-backoff`, so READY arrives within about 3 minutes. Pane Chat arms it automatically through its skill; only your own scripts need the flags. STUCK means real unsubmitted composer text, never an agent prompt suggestion. `--quiet` (alias `--no-control-lines`) drops the WATCH OK, HEARTBEAT, and WATCH RECONNECTED control lines (`_ok`, `_heartbeat`, `_reconnected` in JSON); WATCH ERROR, RESET, and DROPPED (`_error`, `_reset`, `_dropped`) always print. Judge a dead watch by a non-zero exit or a WATCH ERROR line, not by silence. `--session <id|name>` follows every Pane associated with a named Session and re-reads membership on every read, so associate and detach need no re-arm; JOINED and LEFT (`pane.associated`, `pane.detached`) report membership changes. For Session members with an open PR, the daemon polls GitHub about every 3 minutes and reports `pr.conflicted` (`PR <pane-name> pane <pane-id> #<number> CONFLICTED`), `pr.checks` (`... CHECKS PASSED` or `... CHECKS FAILED <names>`), and `pr.merged` (`... MERGED`) on transitions only; list them in `--kinds`. In JSON, an entry with `replay: true` restates current state after a reset and is never READY.",
@@ -3733,6 +3950,7 @@ export const RUNPANE_CONTRACT = {
       "`sessions associate` associate a user-visible Pane with a named Session.",
       "`sessions detach` detach a Pane from a named Session.",
       "`sessions overview` read a live status, activity, git, and pull request overview for a named Session.",
+      "`runpane lock acquire|release|list` coordinate a resource shared between agents, such as one test account. The caller's Pane and panel own the lock; it is scoped to the owner's Session (or global outside one), renews for the same owner, and is released on TTL expiry, owner panel exit, or owner Pane archive. `--wait` blocks in the daemon until the lock comes free.",
       "`runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task in a repository, check on it, and send it a follow-up.",
       "`runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (`panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`.",
       "`runpane panels last-message --panel <panel-id>` reads a Claude or Codex agent's last reply from its transcript (up to `--limit` characters, default 20,000, keeping the end and reporting `truncated`). It never scrapes the screen: without a transcript it prints `{ ok: false, reason: \"transcript-unavailable\" }` and exits 1.",
@@ -4434,6 +4652,127 @@ export const RUNPANE_CONTRACT = {
         "--limit",
         "5000",
         "--json"
+      ],
+      [
+        "panes",
+        "create",
+        "--repo",
+        "active",
+        "--name",
+        "w5a",
+        "--base",
+        "release/foo",
+        "--branch",
+        "agents/w5a",
+        "--agent",
+        "claude",
+        "--prompt-file",
+        "prompt.md",
+        "--dry-run",
+        "--yes",
+        "--json"
+      ],
+      [
+        "panes",
+        "create",
+        "--repo",
+        "active",
+        "--name",
+        "w5b",
+        "--base-branch",
+        "origin/main",
+        "--branch",
+        "agents/w5b",
+        "--worktree-name",
+        "w5b-dir",
+        "--tool-command",
+        "bash",
+        "--initial-input-file",
+        "-",
+        "--dry-run",
+        "--yes",
+        "--json"
+      ],
+      [
+        "panes",
+        "archive",
+        "--pane",
+        "session-1",
+        "--remove-worktree",
+        "--yes",
+        "--json"
+      ],
+      [
+        "panes",
+        "archive",
+        "--session",
+        "refactor",
+        "--merged",
+        "--dry-run",
+        "--json"
+      ],
+      [
+        "panes",
+        "archive",
+        "--session",
+        "refactor",
+        "--merged",
+        "--remove-worktree",
+        "--yes"
+      ],
+      [
+        "lock",
+        "acquire",
+        "--name",
+        "testing-account",
+        "--ttl",
+        "30m",
+        "--wait",
+        "1800000",
+        "--note",
+        "call QA",
+        "--json"
+      ],
+      [
+        "lock",
+        "acquire",
+        "--name",
+        "staging-db",
+        "--ttl",
+        "1500",
+        "--pane",
+        "session-1",
+        "--panel",
+        "panel-1",
+        "--pane-dir",
+        "/tmp/pane"
+      ],
+      [
+        "lock",
+        "acquire",
+        "--name=db",
+        "--ttl=2h"
+      ],
+      [
+        "lock",
+        "release",
+        "--name",
+        "testing-account",
+        "--force",
+        "--session",
+        "Release QA",
+        "--json"
+      ],
+      [
+        "lock",
+        "list",
+        "--session",
+        "Release QA",
+        "--json"
+      ],
+      [
+        "lock",
+        "--help"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -5101,6 +5440,9 @@ export const RUNPANE_CONTRACT = {
                 "type": "string"
               },
               "worktreeName": {
+                "type": "string"
+              },
+              "branch": {
                 "type": "string"
               },
               "baseBranch": {
@@ -6414,6 +6756,9 @@ export const RUNPANE_CONTRACT = {
         },
         "dryRun": {
           "type": "boolean"
+        },
+        "removeWorktree": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -6586,7 +6931,15 @@ export const RUNPANE_CONTRACT = {
                 "failed",
                 "timeout",
                 "not-applicable"
-              ]
+              ],
+              "description": "`completed`: the worktree is gone from its path and from git (see trashDeletion). `failed`: removal failed and the worktree may remain; ok is false. `timeout`: the archive script or git removal is still running in the background; ok stays true. `not-applicable`: nothing was removed (main-repo Pane, or an adopted worktree without --remove-worktree). Released CLIs decode exactly these values."
+            },
+            "trashDeletion": {
+              "enum": [
+                "pending",
+                "done"
+              ],
+              "description": "Present with worktreeCleanup `completed`. `pending`: the removed worktree was moved into the repository's .git/pane-trash and its files are still being deleted in the background. `done`: the files are gone."
             },
             "worktreePath": {
               "type": "string"
@@ -6647,6 +7000,27 @@ export const RUNPANE_CONTRACT = {
                 },
                 "worktreeWillRemain": {
                   "const": true
+                },
+                "upstreamGone": {
+                  "type": "boolean",
+                  "description": "The branch had an upstream that no longer exists on the remote, so commits were compared with the base branch."
+                },
+                "mergedViaPr": {
+                  "type": "object",
+                  "description": "A merged pull request whose head commit is HEAD. Its commits are not counted as unpushed.",
+                  "required": [
+                    "number",
+                    "headOid"
+                  ],
+                  "properties": {
+                    "number": {
+                      "type": "number"
+                    },
+                    "headOid": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
                 }
               },
               "additionalProperties": false
@@ -8027,9 +8401,260 @@ export const RUNPANE_CONTRACT = {
         },
         "refreshedAt": {
           "type": "string"
+        },
+        "locks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+          }
         }
       },
       "additionalProperties": false
+    },
+    "lockListResult": {
+      "type": "object",
+      "required": [
+        "ok",
+        "locks"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "locks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "scope",
+              "owner",
+              "acquiredAt",
+              "expiresAt",
+              "ttlMs"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "scope": {
+                "enum": [
+                  "session",
+                  "global"
+                ]
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "pane",
+                      "external"
+                    ]
+                  },
+                  "paneId": {
+                    "type": "string"
+                  },
+                  "panelId": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "note": {
+                "type": "string"
+              },
+              "acquiredAt": {
+                "type": "string"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "ttlMs": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "lockAcquireRequest": {
+      "type": "object",
+      "required": [
+        "name",
+        "ttlMs",
+        "owner"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ttlMs": {
+          "type": "number"
+        },
+        "waitMs": {
+          "type": "number"
+        },
+        "note": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "object",
+          "properties": {
+            "paneId": {
+              "type": "string"
+            },
+            "panelId": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "lockAcquireResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "acquired",
+            "renewed",
+            "waitedMs",
+            "lock"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "acquired": {
+              "const": true
+            },
+            "renewed": {
+              "type": "boolean"
+            },
+            "waitedMs": {
+              "type": "number"
+            },
+            "lock": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "acquired",
+            "timedOut",
+            "waitedMs",
+            "heldBy",
+            "expiresAt",
+            "lock"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "acquired": {
+              "const": false
+            },
+            "timedOut": {
+              "type": "boolean"
+            },
+            "waitedMs": {
+              "type": "number"
+            },
+            "heldBy": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items/properties/owner"
+            },
+            "expiresAt": {
+              "type": "string"
+            },
+            "lock": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "lockReleaseResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "released",
+            "forced"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "released": {
+              "type": "boolean"
+            },
+            "forced": {
+              "type": "boolean"
+            },
+            "lock": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "ok",
+            "released",
+            "reason",
+            "heldBy",
+            "expiresAt",
+            "lock"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "released": {
+              "const": false
+            },
+            "reason": {
+              "const": "not-owner"
+            },
+            "heldBy": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items/properties/owner"
+            },
+            "expiresAt": {
+              "type": "string"
+            },
+            "lock": {
+              "$ref": "#/jsonSchemas/lockListResult/properties/locks/items"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "daemonActionResult": {
       "type": "object",
@@ -8367,6 +8992,141 @@ export const RUNPANE_CONTRACT = {
         }
       },
       "additionalProperties": false
+    },
+    "paneArchiveBulkRequest": {
+      "type": "object",
+      "required": [
+        "sessionId",
+        "merged"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "merged": {
+          "const": true
+        },
+        "source": {
+          "enum": [
+            "user",
+            "agent"
+          ]
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "removeWorktree": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "paneArchiveBulkResult": {
+      "type": "object",
+      "required": [
+        "ok",
+        "sessionId",
+        "merged",
+        "removeWorktree",
+        "archived",
+        "skipped",
+        "failed",
+        "items"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "merged": {
+          "const": true
+        },
+        "dryRun": {
+          "const": true
+        },
+        "removeWorktree": {
+          "type": "boolean"
+        },
+        "archived": {
+          "type": "number",
+          "description": "Panes archived, or that would be archived with --dry-run."
+        },
+        "skipped": {
+          "type": "number"
+        },
+        "failed": {
+          "type": "number"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "paneId",
+              "outcome"
+            ],
+            "properties": {
+              "paneId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "outcome": {
+                "enum": [
+                  "archived",
+                  "would-archive",
+                  "skipped",
+                  "failed"
+                ]
+              },
+              "skipped": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "uncommitted-changes",
+                      "unpushed-commits",
+                      "uncommitted-and-unpushed",
+                      "status-unknown",
+                      "missing-pane",
+                      "already-archived",
+                      "main-repo"
+                    ]
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "error": {
+                "type": "string"
+              },
+              "safetyCheck": {
+                "$ref": "#/jsonSchemas/paneArchiveResult/oneOf/0/properties/safetyCheck"
+              },
+              "worktreeCleanup": {
+                "$ref": "#/jsonSchemas/paneArchiveResult/oneOf/0/properties/worktreeCleanup"
+              },
+              "trashDeletion": {
+                "$ref": "#/jsonSchemas/paneArchiveResult/oneOf/0/properties/trashDeletion"
+              },
+              "worktreePath": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "agentContext": {
@@ -8394,7 +9154,8 @@ export const RUNPANE_CONTRACT = {
         "Use `runpane panels screen` for compact current state, including Claude and Codex composer state. Use `panels wait` for create-time readiness or text checks. Use `runpane watch --follow` to block on workspace transitions (READY, BLOCKED, IDLE, STUCK, EXIT) without polling. Use `panels submit` to send and submit a new turn. Use `panels submit-composer --strategy auto` only for a composer that was filled separately.",
         "Use `runpane panels input` only when exact bytes are required, such as Ctrl-C or handcrafted terminal input.",
         "Pane terminals draw inline images: sixel, iTerm2 inline images, and the kitty graphics protocol. Tools that need kitty graphics, such as terminal-browser and terminal-doom, run inside a Pane panel; `runpane doctor --json` reports the exact list under `terminal.graphicsProtocols`.",
-        "After creating Panes or sending terminal input, validate with `panels wait` or bounded `panels screen` before reporting success. For ongoing supervision, `runpane watch --follow` is the canonical monitor."
+        "After creating Panes or sending terminal input, validate with `panels wait` or bounded `panels screen` before reporting success. For ongoing supervision, `runpane watch --follow` is the canonical monitor.",
+        "When several agents share one resource, such as a test account, name a lock in their prompts: each worker runs `runpane lock acquire --name <name> --ttl 30m --wait 1800000 --json` before using it and `runpane lock release --name <name>` after."
       ],
       "detailCommand": "runpane agent-context --command <command> [--json]",
       "tools": [
@@ -8489,11 +9250,14 @@ export const RUNPANE_CONTRACT = {
         },
         {
           "name": "panes archive",
-          "summary": "Archive a Pane exactly like the UI Archive action, including safe removal of its Pane-managed git worktree.",
+          "summary": "Archive a Pane exactly like the UI Archive action, including safe removal of its Pane-managed git worktree, or archive every merged Pane in a Session.",
           "arguments": [
             "--pane <pane-id>",
+            "--session <id|name>",
+            "--merged",
             "--source <user|agent>",
             "--force",
+            "--remove-worktree",
             "--dry-run",
             "--yes",
             "--json"
@@ -9167,6 +9931,24 @@ export const RUNPANE_CONTRACT = {
             "description": "Custom terminal command to run instead of a built-in agent."
           },
           {
+            "name": "--base-branch",
+            "value": "<ref>",
+            "required": false,
+            "description": "Ref to branch from, such as origin/main or release/foo. --base is an alias."
+          },
+          {
+            "name": "--branch",
+            "value": "<name>",
+            "required": false,
+            "description": "Exact new branch name, slashes included (for example agents/w5a). Fails if the branch exists; never renamed to be unique. Defaults to the worktree name."
+          },
+          {
+            "name": "--worktree-name",
+            "value": "<name>",
+            "required": false,
+            "description": "Worktree directory name; defaults to --name."
+          },
+          {
             "name": "--prompt",
             "value": "<text>",
             "required": false,
@@ -9176,7 +9958,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--initial-input-file",
             "value": "<path|->",
             "required": false,
-            "description": "Read initial input from a file or stdin."
+            "description": "Read initial input from a file or stdin. --prompt-file is an alias."
           },
           {
             "name": "--as-file-pointer",
@@ -9261,6 +10043,7 @@ export const RUNPANE_CONTRACT = {
         ],
         "examples": [
           "runpane panes create --repo active --name issue-257 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json",
+          "runpane panes create --repo active --name w5a --base origin/main --branch agents/w5a --agent <agent> --prompt-file prompt.md --source agent --no-focus --wait-ready --yes --json",
           "runpane panes create --from-json panes.json --yes --json",
           "runpane panes create --repo active --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json",
           "runpane panes create --repo active --name issue-123 --agent claude --initial-input-file brief.md --as-file-pointer --source agent --no-focus --wait-ready --yes --json"
@@ -9273,6 +10056,7 @@ export const RUNPANE_CONTRACT = {
           "At least one of --agent or --tool-command is required unless --from-json is used.",
           "`panes create` is for user-visible Pane orchestration, not the agent's default private delegation mechanism.",
           "Register the saved base repository once. Pane creates and owns the worktree/branch for each new Pane.",
+          "`panes create --base <ref> --branch <name> --prompt-file <file>` replaces `git worktree add` plus `panes adopt`: Pane creates the worktree on exactly that branch name. `--branch` is checked with `git check-ref-format --branch` and fails if the branch already exists; `--worktree-name` still names the directory.",
           "Use `panels create` instead when a reviewer/helper should share an existing Pane's worktree.",
           "Agent-created Panes should pass `--source agent --no-focus --wait-ready --yes --json` unless the user explicitly wants focus moved. `panes create` pins the new Pane by default, so a follow-up `panes pin` call is unnecessary; pass `--no-pinned` for throwaway shells or bulk imports. `--pinned` is still accepted and is now a no-op. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.",
           "The built-in agent templates come from the runpane contract; custom terminal commands can pass agent-specific flags when requested by the user.",
@@ -9343,7 +10127,30 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--launch",
             "required": false,
-            "description": "Run the resume command immediately."
+            "description": "Run the agent (or its resume command) immediately."
+          },
+          {
+            "name": "--prompt",
+            "value": "<text>",
+            "required": false,
+            "description": "Alias for --initial-input; sent once the launched agent is ready. Requires --launch."
+          },
+          {
+            "name": "--prompt-file",
+            "value": "<path|->",
+            "required": false,
+            "description": "Alias for --initial-input-file; read the prompt from a file or stdin. Requires --launch."
+          },
+          {
+            "name": "--wait-ready",
+            "required": false,
+            "description": "Wait for the launched agent to be ready and the prompt submitted before returning. Requires --launch."
+          },
+          {
+            "name": "--ready-timeout-ms",
+            "value": "<ms>",
+            "required": false,
+            "description": "Readiness timeout; defaults to 30000."
           },
           {
             "name": "--no-pinned",
@@ -9379,32 +10186,36 @@ export const RUNPANE_CONTRACT = {
         ],
         "examples": [
           "runpane panes adopt --repo active --path /path/to/worktree --name imported --agent codex --resume <id> --yes --json",
-          "runpane panes adopt --repo active --path /path/to/worktree --name imported --tool-command \"agent-farm run free-range\" --agent claude --launch --yes --json"
+          "runpane panes adopt --repo active --path /path/to/worktree --name imported --tool-command \"agent-farm run free-range\" --agent claude --launch --yes --json",
+          "runpane panes adopt --repo active --path /path/to/worktree --name imported --agent claude --launch --prompt-file prompt.md --wait-ready --yes --json"
         ],
         "jsonSchemas": [
           "paneCreateResult"
         ],
         "notes": [
           "The resume command is staged without Enter unless --launch is passed.",
-          "Pane never removes an externally owned worktree.",
+          "Archiving never deletes an adopted worktree unless `runpane panes archive --remove-worktree` is used.",
           "One of --agent or --tool-command is required.",
           "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen.",
           "--resume needs a built-in agent command; a wrapper command resumes its own way.",
-          "The adopted Pane reports `status: running` in `panes list` while its terminal is live."
+          "The adopted Pane reports `status: running` in `panes list` while its terminal is live.",
+          "A prompt (--prompt, --initial-input, --prompt-file, --initial-input-file) or --wait-ready needs --launch; without it adopt fails instead of dropping the prompt.",
+          "With --launch the result carries the same readiness, initialInput, and nextCommand fields as panes create. With --resume the prompt goes to the resumed conversation's composer once the agent is ready.",
+          "To start new work on a named branch, prefer `panes create --base <ref> --branch <name>` over `git worktree add` plus adopt."
         ]
       },
       "panes archive": {
         "name": "panes archive",
-        "summary": "Archive a Pane (session) exactly like the UI Archive action, including safe removal of its Pane-managed git worktree.",
-        "details": "Use this to close out a Pane once its PR has merged. The safety check refreshes the configured upstream before comparing it to HEAD and includes exact unpushed commit IDs and subjects. Refuses unsafe archive operations unless --force is used. Use --dry-run to inspect the same evidence without mutating Pane state.",
+        "summary": "Archive a Pane (session) exactly like the UI Archive action, including safe removal of its Pane-managed git worktree, or archive every merged Pane in a Session.",
+        "details": "Use this to close out a Pane once its PR has merged. The safety check refreshes the configured upstream before comparing it to HEAD and includes exact unpushed commit IDs and subjects. When the branch has no upstream or its upstream is gone (GitHub deletes merged branches), a merged pull request whose head is HEAD counts as pushed, so squash-merged branches archive without --force. Refuses unsafe archive operations unless --force is used. Use --dry-run to inspect the same evidence without mutating Pane state. Use --session <id|name> --merged to close out every finished Pane of a Session at once.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
           {
             "name": "--pane",
             "value": "<pane-id>",
-            "required": true,
-            "description": "Pane/session id to archive."
+            "required": false,
+            "description": "Pane/session id to archive. Required unless --session is used."
           },
           {
             "name": "--source",
@@ -9416,6 +10227,22 @@ export const RUNPANE_CONTRACT = {
             "name": "--force",
             "required": false,
             "description": "Archive even if the pane's branch has uncommitted, untracked, or unpushed changes."
+          },
+          {
+            "name": "--remove-worktree",
+            "required": false,
+            "description": "Also check and remove an adopted Pane's worktree. Pane-managed worktrees are always removed; the local branch is always kept."
+          },
+          {
+            "name": "--session",
+            "value": "<id|name>",
+            "required": false,
+            "description": "Archive the Panes associated with this named Session instead of one Pane. Requires --merged."
+          },
+          {
+            "name": "--merged",
+            "required": false,
+            "description": "With --session, archive only Panes that are clean and pushed, or merged via a pull request; skip the rest with a reason."
           },
           {
             "name": "--yes",
@@ -9442,17 +10269,25 @@ export const RUNPANE_CONTRACT = {
         "examples": [
           "runpane panes archive --pane <pane-id> --source agent --yes --json",
           "runpane panes archive --pane <pane-id> --dry-run --json",
+          "runpane panes archive --pane <pane-id> --remove-worktree --yes --json",
+          "runpane panes archive --session <id|name> --merged --dry-run --json",
+          "runpane panes archive --session <id|name> --merged --remove-worktree --yes --json",
           "runpane panes archive --pane <pane-id> --force --yes --json"
         ],
         "jsonSchemas": [
           "paneArchiveRequest",
-          "paneArchiveResult"
+          "paneArchiveBulkRequest",
+          "paneArchiveResult",
+          "paneArchiveBulkResult"
         ],
         "notes": [
           "If the result has ok:false with a blocked field, the pane was NOT archived; inspect blocked.code and rerun with --force if discarding the flagged work is intentional.",
           "Inspect safetyCheck.unpushedCommitDetails for exact commit IDs and subjects; upstreamRefreshed confirms the tracking ref was refreshed first.",
           "A --dry-run result sets dryRun:true and wouldArchive without deleting the Pane or its worktree.",
-          "A successful archive waits for the Pane-managed worktree to be removed before returning; check worktreeCleanup in the result for the final outcome.",
+          "A successful archive reports worktreeCleanup `completed` once the worktree is gone from its path and from git. trashDeletion `pending` means a large worktree (for example one with node_modules) is still being deleted from .git/pane-trash in the background; that is still ok:true. `timeout` (also ok:true) means removal is still running; only `failed` sets ok:false.",
+          "safetyCheck.mergedViaPr names the merged PR whose head is HEAD; it needs an authenticated `gh`. Without it, a squash-merged branch whose remote branch was deleted reports unpushed-commits.",
+          "An adopted Pane (panes adopt) keeps its worktree unless --remove-worktree is passed. `panes restore` does not recreate a removed adopted worktree; the local branch is kept, so `git worktree add <path> <branch>` brings it back.",
+          "With --session --merged, each item has outcome archived, would-archive (dry run), skipped (with skipped.code and skipped.message), or failed.",
           "Archiving a main-repo Pane (no Pane-managed worktree) always succeeds immediately since nothing is deleted from disk.",
           "Undo an archive with `runpane panes restore --pane <pane-id> --yes`, which recreates the worktree. `runpane links create --pane <pane-id>` gives the user a link to review the Pane first.",
           "When the safety check is skipped, `safetyCheck.reason` says why: `external-worktree` (an adopted Pane whose worktree Pane does not own), `main-repo`, `missing-project-context`, or `git-error`. `worktreeWillRemain: true` means archiving leaves the worktree on disk."
@@ -11721,6 +12556,176 @@ export const RUNPANE_CONTRACT = {
         ],
         "jsonSchemas": [
           "sessionOverviewResult"
+        ],
+        "notes": [
+          "The result includes `locks`: named locks scoped to the Session or held by its Panes (see `runpane lock`)."
+        ]
+      },
+      "lock acquire": {
+        "name": "lock acquire",
+        "summary": "Acquire a named lock on a resource shared between agents, such as one test account, optionally waiting for it.",
+        "details": "Run this before using a resource that only one agent may use at a time, such as a shared test account, and release it when done. The owner is the calling Pane and panel ($PANE_SESSION_ID and $PANE_PANEL_ID, or --pane/--panel). The lock is scoped to the owner's Session when its Pane belongs to one, so two Sessions can each hold `testing-account`; otherwise it is global. It succeeds when the lock is free, expired, or already yours (which renews the TTL). Otherwise it returns ok:false with heldBy and expiresAt at once, or with --wait blocks in the daemon until the lock is released, expires, or its owner's panel exits or Pane is archived.",
+        "requiresPaneDaemon": true,
+        "mutates": true,
+        "arguments": [
+          {
+            "name": "--name",
+            "value": "<name>",
+            "required": true,
+            "description": "Lock name: 1-128 letters, digits, \".\", \"_\", or \"-\"."
+          },
+          {
+            "name": "--ttl",
+            "value": "<duration>",
+            "required": true,
+            "description": "How long the lock is held before it expires, such as 90s, 30m, or 2h; at most 24h. Acquire again before it runs out to renew."
+          },
+          {
+            "name": "--wait",
+            "value": "<milliseconds>",
+            "required": false,
+            "description": "Wait this long for the lock to come free. The CLI waits in daemon calls of up to 120 seconds each."
+          },
+          {
+            "name": "--note",
+            "value": "<text>",
+            "required": false,
+            "description": "What the lock is for, shown to other agents. Required outside a Pane terminal, where it also names the owner."
+          },
+          {
+            "name": "--pane",
+            "value": "<pane-id>",
+            "required": false,
+            "description": "Act for this Pane instead of $PANE_SESSION_ID."
+          },
+          {
+            "name": "--panel",
+            "value": "<panel-id>",
+            "required": false,
+            "description": "Act for this panel instead of $PANE_PANEL_ID."
+          },
+          {
+            "name": "--json",
+            "required": false,
+            "description": "Print machine-readable output."
+          },
+          {
+            "name": "--pane-dir",
+            "value": "<path>",
+            "required": false,
+            "description": "Connect to a specific Pane data directory."
+          }
+        ],
+        "examples": [
+          "runpane lock acquire --name testing-account --ttl 30m --wait 1800000 --note \"call QA\" --json",
+          "runpane lock acquire --name staging-db --ttl 10m --json"
+        ],
+        "jsonSchemas": [
+          "lockAcquireRequest",
+          "lockAcquireResult"
+        ],
+        "notes": [
+          "Exit status is 0 only when the lock is yours; ok:false (exit 1) means another owner holds it, named by heldBy until expiresAt.",
+          "Release the lock as soon as you are done with the resource: `runpane lock release --name <name>`. If you interrupt a waiting acquire, the lock can still be granted to you for up to two minutes; release it or let the TTL expire.",
+          "Pane releases the lock when its TTL runs out, when the owner panel exits, or when the owner Pane is archived. Quitting Pane does not release it; locks survive a restart."
+        ]
+      },
+      "lock release": {
+        "name": "lock release",
+        "summary": "Release a named lock you hold, or force-release another owner's lock.",
+        "details": "Only the owner can release a lock. --force releases another owner's lock, for example a stuck worker's; use --session to name a Session-scoped lock from outside that Session.",
+        "requiresPaneDaemon": true,
+        "mutates": true,
+        "arguments": [
+          {
+            "name": "--name",
+            "value": "<name>",
+            "required": true,
+            "description": "Lock name."
+          },
+          {
+            "name": "--force",
+            "required": false,
+            "description": "Release the lock even though another owner holds it."
+          },
+          {
+            "name": "--session",
+            "value": "<id|name>",
+            "required": false,
+            "description": "Session whose lock to release; defaults to the caller's Session, or global."
+          },
+          {
+            "name": "--note",
+            "value": "<text>",
+            "required": false,
+            "description": "Outside a Pane terminal, the note the lock was acquired with."
+          },
+          {
+            "name": "--pane",
+            "value": "<pane-id>",
+            "required": false,
+            "description": "Act for this Pane instead of $PANE_SESSION_ID."
+          },
+          {
+            "name": "--panel",
+            "value": "<panel-id>",
+            "required": false,
+            "description": "Act for this panel instead of $PANE_PANEL_ID."
+          },
+          {
+            "name": "--json",
+            "required": false,
+            "description": "Print machine-readable output."
+          },
+          {
+            "name": "--pane-dir",
+            "value": "<path>",
+            "required": false,
+            "description": "Connect to a specific Pane data directory."
+          }
+        ],
+        "examples": [
+          "runpane lock release --name testing-account --json",
+          "runpane lock release --name testing-account --session \"<session-id-or-name>\" --force --json"
+        ],
+        "jsonSchemas": [
+          "lockReleaseResult"
+        ],
+        "notes": [
+          "released:false with ok:true means no such lock was held. ok:false with reason not-owner (exit 1) means another owner holds it."
+        ]
+      },
+      "lock list": {
+        "name": "lock list",
+        "summary": "List held named locks, optionally only one Session's.",
+        "details": "List every held lock, or with --session the locks scoped to that Session plus those its Panes hold. `runpane sessions overview` includes the same Session locks.",
+        "requiresPaneDaemon": true,
+        "mutates": false,
+        "arguments": [
+          {
+            "name": "--session",
+            "value": "<id|name>",
+            "required": false,
+            "description": "Named Session id or exact name."
+          },
+          {
+            "name": "--json",
+            "required": false,
+            "description": "Print machine-readable output."
+          },
+          {
+            "name": "--pane-dir",
+            "value": "<path>",
+            "required": false,
+            "description": "Connect to a specific Pane data directory."
+          }
+        ],
+        "examples": [
+          "runpane lock list --json",
+          "runpane lock list --session \"<session-id-or-name>\" --json"
+        ],
+        "jsonSchemas": [
+          "lockListResult"
         ],
         "notes": []
       }
