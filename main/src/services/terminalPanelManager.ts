@@ -842,8 +842,10 @@ export class TerminalPanelManager extends EventEmitter {
 
     // oh-my-zsh can ask to update before the first prompt. Typing the launch command into
     // that question lets it swallow the first character, so decline it and keep waiting.
+    // "n" is oh-my-zsh's own "no": it also postpones the question for its update period.
     let recentOutput = '';
     let declinedUpdatePrompt = false;
+    let fallback: ReturnType<typeof setTimeout> | undefined;
 
     const onPromptReady = ptyProcess.onData((data: string) => {
       if (callbackInvoked) return;
@@ -865,7 +867,7 @@ export class TerminalPanelManager extends EventEmitter {
       }
     });
 
-    let fallback = setTimeout(invokeOnce, SHELL_PROMPT_FALLBACK_MS);
+    fallback = setTimeout(invokeOnce, SHELL_PROMPT_FALLBACK_MS);
   }
 
   /** The last ID line in a panel's saved scrollback, if any. */
