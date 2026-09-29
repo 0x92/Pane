@@ -628,6 +628,7 @@ interface PanelSummary {
   title: string;
   active: boolean;
   initialized?: boolean;
+  running?: boolean;
   agentType?: string;
   agentDetection?: 'declared' | 'command' | 'process' | 'screen';
   launchCommand?: string;
@@ -646,6 +647,19 @@ interface PanelListResult {
   ok: true;
   paneId: string;
   panels: PanelSummary[];
+}
+
+interface PanelResumeResult {
+  ok: boolean;
+  panelId: string;
+  paneId: string;
+  action: 'resumed' | 'already-running';
+  message: string;
+  agentType?: string;
+  agentSessionId?: string;
+  panel: PanelSummary;
+  readiness?: PanelReadiness;
+  nextCommand: string;
 }
 
 interface PanelCreateRequest {
@@ -717,6 +731,7 @@ interface PanelInputResult {
 
 interface PanelStateSummary {
   initialized: boolean;
+  running?: boolean;
   isAlternateScreen?: boolean;
   activityStatus?: 'active' | 'idle';
   isCliReady?: boolean;
@@ -804,6 +819,7 @@ interface PanelSubmitComposerResult {
 interface PanelWaitResult extends PanelReadiness {
   panelId: string;
   paneId?: string;
+  stopped?: true;
   screen: {
     source: PanelScreenResult['source'];
     text: string;
@@ -837,6 +853,7 @@ type WorkspaceEntryKind =
   | 'pane.created'
   | 'pane.gone'
   | 'panel.exited'
+  | 'panel.stopped'
   | 'agent.report'
   | 'pane.associated'
   | 'pane.detached'
@@ -849,6 +866,7 @@ interface WorkspacePanelSummary {
   title: string;
   agentType?: string;
   agentState?: 'blocked' | 'working' | 'idle' | 'unknown';
+  running?: boolean;
 }
 
 interface WorkspaceEntry {
@@ -873,6 +891,7 @@ interface WorkspaceEntry {
   heldInput?: string;
   heldInputPresent?: boolean;
   exitCode?: number;
+  running?: boolean;
   baseline?: true;
   replay?: true;
   changedWhileAway?: boolean;
@@ -978,6 +997,7 @@ const panelBlockedSchema: BoundarySchema<PanelBlockedState> = boundary.object({
 });
 const panelStateSchema: BoundarySchema<PanelStateSummary> = boundary.object({
   initialized: boundary.boolean,
+  running: boundary.optional(boundary.boolean),
   isAlternateScreen: boundary.optional(boundary.boolean),
   activityStatus: boundary.optional(boundary.enumeration('active', 'idle')),
   isCliReady: boundary.optional(boundary.boolean),
@@ -1093,6 +1113,7 @@ const panelSummarySchema: BoundarySchema<PanelSummary> = boundary.object({
   title: boundary.string,
   active: boundary.boolean,
   initialized: boundary.optional(boundary.boolean),
+  running: boundary.optional(boundary.boolean),
   agentType: boundary.optional(boundary.string),
   agentDetection: boundary.optional(boundary.enumeration('declared', 'command', 'process', 'screen')),
   launchCommand: boundary.optional(boundary.string),
@@ -1533,6 +1554,18 @@ export const panelListResultSchema: BoundarySchema<PanelListResult> = boundary.o
   paneId: boundary.string,
   panels: boundary.array(panelSummarySchema),
 });
+const panelResumeResultSchema: BoundarySchema<PanelResumeResult> = boundary.object({
+  ok: boundary.boolean,
+  panelId: boundary.string,
+  paneId: boundary.string,
+  action: boundary.enumeration('resumed', 'already-running'),
+  message: boundary.string,
+  agentType: boundary.optional(boundary.string),
+  agentSessionId: boundary.optional(boundary.string),
+  panel: panelSummarySchema,
+  readiness: boundary.optional(panelReadinessSchema),
+  nextCommand: boundary.string,
+});
 export const panelCreateResultSchema: BoundarySchema<PanelCreateResult> = boundary.object({
   ok: boundary.boolean,
   generation: boundary.optional(boundary.number),
@@ -1632,6 +1665,7 @@ const panelWaitResultSchema: BoundarySchema<PanelWaitResult> = boundary.object({
   elapsedMs: boundary.number,
   state: panelStateSchema,
   blocked: boundary.optional(panelBlockedSchema),
+  stopped: boundary.optional(boundary.literal(true)),
   nextCommand: boundary.optional(boundary.string),
   panelId: boundary.string,
   paneId: boundary.optional(boundary.string),
@@ -1666,6 +1700,7 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pane.created',
   'pane.gone',
   'panel.exited',
+  'panel.stopped',
   'pane.associated',
   'pane.detached',
   'pr.conflicted',
@@ -1679,6 +1714,7 @@ const workspacePanelSummarySchema: BoundarySchema<WorkspacePanelSummary> = bound
   title: boundary.string,
   agentType: boundary.optional(boundary.string),
   agentState: boundary.optional(agentStateSchema),
+  running: boundary.optional(boundary.boolean),
 });
 const workspaceEntrySchema: BoundarySchema<WorkspaceEntry> = boundary.object({
   gen: boundary.number,
@@ -1702,6 +1738,7 @@ const workspaceEntrySchema: BoundarySchema<WorkspaceEntry> = boundary.object({
   heldInput: boundary.optional(boundary.string),
   heldInputPresent: boundary.optional(boundary.boolean),
   exitCode: boundary.optional(boundary.number),
+  running: boundary.optional(boundary.boolean),
   baseline: boundary.optional(boundary.literal(true)),
   replay: boundary.optional(boundary.literal(true)),
   changedWhileAway: boundary.optional(boundary.boolean),
@@ -2848,6 +2885,29 @@ export async function runPanelsWait(parsed: ParsedArgs): Promise<number> {
   return result.ok ? 0 : 1;
 }
 
+export async function runPanelsResume(parsed: ParsedArgs): Promise<number> {
+  if (!parsed.panelId) {
+    throw new Error('runpane panels resume requires --panel.');
+  }
+  await confirmPanelResume(parsed);
+
+  const result = await invokeDaemon('runpane:panels:resume', [{
+    panelId: parsed.panelId,
+    waitReady: parsed.waitReady,
+    readyTimeoutMs: parsed.readyTimeoutMs,
+  }], panelResumeResultSchema, {
+    paneDir: parsed.paneDir,
+    timeoutMs: (parsed.readyTimeoutMs ?? 30_000) + 10_000,
+  });
+
+  if (parsed.json) {
+    printJson(result);
+  } else {
+    printPanelResumeResult(result);
+  }
+  return result.ok ? 0 : 1;
+}
+
 export async function runAgentsDoctor(parsed: ParsedArgs): Promise<number> {
   if (!parsed.agent) {
     throw new Error(`runpane agents doctor requires --agent ${RUNPANE_CONTRACT.enums.agents.join('|')}.`);
@@ -3307,6 +3367,26 @@ async function confirmPanelInput(
   }
 }
 
+async function confirmPanelResume(parsed: ParsedArgs): Promise<void> {
+  if (parsed.yes) {
+    return;
+  }
+
+  if (!isInteractiveShell()) {
+    throw new Error('runpane panels resume restarts a Pane terminal. Rerun with --yes in non-interactive shells.');
+  }
+
+  const rl = createInterface({ input, output });
+  try {
+    const answer = (await rl.question(`Resume panel ${parsed.panelId}? [y/N] `)).trim().toLowerCase();
+    if (answer !== 'y' && answer !== 'yes') {
+      throw new Error('Cancelled.');
+    }
+  } finally {
+    rl.close();
+  }
+}
+
 async function confirmPanelSubmitComposer(parsed: ParsedArgs): Promise<void> {
   if (parsed.yes) {
     return;
@@ -3383,6 +3463,7 @@ function workspaceLabel(kind: WorkspaceEntryKind): string {
     'pane.created': 'NEW',
     'pane.gone': 'GONE',
     'panel.exited': 'EXIT',
+    'panel.stopped': 'STOPPED',
     'pane.associated': 'JOINED',
     'pane.detached': 'LEFT',
     'pr.conflicted': 'PR CONFLICTED',
@@ -3589,9 +3670,22 @@ function printInitialInputDelivery(initialInput: InitialInputDeliveryResult | un
   }
 }
 
+function printPanelResumeResult(result: PanelResumeResult): void {
+  console.log(`${result.action === 'resumed' ? 'Resumed' : 'Already running:'} panel ${result.panelId} in pane ${result.paneId}. ${result.message}`);
+  if (result.readiness) {
+    console.log(`Ready: ${result.readiness.ok ? 'yes' : result.readiness.timedOut ? 'timed out' : 'blocked'} after ${result.readiness.elapsedMs}ms`);
+    if (result.readiness.blocked) {
+      console.log(`Blocked: ${result.readiness.blocked.message}`);
+    }
+  }
+  console.log(`Next: ${result.nextCommand}`);
+}
+
 function printPanelWaitResult(result: PanelWaitResult): void {
   if (result.ok) {
     console.log(`Matched ${result.condition} for panel ${result.panelId} after ${result.elapsedMs}ms.`);
+  } else if (result.stopped && !result.timedOut) {
+    console.log(`Panel ${result.panelId} is not running, so it cannot become ${result.condition}.`);
   } else if (result.blocked) {
     console.log(`Blocked waiting for ${result.condition} on panel ${result.panelId}: ${result.blocked.message}`);
   } else if (result.timedOut) {
@@ -3601,6 +3695,7 @@ function printPanelWaitResult(result: PanelWaitResult): void {
   }
 
   const statusParts = [
+    result.state.running === false ? 'stopped' : undefined,
     result.state.initialized ? 'initialized' : 'not-initialized',
     result.state.activityStatus,
     result.state.isCliReady === undefined ? undefined : result.state.isCliReady ? 'cli-ready' : 'cli-not-ready',
@@ -3641,10 +3736,11 @@ function printPanelListResult(result: PanelListResult): void {
   for (const panel of result.panels) {
     const marker = panel.active ? '*' : ' ';
     const initialized = panel.initialized === undefined ? '' : panel.initialized ? ' initialized' : ' not-initialized';
+    const stopped = panel.running === false ? ' stopped' : '';
     const agent = panel.agentType ? ` ${panel.agentType}` : '';
     const detection = panel.agentDetection && panel.agentDetection !== 'command' ? ` (${panel.agentDetection})` : '';
     const resume = panel.resumeId ? ` resume ${panel.resumeId}` : '';
-    console.log(`${marker} ${panel.id}\t${panel.type}\t${panel.title}${initialized}${agent}${detection}${resume}`);
+    console.log(`${marker} ${panel.id}\t${panel.type}\t${panel.title}${initialized}${stopped}${agent}${detection}${resume}`);
   }
 }
 
