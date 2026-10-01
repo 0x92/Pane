@@ -256,6 +256,8 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
   const unicode11AddonRef = useRef<Unicode11Addon | null>(null);
   const imageAddonRef = useRef<ImageAddon | null>(null);
   const isActiveRef = useRef(isActive);
+  const pasteFilesRef = useRef<((files: File[]) => void) | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const isNearBottomRef = useRef(true); // Track if user is scrolled near the bottom
   const [showScrollDown, setShowScrollDown] = useState(false); // Show jump-to-bottom pill
   const tuiActiveRef = useRef(false);
@@ -1513,18 +1515,16 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
             e.preventDefault();
             e.dataTransfer.dropEffect = 'copy';
           };
-          const handleDrop = (e: DragEvent) => {
-            e.preventDefault();
-            if (!e.dataTransfer?.files.length || disposed || !terminal) return;
-
-            // Save all dropped files to disk and paste the resolved path
-            const files = Array.from(e.dataTransfer.files);
+          // Save files on the terminal's host and paste each resolved path. Shared by
+          // drag-and-drop and the upload button's file picker.
+          const pasteFiles = (files: File[]) => {
+            if (!files.length || disposed || !terminal) return;
             (async () => {
               for (const file of files) {
                 if (file.size > 50 * 1024 * 1024) {
                   const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
                   if (!disposed && terminal) {
-                    terminal.paste(`[Drop failed] File too large (${sizeMB} MB), max 50 MB\n`);
+                    terminal.paste(`[Upload failed] File too large (${sizeMB} MB), max 50 MB\n`);
                   }
                   continue;
                 }
@@ -1567,16 +1567,21 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
                     terminal.paste(`${resolvedPath}\n`);
                   }
                 } catch (err) {
-                  console.error('[TerminalPanel] Failed to drop file:', err);
+                  console.error('[TerminalPanel] Failed to upload file:', err);
                   if (!disposed && terminal) {
                     // Strip Electron's IPC wrapper so the user sees the backend reason
                     const raw = err instanceof Error ? err.message : String(err);
                     const reason = raw.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, '');
-                    terminal.paste(`[Drop failed] ${reason || 'Unknown error'}\n`);
+                    terminal.paste(`[Upload failed] ${reason || 'Unknown error'}\n`);
                   }
                 }
               }
             })();
+          };
+          pasteFilesRef.current = pasteFiles;
+          const handleDrop = (e: DragEvent) => {
+            e.preventDefault();
+            pasteFiles(Array.from(e.dataTransfer?.files ?? []));
           };
           terminalRef.current.addEventListener('dragover', handleDragOver);
           terminalRef.current.addEventListener('drop', handleDrop);
@@ -1827,6 +1832,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
             terminalElement?.removeEventListener('paste', handlePaste, { capture: true });
             terminalElement?.removeEventListener('dragover', handleDragOver);
             terminalElement?.removeEventListener('drop', handleDrop);
+            if (pasteFilesRef.current === pasteFiles) pasteFilesRef.current = null;
           };
         }
       } catch (error) {
@@ -2124,6 +2130,29 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
       {/* Terminal scroll buttons — compact, revealed on hover */}
       {isInitialized && (
         <div className="absolute top-2 right-5 z-30 flex items-center gap-0.5 opacity-0 pointer-events-none group-hover/terminal:opacity-100 group-hover/terminal:pointer-events-auto transition-opacity">
+          <input
+            ref={uploadInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              pasteFilesRef.current?.(Array.from(e.target.files ?? []));
+              e.target.value = '';
+              xtermRef.current?.focus();
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => uploadInputRef.current?.click()}
+            className="p-0.5 rounded bg-surface-secondary/60 hover:bg-surface-tertiary/80 text-text-tertiary hover:text-text-secondary transition-colors"
+            title="Upload files"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 8V2" />
+              <path d="M3.5 4.5L6 2l2.5 2.5" />
+              <path d="M2 8.5v1.5h8V8.5" />
+            </svg>
+          </button>
           <button
             onClick={() => { void handleManualRefresh(); }}
             className="p-0.5 rounded bg-surface-secondary/60 hover:bg-surface-tertiary/80 text-text-tertiary hover:text-text-secondary transition-colors"
