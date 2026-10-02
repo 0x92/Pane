@@ -966,8 +966,8 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   setVisibility(panelId: string, isVisible: boolean, viewerId = 'local:legacy'): void {
-    const terminal = this.terminals.get(panelId);
-    if (!terminal) return;
+    // Viewers can attach or detach while an asynchronous PTY spawn/respawn
+    // has no live terminal. Keep that intent for the replacement process.
     const normalizedViewerId = this.normalizeVisibilityViewerId(viewerId);
     let visibleViewers = this.visibleViewersByPanel.get(panelId);
 
@@ -985,7 +985,10 @@ export class TerminalPanelManager extends EventEmitter {
       }
     }
 
-    this.applyVisibilityState(terminal, (visibleViewers?.size ?? 0) > 0);
+    const terminal = this.terminals.get(panelId);
+    if (terminal) {
+      this.applyVisibilityState(terminal, (visibleViewers?.size ?? 0) > 0);
+    }
   }
 
   clearVisibilityViewer(viewerId: string): void {
@@ -1285,7 +1288,9 @@ export class TerminalPanelManager extends EventEmitter {
       flowControl: createFlowControlRecord(),
       outputBuffer: '',
       outputFlushTimer: null,
-      isVisible: true,
+      // No viewer means nobody can ACK. Preserve registered viewers on a
+      // supervisor respawn; new panels become visible when a client attaches.
+      isVisible: (this.visibleViewersByPanel.get(panel.id)?.size ?? 0) > 0,
       isAlternateScreen: false,
       inSyncBlock: false,
       filterInAltScreen: false,
@@ -2391,7 +2396,6 @@ export class TerminalPanelManager extends EventEmitter {
       disposeFlowControlRecord(terminal.flowControl);
       terminal.screenEmulator?.dispose();
       this.terminals.delete(panelId);
-      this.visibleViewersByPanel.delete(panelId);
     }
 
     if (snapshots.length === 0) {

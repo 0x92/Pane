@@ -154,7 +154,7 @@ describe('terminal panel persistence', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  async function startTerminal(panel: ToolPanel): Promise<{ manager: TerminalPanelManager; handle: FakePtyHandle }> {
+  async function startTerminal(panel: ToolPanel, visible = true): Promise<{ manager: TerminalPanelManager; handle: FakePtyHandle }> {
     const manager = new TerminalPanelManager(inProcessEmulatorHost);
     managers.push(manager);
     panelManagerMock.getPanel.mockReturnValue(panel);
@@ -162,8 +162,79 @@ describe('terminal panel persistence', () => {
       databaseService.createPanel({ id: panel.id, sessionId: panel.sessionId, type: 'terminal', title: panel.title, state: panel.state });
     }
     await manager.initializeTerminal(panel, tempDir);
+    if (visible) manager.setVisibility(panel.id, true);
     return { manager, handle: ptyHost.latest() };
   }
+
+  it('streams an unviewed terminal without pausing, then applies backpressure while viewed', async () => {
+    vi.useFakeTimers();
+    try {
+      const pause = vi.spyOn(ptyHost, 'pause');
+      const resume = vi.spyOn(ptyHost, 'resume');
+      const panel = makePanel('unviewed-flow-control');
+      const { manager, handle } = await startTerminal(panel, false);
+      for (let i = 0; i < 12; i++) {
+        handle.emit('x'.repeat(10_000));
+        await vi.advanceTimersByTimeAsync(300);
+      }
+      expect(pause).not.toHaveBeenCalled();
+
+      manager.setVisibility(panel.id, true, 'remote:active');
+      manager.setVisibility(panel.id, true, 'remote:silent');
+      handle.emit('x'.repeat(100_000));
+      await vi.advanceTimersByTimeAsync(32);
+      expect(pause).toHaveBeenCalledTimes(1);
+      manager.acknowledgeBytes(panel.id, 100_000);
+      expect(resume).toHaveBeenCalledTimes(1);
+
+      handle.emit('x'.repeat(100_000));
+      await vi.advanceTimersByTimeAsync(32);
+      expect(pause).toHaveBeenCalledTimes(2);
+      manager.clearVisibilityViewersByPrefix('remote');
+      expect(resume).toHaveBeenCalledTimes(2);
+      handle.emit('x'.repeat(100_000));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(pause).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a registered viewer across a PTY host respawn', async () => {
+    const panel = makePanel('viewed-respawn-flow-control');
+    const { manager } = await startTerminal(panel);
+    await manager.respawnAll();
+    ptyHost.latest().emit('viewer still receives output');
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        channel: 'terminal:output',
+        args: [{ sessionId: panel.sessionId, panelId: panel.id, output: 'viewer still receives output' }],
+      });
+    });
+  });
+
+  it.each([false, true])('reconciles visibility during respawn (previously visible: %s)', async (wasVisible) => {
+    const panel = makePanel(`visibility-during-respawn-${wasVisible}`);
+    const { manager } = await startTerminal(panel, wasVisible);
+    const spawn = ptyHost.spawn.bind(ptyHost);
+    let releaseSpawn!: () => void;
+    const gate = new Promise<void>(resolve => { releaseSpawn = resolve; });
+    vi.spyOn(ptyHost, 'spawn').mockImplementationOnce(async opts => {
+      await gate;
+      return spawn(opts);
+    });
+    const restart = manager.respawnAll();
+    manager.setVisibility(panel.id, !wasVisible);
+    releaseSpawn();
+    await restart;
+
+    // Large enough to flush immediately at either cadence.
+    const output = 'x'.repeat(150_000);
+    ptyHost.latest().emit(output);
+    expect(events.filter(event => event.channel === 'terminal:output')).toHaveLength(wasVisible ? 0 : 1);
+    manager.acknowledgeBytes(panel.id, output.length);
+  });
 
   it.each([
     { agentType: 'claude', initialCommand: 'claude --dangerously-skip-permissions', agentSessionId: '22222222-2222-4222-8222-222222222222', expected: 'claude --dangerously-skip-permissions --resume "22222222-2222-4222-8222-222222222222"' },
