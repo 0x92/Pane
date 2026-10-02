@@ -811,7 +811,7 @@ test('Sessions group live managed Panes while preserving the focused Pane rows',
   await dismissStartupDialogs(page);
 
   await expect(page.getByTestId('sessions-section-header')).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId('usage-nav')).toBeVisible();
+  await expect(page.getByTestId('usage-nav')).toHaveCount(0);
   const sessionsToggle = page.getByTestId('sessions-section-header').getByRole('button', { name: 'Sessions', exact: true });
   await expect(sessionsToggle).toHaveAttribute('aria-expanded', 'true');
   await sessionsToggle.click();
@@ -832,12 +832,18 @@ test('Sessions group live managed Panes while preserving the focused Pane rows',
   await expect(page.getByText('Pinned pane', { exact: true })).toBeVisible();
 
   const evolutionRow = page.getByTestId('orchestration-session-evolution');
-  await expect(evolutionRow).toHaveAttribute('aria-expanded', 'true');
+  const childrenToggle = page.getByRole('button', { name: 'Collapse Pane evolution children' });
+  await expect(childrenToggle).toHaveAttribute('aria-expanded', 'true');
   await evolutionRow.click();
-  await expect(evolutionRow).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByRole('button', { name: 'Pane/pane chat to session', exact: true })).toHaveCount(0);
+  await expect(childrenToggle).toHaveAttribute('aria-expanded', 'true');
+  await childrenToggle.click();
+  await expect(page.getByRole('button', { name: 'Expand Pane evolution children' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Pane/pane chat to session', exact: true })).toBeHidden();
   await evolutionRow.click();
-  await expect(evolutionRow).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('button', { name: 'Expand Pane evolution children' })).toHaveAttribute('aria-expanded', 'false');
+  await page.getByRole('button', { name: 'Expand Pane evolution children' }).press('Enter');
+  await expect(childrenToggle).toHaveAttribute('aria-expanded', 'true');
+  await page.getByRole('button', { name: 'Collapse Doozy fixes children' }).click();
 
   await expect(page.getByRole('heading', { name: 'Pane evolution', exact: true })).toBeAttached();
   await page.getByRole('button', { name: 'Show details', exact: true }).click();
@@ -867,7 +873,7 @@ test('Sessions group live managed Panes while preserving the focused Pane rows',
   const doozyRow = page.getByTestId('orchestration-session-doozy');
   await doozyRow.click();
   await expect(page.getByRole('heading', { name: 'Doozy fixes', exact: true })).toBeAttached();
-  await doozyRow.click();
+  await page.getByRole('button', { name: 'Expand Doozy fixes children' }).click();
   await page.getByRole('button', { name: 'Pane/managed pane sidebar', exact: true }).click();
   await doozyRow.click();
   await expect(page.getByRole('heading', { name: 'Doozy fixes', exact: true })).toBeAttached();
@@ -880,6 +886,48 @@ test('Sessions group live managed Panes while preserving the focused Pane rows',
   });
   await expect(page.getByTestId('orchestration-session-evolution')).toContainText('2');
   await expect(page.getByRole('button', { name: 'Pinned pane', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Expand project Pane fixtures', exact: true }).click();
+  const child = page.locator('#orchestration-session-panes-sessions-doozy').getByRole('button', { name: 'Pane/managed pane sidebar', exact: true });
+  const repository = page.locator('#project-sessions-1').getByRole('button', { name: 'Pane/managed pane sidebar', exact: true });
+  const selectedRow = (button: typeof child) => button.locator('xpath=ancestor::div[contains(@class,"group/session")][1]');
+  await child.click();
+  await expect(selectedRow(child)).toHaveClass(/bg-surface-selected/);
+  await expect(selectedRow(repository)).not.toHaveClass(/bg-surface-selected/);
+  await repository.click();
+  await expect(selectedRow(repository)).toHaveClass(/bg-surface-selected/);
+  await expect(selectedRow(child)).not.toHaveClass(/bg-surface-selected/);
+  await doozyRow.click();
+  await expect(selectedRow(repository)).not.toHaveClass(/bg-surface-selected/);
+  await expect(selectedRow(child)).not.toHaveClass(/bg-surface-selected/);
+});
+
+test('Session rows show whether their child Panes are working or waiting', async ({ page }) => {
+  await installSessionsFixture(page, [
+    sessionFixture('activity', 'Activity', '', '', '2026-09-16T12:00:00.000Z', [
+      { paneId: 'pane-alpha', panelIds: [], attachedAt: '2026-09-16T12:00:00.000Z' },
+      { paneId: 'pane-beta', panelIds: [], attachedAt: '2026-09-16T12:00:00.000Z' },
+    ]),
+  ], [paneFixture('pane-alpha', 'Alpha pane'), paneFixture('pane-beta', 'Beta pane')]);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  const row = page.getByTestId('orchestration-session-activity');
+  await expect(row).toContainText('2');
+  const emit = (panelId: string, sessionId: string, state: string) => page.evaluate(({ panelId, sessionId, state }) => {
+    // SAFETY: installElectronApiMock adds these controls before the app loads.
+    const mockWindow = window as typeof window & { __paneTestElectronMock: { emitPanelAgentStatus: (panelId: string, sessionId: string, state: string) => void } };
+    mockWindow.__paneTestElectronMock.emitPanelAgentStatus(panelId, sessionId, state);
+  }, { panelId, sessionId, state });
+
+  await emit('alpha-agent', 'pane-alpha', 'working');
+  await emit('beta-agent', 'pane-beta', 'working');
+  await expect(row).toContainText('2 working');
+  await emit('beta-agent', 'pane-beta', 'blocked');
+  await expect(row).toContainText('1 needs input');
+  await emit('alpha-agent', 'pane-alpha', 'idle');
+  await emit('beta-agent', 'pane-beta', 'idle');
+  await expect(row).not.toContainText('working');
+  await expect(row).not.toContainText('input');
 });
 
 test('Sessions can be pinned, persist across reload, and unpin back to the normal list', async ({ page }) => {
@@ -893,6 +941,16 @@ test('Sessions can be pinned, persist across reload, and unpin back to the norma
 
   const alphaRow = page.getByTestId('orchestration-session-alpha');
   await expect(alphaRow).toBeVisible({ timeout: 10_000 });
+  const emptyChildren = page.locator('#orchestration-session-panes-sessions-alpha');
+  await expect(page.getByRole('button', { name: 'Expand Alpha children' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(emptyChildren).toBeHidden();
+  await page.getByRole('button', { name: 'Expand Alpha children' }).click();
+  const collapseChildren = page.getByRole('button', { name: 'Collapse Alpha children' });
+  await expect(collapseChildren).toHaveAttribute('aria-expanded', 'true');
+  await expect(emptyChildren.getByText('No child sessions')).toBeVisible();
+  await collapseChildren.click();
+  await expect(page.getByRole('button', { name: 'Expand Alpha children' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(emptyChildren).toBeHidden();
   await alphaRow.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Pin Session', exact: true }).click();
 
@@ -989,8 +1047,11 @@ test('Session rows archive and restore without losing selection or associated Pa
   await page.getByRole('button', { name: 'Archived', exact: true }).click();
   const archivedAlpha = page.getByTestId('archived-orchestration-session-alpha');
   await expect(archivedAlpha).toBeVisible();
+  await expect(page.getByText('Worktrees', { exact: true })).toBeVisible();
+  await expect(page.getByText('No archived worktrees', { exact: true })).toBeVisible();
   await archivedAlpha.getByRole('button', { name: 'Restore Session Alpha', exact: true }).click();
   await expect(archivedAlpha).toHaveCount(0);
+  await expect(page.getByText('No archived Sessions', { exact: true })).toBeVisible();
   await expect(page.getByTestId('orchestration-session-alpha')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Beta', exact: true })).toBeAttached();
   await expect(page.getByRole('button', { name: 'Associated Alpha Pane', exact: true })).toBeVisible();
@@ -1324,7 +1385,7 @@ test('Session app defaults save for new Sessions without changing existing launc
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await dismissStartupDialogs(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
-  const appSettings = page.getByRole('dialog', { name: 'Pane Settings' });
+  const appSettings = page.getByTestId('settings-page');
   await appSettings.getByRole('button', { name: 'AI & Agents', exact: true }).click();
   await appSettings.getByLabel('Custom command and arguments').fill('af run coordinator --quiet');
   await appSettings.getByRole('button', { name: 'Edit behavior…', exact: true }).click();
@@ -1332,7 +1393,7 @@ test('Session app defaults save for new Sessions without changing existing launc
   await page.getByRole('dialog', { name: 'Edit Session behavior', exact: true }).getByRole('button', { name: 'Save behavior', exact: true }).click();
   await appSettings.getByRole('button', { name: 'Apply Session defaults', exact: true }).click();
   await expect(appSettings.getByRole('button', { name: 'Apply Session defaults', exact: true })).toBeDisabled();
-  await appSettings.getByRole('button', { name: 'Close modal' }).click();
+  await appSettings.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(appSettings).not.toBeVisible();
   await page.getByTestId('new-orchestration-session').click();
   const createDialog = page.getByRole('dialog', { name: 'Create Session', exact: true });
@@ -1381,12 +1442,24 @@ test('Sessions open persistent shell and Files panels in their own workspace', a
   });
   await page.goto('/');
   await page.getByTestId('orchestration-session-tools').click();
-  const sessionTabs = page.locator('.pane-chat-shell');
-  const activeTab = sessionTabs.getByRole('tab').first();
+  // The Session's tabs sit on their own row under the window title bar, which
+  // names the Session; tabs never share the title bar's row.
+  const workspaceTabs = page.getByTestId('session-workspace-tabs');
+  const activeTab = workspaceTabs.getByRole('tab').first();
   await expect(activeTab).toBeVisible();
+  await expect(activeTab).toHaveCSS('border-top-left-radius', '6px');
+  const titleBar = page.getByTestId('window-title-bar');
+  await expect(titleBar.getByTestId('window-title-bar-label')).toContainText('Tools');
+  const [tabBounds, titleBarBounds] = [await layoutBox(activeTab), await layoutBox(titleBar)];
+  expect(tabBounds.y).toBeGreaterThanOrEqual(titleBarBounds.y + titleBarBounds.height);
+  await expect(page.getByTestId('sidebar').getByRole('button', { name: 'Home menu' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Session settings', exact: true })).toBeVisible();
   const titleBarControls = page.getByTestId('window-title-bar-trailing-controls');
   await expect(titleBarControls.getByRole('button', { name: 'Session settings' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toHaveCSS('-webkit-app-region', 'no-drag');
+  await expect(page.getByRole('button', { name: 'Show details', exact: true })).toHaveCSS('-webkit-app-region', 'no-drag');
+  // The whole title bar drags the window; its controls opt out.
+  await expect(titleBar).toHaveCSS('-webkit-app-region', 'drag');
   await page.getByRole('button', { name: 'Expand terminal', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Collapse terminal', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Show details', exact: true }).click();
@@ -1416,10 +1489,10 @@ test('Sessions open persistent shell and Files panels in their own workspace', a
     { id: 'mock-panel-2', type: 'explorer', title: 'Files' },
   ]);
   await page.getByRole('complementary', { name: 'Session files' }).getByText('notes.txt', { exact: true }).click();
-  const fileTab = sessionTabs.getByRole('tab', { name: 'notes.txt', exact: true });
+  const fileTab = workspaceTabs.getByRole('tab', { name: 'notes.txt', exact: true });
   await expect(fileTab).toBeVisible();
   await expect(fileTab).toHaveAttribute('aria-selected', 'true');
-  const closeFile = sessionTabs.getByRole('button', { name: 'Close notes.txt' });
+  const closeFile = workspaceTabs.getByRole('button', { name: 'Close notes.txt' });
   await expect(closeFile).toHaveCSS('opacity', '1');
   await activeTab.click();
   await expect(fileTab).toHaveAttribute('aria-selected', 'false');
@@ -1516,12 +1589,65 @@ test('Sessions open persistent shell and Files panels in their own workspace', a
   await expect.poll(readPanels).toHaveLength(3);
 });
 
+test('Sessions can be renamed from their right-click menu', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('rename-menu', 'Original', '', '', new Date(0).toISOString())]);
+  await page.goto('/');
+  await page.getByTestId('orchestration-session-rename-menu').click();
+  await page.getByTestId('orchestration-session-rename-menu').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename Session…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Rename Session', exact: true });
+  await expect(dialog.getByRole('textbox', { name: 'Session name' })).toHaveValue('Original');
+  await dialog.getByRole('textbox', { name: 'Session name' }).fill('New name');
+  await dialog.getByRole('button', { name: 'Save name', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Open Session New name', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'New name', exact: true, level: 1 })).toBeAttached();
+});
+
+test('the Session "+" menu opens terminals and browsers as tabs, apart from the terminal dock', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('addtool', 'Add tool demo', '', '', new Date(0).toISOString())]);
+  await page.goto('/');
+  await page.getByTestId('orchestration-session-addtool').click();
+  const workspaceTabs = page.getByTestId('session-workspace-tabs');
+  await expect(workspaceTabs.getByRole('tab')).toHaveCount(1);
+  const addTool = page.locator('.pane-chat-shell').getByRole('button', { name: 'Add tool', exact: true });
+  await expect(addTool).toBeEnabled();
+
+  await addTool.click();
+  const menu = page.getByRole('menu');
+  await expect(menu.getByRole('menuitem', { name: 'Terminal' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Browser' })).toBeVisible();
+  await menu.getByRole('menuitem', { name: 'Browser' }).click();
+  await expect(workspaceTabs.getByRole('tab', { name: 'Browser' })).toHaveAttribute('aria-selected', 'true');
+
+  await addTool.click();
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Terminal' }).click();
+  await expect(workspaceTabs.getByRole('tab', { name: 'Terminal' })).toHaveAttribute('aria-selected', 'true');
+  await expect(workspaceTabs.getByRole('tab')).toHaveCount(3);
+
+  // The bottom terminal dock stays its own shell, not the new tab.
+  await page.getByRole('button', { name: 'Expand terminal', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Collapse terminal', exact: true })).toBeVisible();
+  await expect(workspaceTabs.getByRole('tab')).toHaveCount(3);
+
+  // Over the sidebar the title bar takes the sidebar's colour and width.
+  const segment = page.getByTestId('window-title-bar-sidebar-segment');
+  const sidebar = page.getByTestId('sidebar');
+  const [segmentBox, sidebarBox] = [await layoutBox(segment), await layoutBox(sidebar)];
+  expect(segmentBox.width).toBe(sidebarBox.width);
+  const colours = await page.evaluate(() => ({
+    segment: getComputedStyle(document.querySelector('[data-testid="window-title-bar-sidebar-segment"]')!).backgroundColor,
+    sidebar: getComputedStyle(document.querySelector('[data-testid="sidebar"]')!).backgroundColor,
+  }));
+  expect(colours.segment).toBe(colours.sidebar);
+});
+
 test('agent-opened pages open as tabs in a split beside the Session conversation', async ({ page }, testInfo) => {
   await installSessionsFixture(page, [sessionFixture('plans', 'Plan demo', '', '', new Date(0).toISOString())]);
   await page.goto('/');
   await page.getByTestId('orchestration-session-plans').click();
-  const titleBarTabs = page.getByTestId('session-workspace-tabs');
-  await expect(titleBarTabs.getByRole('tab').first()).toBeVisible();
+  const workspaceTabs = page.getByTestId('session-workspace-tabs');
+  await expect(workspaceTabs.getByRole('tab').first()).toBeVisible();
   const openPage = (id: string, title: string, active = true, reused = false) => page.evaluate(({ id, title, active, reused }) => {
     // SAFETY: installElectronApiMock adds these controls before the app loads.
     const mockWindow = window as typeof window & { __paneTestElectronMock: { emitPanelCreated: (panel: ToolPanel) => void; emitPanelUpdated: (panel: ToolPanel) => void } };
@@ -1537,10 +1663,17 @@ test('agent-opened pages open as tabs in a split beside the Session conversation
   await openPage('plan-page', 'plan.html');
   const groupStrips = page.locator('.panel-group-tab-bar');
   await expect(groupStrips).toHaveCount(2);
-  // The permanent agent tab stays in the workspace toolbar; opened pages get the side strip.
-  await expect(titleBarTabs.getByRole('tab')).toHaveCount(1);
+  // Split, every group owns a strip: the agent tab moves into its group's strip
+  // (the toolbar row goes away) and opened pages get the side strip, so all tabs
+  // sit on one row under the title bar.
+  await expect(workspaceTabs).toHaveCount(0);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveCount(1);
   await expect(groupStrips.nth(1).getByRole('tab', { name: 'plan.html' })).toHaveAttribute('aria-selected', 'true');
-  await expect(groupStrips.nth(0).getByRole('tab')).toHaveCount(0);
+  const [agentStrip, pageStrip] = [await layoutBox(groupStrips.nth(0)), await layoutBox(groupStrips.nth(1))];
+  expect(pageStrip.y).toBe(agentStrip.y);
+  expect(pageStrip.height).toBe(agentStrip.height);
+  const titleBar = await layoutBox(page.getByTestId('window-title-bar'));
+  expect(agentStrip.y).toBeGreaterThanOrEqual(titleBar.y + titleBar.height);
 
   await openPage('report-page', 'report.html', false);
   await expect(groupStrips.nth(1).getByRole('tab', { name: 'plan.html' })).toHaveAttribute('aria-selected', 'true');
@@ -1566,5 +1699,5 @@ test('agent-opened pages open as tabs in a split beside the Session conversation
   await groupStrips.nth(1).getByRole('button', { name: 'Close report.html' }).click();
   await groupStrips.nth(1).getByRole('button', { name: 'Close plan.html' }).click();
   await expect(groupStrips).toHaveCount(0);
-  await expect(titleBarTabs.getByRole('tab')).toHaveCount(1);
+  await expect(workspaceTabs.getByRole('tab')).toHaveCount(1);
 });

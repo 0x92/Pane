@@ -136,6 +136,9 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
   // A group strip's "+" opens this same menu, anchored to that button instead.
   const externalAnchorRef = useRef<DOMRect | null>(null);
   const trailingSlot = useTitleBarSlotStore((state) => state.trailingSlot);
+  // Run / inspector controls live in the window title bar when the window owns
+  // one; a native-framed window keeps them at this row's end.
+  const controlsOnTitlePlane = !!trailingSlot;
   // Rename state moved to PanelTabStrip
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [editingCustomIndex, setEditingCustomIndex] = useState<number | null>(null);
@@ -518,7 +521,7 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
     <div className={cn("panel-tab-bar bg-bg-chrome flex-shrink-0", barCollapsed && "hidden")}>
       {/* Flex container */}
       <div
-        className="relative flex items-center min-h-[var(--panel-tab-height)] pr-2"
+        className="relative flex min-h-[38px] items-center pr-2"
         onDragOver={tabsInGroups && isTabDragging ? () => setDragOverBar(true) : undefined}
         onDragLeave={tabsInGroups && isTabDragging ? () => setDragOverBar(false) : undefined}
       >
@@ -543,7 +546,7 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
             here (working tabs live in the group strips); shortcut hints are
             disabled then because the strip shows a subset and the 1-9 indexes
             would lie. */}
-        <PanelTabStrip
+        {!barCollapsed && <PanelTabStrip
           idNamespace="top"
           panels={primaryGroupPanels ?? sortedPanels}
           activePanelId={primaryGroupActivePanelId !== undefined ? primaryGroupActivePanelId : (activePanel?.id ?? null)}
@@ -558,7 +561,7 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
           isTabDragging={isTabDragging}
           draggedPanelId={draggedPanelId}
           getPanelTabPresentation={getPanelTabPresentation}
-        />
+        />}
 
         {/* Add Panel dropdown button - outside overflow container so dropdown isn't clipped */}
         <div className="relative h-[var(--panel-tab-height)] flex items-center flex-shrink-0" ref={dropdownRef}>
@@ -804,7 +807,7 @@ export const PanelTabBar: React.FC<PanelTabBarProps> = memo(({
 
         {/* Run / inspector controls live on the title plane when the
             window owns its title bar; otherwise they stay at the bar's end. */}
-        {trailingSlot ? createPortal(rightActions, trailingSlot) : rightActions}
+        {controlsOnTitlePlane && trailingSlot ? createPortal(rightActions, trailingSlot) : rightActions}
       </div>
     </div>
 

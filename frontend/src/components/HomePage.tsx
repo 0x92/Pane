@@ -299,7 +299,7 @@ export function HomePage() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-bg-primary px-8 py-10">
+    <div className="relative flex-1 overflow-y-auto bg-bg-primary px-8 py-10">
       <div className="flex min-h-full items-center">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
           <DiscordBanner />

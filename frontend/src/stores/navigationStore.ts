@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { PaneNavigationView } from '../../../shared/types/hostNavigation';
 
-export type SidebarNavigationScope = 'repositories' | 'pinned';
+export type SidebarNavigationScope = 'repositories' | 'pinned' | 'orchestration';
 
 // Tracks which project ids have already been seen so registerProjectIds only
 // auto-expands genuinely new projects (preserves user-collapsed state)
@@ -53,7 +53,6 @@ interface NavigationState {
   navigateToProject: (projectId: number) => void;
   navigateToSessions: () => void;
   navigateToPaneChat: () => void;
-  navigateToUsage: () => void;
 }
 
 export const useNavigationStore = create<NavigationState>((set, get) => ({
@@ -133,12 +132,6 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
   navigateToPaneChat: () => set({
     activeView: 'pane-chat',
-    activeProjectId: null
-  }),
-
-  // Usage is reported per host, not per project.
-  navigateToUsage: () => set({
-    activeView: 'usage',
     activeProjectId: null
   }),
 }));
