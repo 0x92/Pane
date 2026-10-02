@@ -1,5 +1,5 @@
 import type { CustomCommandResume } from '../../../shared/types/customCommandResume';
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { Archive, ChevronDown, ChevronRight, MessageSquare, Pin, PinOff, Plus, RefreshCw, Terminal } from 'lucide-react';
 import { useNavigationStore } from '../stores/navigationStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -59,7 +59,8 @@ function availabilityIsVisible(availability: OrchestrationSessionAvailability): 
 const SESSION_AGENT_OPTIONS: ReadonlyArray<{ id: PaneChatAgent; label: string }> = (['claude', 'codex', 'cursor'] as const)
   .map(id => ({ id, label: PANE_CHAT_AGENT_LABELS[id] }));
 
-function availableSessionAgents(): ReadonlyArray<{ id: PaneChatAgent; label: string }> {
+function availableSessionAgents(wsl = false): ReadonlyArray<{ id: PaneChatAgent; label: string }> {
+  if (wsl) return SESSION_AGENT_OPTIONS;
   const visible = new Set(visibleAgentPresets().map(preset => preset.id));
   return SESSION_AGENT_OPTIONS.filter(option => visible.has(option.id));
 }
@@ -107,10 +108,10 @@ export function OrchestrationSessionNav({
   const isPinnedSectionExpanded = pinnedSectionExpanded ?? localPinnedSectionExpanded;
   const setPinnedSectionExpanded = onPinnedSectionExpandedChange ?? setLocalPinnedSectionExpanded;
 
-  const createSession = useCallback(async (agent: PaneChatAgent, requestedName?: string, launchCommand?: string, profile?: string, customResume?: CustomCommandResume | null) => {
+  const createSession = useCallback(async (agent: PaneChatAgent, requestedName?: string, launchCommand?: string, profile?: string, customResume?: CustomCommandResume | null, wslDistribution?: string) => {
     await load();
     const name = requestedName?.trim() || nextOrchestrationSessionName(useOrchestrationSessionStore.getState().sessions);
-    await create({ name, agent, launchCommand, profile, customResume });
+    await create({ name, agent, launchCommand, profile, customResume, runtime: wslDistribution ? 'wsl' : 'windows', wslDistribution });
     setShowCreate(false);
     setActiveSession(null);
     navigateToPaneChat();
@@ -467,17 +468,52 @@ function SessionContextMenu({ menu, onClose, onArchive, onPin }: SessionContextM
 interface CreateOrchestrationSessionDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (agent: PaneChatAgent, name?: string, launchCommand?: string, profile?: string, customResume?: CustomCommandResume | null) => Promise<void>;
+  onCreate: (agent: PaneChatAgent, name?: string, launchCommand?: string, profile?: string, customResume?: CustomCommandResume | null, wslDistribution?: string) => Promise<void>;
+}
+
+interface SessionCreationForm {
+  agent: PaneChatAgent;
+  name: string;
+  launchCommand: string;
+  customResume: CustomCommandResume | null;
+  profile: string;
+  error: string | null;
+}
+
+type SessionCreationAction =
+  | { type: 'reset'; config: AppConfig | null }
+  | { type: 'update'; values: Partial<SessionCreationForm> };
+
+function initialSessionCreationForm(config: AppConfig | null): SessionCreationForm {
+  return {
+    agent: supportedSessionAgent(config?.defaultOrchestratorAgent),
+    name: '',
+    launchCommand: config?.defaultSessionCommand ?? '',
+    customResume: config?.defaultSessionResume ?? null,
+    profile: config?.defaultSessionProfile ?? DEFAULT_SESSION_PROFILE,
+    error: null,
+  };
+}
+
+function sessionCreationReducer(state: SessionCreationForm, action: SessionCreationAction): SessionCreationForm {
+  return action.type === 'reset' ? initialSessionCreationForm(action.config) : { ...state, ...action.values };
 }
 
 function CreateOrchestrationSessionDialog({ isOpen, onClose, onCreate }: CreateOrchestrationSessionDialogProps) {
-  const [agent, setAgent] = useState<PaneChatAgent>(DEFAULT_PANE_CHAT_AGENT);
-  const [name, setName] = useState('');
-  const [launchCommand, setLaunchCommand] = useState('');
-  const [customResume, setCustomResume] = useState<CustomCommandResume | null>(null);
-  const [profile, setProfile] = useState(DEFAULT_SESSION_PROFILE);
+  const [distributions, setDistributions] = useState<string[]>([]);
+  const [wslDistribution, setWslDistribution] = useState('');
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    setWslDistribution('');
+    setDistributions([]);
+    void window.electronAPI?.orchestrationSessions.runtimes?.().then(result => {
+      if (!cancelled && result.success) setDistributions(result.data?.distributions ?? []);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [isOpen]);
+  const [{ agent, name, launchCommand, customResume, profile, error }, dispatch] = useReducer(sessionCreationReducer, null, initialSessionCreationForm);
   const userEditedLaunch = useRef(false);
-  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const config = useConfigStore(state => state.config);
   const fetchConfig = useConfigStore(state => state.fetchConfig);
@@ -485,23 +521,27 @@ function CreateOrchestrationSessionDialog({ isOpen, onClose, onCreate }: CreateO
   const userSelectedAgent = useRef(false);
 
   useEffect(() => {
+    if (!isOpen || userSelectedAgent.current) return;
+    dispatch({ type: 'update', values: { agent: wslDistribution
+      ? config?.defaultOrchestratorAgent ?? DEFAULT_PANE_CHAT_AGENT
+      : supportedSessionAgent(config?.defaultOrchestratorAgent) } });
+  }, [isOpen, wslDistribution, config?.defaultOrchestratorAgent]);
+
+  useEffect(() => {
     if (!isOpen) return;
     userSelectedAgent.current = false;
     userEditedLaunch.current = false;
     const savedConfig = useConfigStore.getState().config;
-    setAgent(supportedSessionAgent(savedConfig?.defaultOrchestratorAgent));
-    setName('');
-    setLaunchCommand(savedConfig?.defaultSessionCommand ?? '');
-    setCustomResume(savedConfig?.defaultSessionResume ?? null);
-    setProfile(savedConfig?.defaultSessionProfile ?? DEFAULT_SESSION_PROFILE);
-    setError(null);
+    dispatch({ type: 'reset', config: savedConfig });
     if (!savedConfig) {
       void fetchConfig().then(nextConfig => {
-        if (!userSelectedAgent.current) setAgent(supportedSessionAgent(nextConfig.defaultOrchestratorAgent));
+        if (!userSelectedAgent.current) dispatch({ type: 'update', values: { agent: supportedSessionAgent(nextConfig.defaultOrchestratorAgent) } });
         if (!userEditedLaunch.current) {
-          setLaunchCommand(nextConfig.defaultSessionCommand ?? '');
-          setCustomResume(nextConfig.defaultSessionResume ?? null);
-          setProfile(nextConfig.defaultSessionProfile ?? DEFAULT_SESSION_PROFILE);
+          dispatch({ type: 'update', values: {
+            launchCommand: nextConfig.defaultSessionCommand ?? '',
+            customResume: nextConfig.defaultSessionResume ?? null,
+            profile: nextConfig.defaultSessionProfile ?? DEFAULT_SESSION_PROFILE,
+          } });
         }
       }).catch(() => undefined);
     }
@@ -510,16 +550,16 @@ function CreateOrchestrationSessionDialog({ isOpen, onClose, onCreate }: CreateO
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsSubmitting(true);
-    setError(null);
+    dispatch({ type: 'update', values: { error: null } });
     try {
       const defaults: Partial<AppConfig> = {};
       if (config?.defaultOrchestratorAgent !== agent) defaults.defaultOrchestratorAgent = agent;
       if ((config?.defaultSessionCommand ?? '') !== launchCommand) defaults.defaultSessionCommand = launchCommand;
       if (JSON.stringify(config?.defaultSessionResume ?? null) !== JSON.stringify(customResume)) defaults.defaultSessionResume = customResume;
       if (Object.keys(defaults).length > 0) await updateConfig(defaults);
-      await onCreate(agent, name.trim() || undefined, launchCommand, profile, customResume);
+      await onCreate(agent, name.trim() || undefined, launchCommand, profile, customResume, wslDistribution || undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Failed to create Session');
+      dispatch({ type: 'update', values: { error: cause instanceof Error ? cause.message : 'Failed to create Session' } });
     } finally {
       setIsSubmitting(false);
     }
@@ -530,11 +570,11 @@ function CreateOrchestrationSessionDialog({ isOpen, onClose, onCreate }: CreateO
       <form onSubmit={submit} className="flex min-h-0 flex-col">
         <ModalHeader title="Create Session" />
         <ModalBody className="min-h-0 space-y-4">
-          <Input label="Name your chat (optional)" value={name} onChange={event => setName(event.target.value)} placeholder="New chat" autoFocus fullWidth />
+          <Input label="Name your chat (optional)" value={name} onChange={event => dispatch({ type: 'update', values: { name: event.target.value } })} placeholder="New chat" autoFocus fullWidth />
           <fieldset className="space-y-2">
             <legend className="text-label font-medium text-text-primary">Choose an agent</legend>
             <div className="grid gap-2" role="radiogroup" aria-label="Session agent">
-              {availableSessionAgents().map(option => {
+              {availableSessionAgents(Boolean(wslDistribution)).map(option => {
                 const selected = agent === option.id;
                 const isDefault = config?.defaultOrchestratorAgent === option.id;
                 return (
@@ -556,7 +596,7 @@ function CreateOrchestrationSessionDialog({ isOpen, onClose, onCreate }: CreateO
                       checked={selected}
                       onChange={() => {
                         userSelectedAgent.current = true;
-                        setAgent(option.id);
+                        dispatch({ type: 'update', values: { agent: option.id } });
                       }}
                       className="sr-only"
                     />
@@ -567,16 +607,30 @@ function CreateOrchestrationSessionDialog({ isOpen, onClose, onCreate }: CreateO
               })}
             </div>
           </fieldset>
+          {distributions.length > 0 && (
+            <div className="space-y-2">
+              <label htmlFor="session-runtime" className="text-label font-medium text-text-primary">Run agent in</label>
+              <select id="session-runtime" value={wslDistribution} onChange={event => {
+                setWslDistribution(event.target.value);
+                if (!event.target.value) dispatch({ type: 'update', values: { agent: supportedSessionAgent(agent) } });
+              }} disabled={isSubmitting}
+                className="w-full rounded border border-border-primary bg-surface-primary px-3 py-2 text-sm text-text-primary focus:ring-2 focus:ring-interactive">
+                <option value="">Windows</option>
+                {distributions.map(distribution => <option key={distribution} value={distribution}>WSL · {distribution}</option>)}
+              </select>
+              {wslDistribution && <p className="text-xs text-text-secondary">The agent must be installed in this distribution.</p>}
+            </div>
+          )}
           <details className="space-y-3">
             <summary className="cursor-default text-sm font-medium text-text-secondary">Launch command and behavior</summary>
             <SessionLaunchFields
               resume={customResume}
-              onResumeChange={value => { userEditedLaunch.current = true; setCustomResume(value); }}
+              onResumeChange={value => { userEditedLaunch.current = true; dispatch({ type: 'update', values: { customResume: value } }); }}
               command={launchCommand}
               profile={profile}
               customCommands={config?.customCommands}
-              onCommandChange={value => { userEditedLaunch.current = true; setLaunchCommand(value); }}
-              onProfileChange={value => { userEditedLaunch.current = true; setProfile(value); }}
+              onCommandChange={value => { userEditedLaunch.current = true; dispatch({ type: 'update', values: { launchCommand: value } }); }}
+              onProfileChange={value => { userEditedLaunch.current = true; dispatch({ type: 'update', values: { profile: value } }); }}
             />
           </details>
           {error && <p role="alert" className="text-sm text-status-error">{error}</p>}

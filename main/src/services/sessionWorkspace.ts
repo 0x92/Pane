@@ -1,4 +1,6 @@
 import fs from 'fs';
+import { sessionRuntimePath } from './sessionRuntime';
+import { sessionWSLBridge, sessionWSLLauncher, sessionWSLRcFile } from './sessionWSLBridge';
 import path from 'path';
 import { getAppDirectory } from '../utils/appDirectory';
 import { DEFAULT_SESSION_PROFILE, PANE_CAPABILITY_CONTEXT } from '../../../shared/types/sessionProfile';
@@ -60,7 +62,26 @@ export function prepareSessionWorkspace(
   writeManagedInstructions(path.join(cwd, 'AGENTS.md'), content);
   // Claude resolves imports before the first turn; Cursor also reads AGENTS.md.
   writeManagedInstructions(path.join(cwd, 'CLAUDE.md'), '@AGENTS.md');
+  if (record?.runtime === 'wsl') {
+    const runtimeDirectory = path.join(cwd, '.pane-runtime');
+    fs.mkdirSync(runtimeDirectory, { recursive: true, mode: 0o700 });
+    if (fs.lstatSync(runtimeDirectory).isSymbolicLink()) throw new Error('Session runtime directory must not be a symbolic link');
+    for (const [name, content] of Object.entries(runtimeFiles(cwd, record))) {
+      const file = path.join(runtimeDirectory, name);
+      if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) throw new Error('Session runtime file must not be a symbolic link');
+      fs.writeFileSync(file, content, { mode: 0o700 });
+    }
+    writeManagedInstructions(path.join(cwd, 'runtime-context.md'), wslRouting(record));
+  }
   return cwd;
+}
+
+function runtimeFiles(cwd: string, record: OrchestrationSessionRecord) {
+  return {
+    runpane: sessionWSLBridge(getAppDirectory(), record, path.join(cwd, '.pane-runtime', 'runpane.cjs')),
+    'runpane.cjs': sessionWSLLauncher(getAppDirectory()),
+    bashrc: sessionWSLRcFile(cwd, record),
+  };
 }
 
 function sessionInstructions(
@@ -73,7 +94,7 @@ function sessionInstructions(
     `Stable Session ID: ${sessionId}`,
     'This directory belongs to one Session. Opening it does not authorize work. Await user input. Saved next actions are context only.',
     PANE_CAPABILITY_CONTEXT,
-    delegationRules(sessionId),
+    delegationRules(sessionId, record),
     '## Session behavior profile',
     profile,
     `## Plans and documents
@@ -89,15 +110,27 @@ Distinguish plans from verified results. Opening this Session is not an instruct
  * Rules an orchestrator must follow even if it never opens the guide skill.
  * Paths mirror SkillCacheManager's Pane Chat layout under the app directory.
  */
-function delegationRules(sessionId: string): string {
-  const appDirectory = getAppDirectory();
-  const guide = path.join(appDirectory, 'skills', 'pane-chat', 'pane-orchestrator', 'SKILL.md');
-  const runtimeContext = path.join(appDirectory, 'skills', 'pane-chat', 'runtime-context.md');
+function delegationRules(sessionId: string, record?: OrchestrationSessionRecord): string {
+  const appDirectory = sessionRuntimePath(getAppDirectory(), record);
+  const guide = sessionRuntimePath(path.join(getAppDirectory(), 'skills', 'pane-chat', 'pane-orchestrator', 'SKILL.md'), record);
+  const runtimeContext = record?.runtime === 'wsl'
+    ? sessionRuntimePath(path.join(sessionWorkspacePath(sessionId), 'runtime-context.md'), record)
+    : path.join(appDirectory, 'skills', 'pane-chat', 'runtime-context.md');
   return `## Reaching Pane and delegating work
 At the start of each task that uses Pane, run runpane doctor --json --pane-dir "${appDirectory}". Pane terminals put runpane on PATH; if it does not resolve, use "$PANE_RUNPANE_BIN", then follow ${runtimeContext} for other ways to reach this Pane install.
 Delegate repository work to visible Panes with runpane panes create. Panes you create or adopt here are associated with this Session automatically; confirm with runpane sessions overview --session ${sessionId} --json, and use runpane sessions associate for existing Panes.
 Never substitute plain git worktrees or built-in or background subagents for work delegated to a Pane. If runpane cannot reach Pane, stop and tell the user what failed.
-Read ${guide} before coordinating Panes for the first time in a conversation.`;
+Read ${guide} before coordinating Panes for the first time in a conversation.${record?.runtime === 'wsl' ? `\n${wslRouting(record)}` : ''}`;
+}
+
+function wslRouting(record: OrchestrationSessionRecord): string {
+  const appDirectory = sessionRuntimePath(getAppDirectory(), record);
+  return `## WSL RunPane Routing
+This Session runs in ${record.wslDistribution}. This file overrides the shared Pane Chat runtime context for this Session.
+Pane runs on Windows. Linux processes cannot open its named pipe. The Session's runpane on PATH (also $PANE_RUNPANE_BIN) automatically invokes the bundled Windows CLI through powershell.exe from Windows TEMP.
+Run runpane doctor --json --pane-dir "${appDirectory}" before using Pane. Pass --pane-dir "${appDirectory}" on every call. The bridge translates file arguments to Windows paths and always targets this instance. Use this bridge, not a Linux npm/npx runpane installation.
+Session folder: ${sessionRuntimePath(sessionWorkspacePath(record.id), record)}
+Windows CLI output contains Windows paths; translate them with wslpath -u before reading files in Linux. If interop or doctor fails, report the error and stop Pane actions.`;
 }
 
 /** Read-only check: never fold a workspace containing user edits or artifacts. */
@@ -118,23 +151,45 @@ export function isPristineSessionWorkspace(record: OrchestrationSessionRecord): 
 }
 
 /** Roll back only our unpublished scaffold; retain a record if user files appeared. */
-export function discardSessionScaffold(sessionId: string): boolean {
-  const cwd = sessionWorkspacePath(sessionId);
+export function discardSessionScaffold(record: OrchestrationSessionRecord): boolean {
+  const cwd = sessionWorkspacePath(record.id);
   if (!fs.existsSync(cwd)) return true;
   if (fs.lstatSync(cwd).isSymbolicLink()) return false;
   const names = fs.readdirSync(cwd);
+  const files: string[] = [];
+  let runtimeDirectory: string | undefined;
   for (const name of names) {
-    if (name !== 'AGENTS.md' && name !== 'CLAUDE.md' && name !== LEGACY_PROGRESS_STATUS) return false;
     const file = path.join(cwd, name);
-    if (!fs.lstatSync(file).isFile()) return false;
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink()) return false;
+    if (name === '.pane-runtime' && record.runtime === 'wsl') {
+      if (!stat.isDirectory()) return false;
+      const expected = new Map(Object.entries(runtimeFiles(cwd, record)));
+      for (const child of fs.readdirSync(file)) {
+        const childPath = path.join(file, child);
+        if (!expected.has(child) || !fs.lstatSync(childPath).isFile()) return false;
+        if (fs.readFileSync(childPath, 'utf8') !== expected.get(child)) return false;
+        files.push(childPath);
+      }
+      runtimeDirectory = file;
+      continue;
+    }
+    if (!stat.isFile()) return false;
     const content = fs.readFileSync(file, 'utf8').trim();
+    files.push(file);
+    if (name === 'runtime-context.md' && record.runtime === 'wsl') {
+      if (content !== `${START}\n${escapeMarkers(wslRouting(record))}\n${END}`) return false;
+      continue;
+    }
+    if (name !== 'AGENTS.md' && name !== 'CLAUDE.md' && name !== LEGACY_PROGRESS_STATUS) return false;
     if (name === LEGACY_PROGRESS_STATUS) {
       if (content !== '{"enabled":true}' && content !== '{"enabled":false}') return false;
       continue;
     }
     if (!content.startsWith(START) || !content.endsWith(END)) return false;
   }
-  for (const name of names) fs.unlinkSync(path.join(cwd, name));
+  for (const file of files) fs.unlinkSync(file);
+  if (runtimeDirectory) fs.rmdirSync(runtimeDirectory);
   fs.rmdirSync(cwd);
   return true;
 }

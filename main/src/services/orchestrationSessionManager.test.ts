@@ -25,6 +25,7 @@ import { OrchestrationSessionStore } from './orchestrationSessionStore';
 import { terminalPanelManager } from './terminalPanelManager';
 import { sessionWorkspacePath, prepareSessionWorkspace } from './sessionWorkspace';
 import { OrchestrationSessionManager } from './orchestrationSessionManager';
+import * as wslUtils from '../utils/wslUtils';
 
 const liveStates = new Map<string, AgentState>();
 
@@ -273,6 +274,25 @@ afterEach(() => {
 });
 
 describe('OrchestrationSessionManager', () => {
+  it('reopens WSL Sessions with Linux paths, native commands, and durable distro choice', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.spyOn(wslUtils, 'validateWSLAvailable').mockResolvedValue(null);
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'WSL planning', agent: 'cursor', runtime: 'wsl', wslDistribution: 'Ubuntu' });
+    const restarted = new OrchestrationSessionManager(fixture.configManager, fixture.sessionManager,
+      fixture.skillCacheManager, fixture.paneChatManager, undefined, fixture.store);
+    const reopened = await restarted.getView({ sessionId: created.session.id });
+    expect(reopened.agent).toBe('cursor');
+    expect(reopened.session).toMatchObject({ runtime: 'wsl', wslDistribution: 'Ubuntu' });
+    expect(reopened.panel.state.customState).toMatchObject({
+      orchestrationWorkspace: wslUtils.windowsPathToWSLMount(sessionWorkspacePath(created.session.id)),
+      initialCommand: RUNPANE_CONTRACT.agentTemplates.cursor.command,
+    });
+    const workspace = sessionWorkspacePath(created.session.id);
+    expect(fs.readFileSync(path.join(workspace, 'runtime-context.md'), 'utf8')).toContain('powershell.exe');
+    expect(fs.readFileSync(path.join(workspace, 'AGENTS.md'), 'utf8')).toContain('WSL RunPane Routing');
+    await expect(fixture.manager.create({ name: 'Missing distro', runtime: 'wsl' })).rejects.toThrow('distribution');
+  });
   it('points migrated Pane Chat file tools at its private Session directory', async () => {
     const fixture = createFixture();
     const view = await fixture.manager.getView({ sessionId: LEGACY_ORCHESTRATION_SESSION_ID });
@@ -742,7 +762,11 @@ describe('OrchestrationSessionManager', () => {
     expect(panelManager.getPanel(firstRecord.panelIds.claude)).toBeDefined();
   });
 
-  it('rolls back metadata when hidden owner provisioning fails before publication', async () => {
+  it.each(['windows', 'wsl'] as const)('rolls back %s metadata when hidden owner provisioning fails before publication', async runtime => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.spyOn(wslUtils, 'validateWSLAvailable').mockResolvedValue(null);
+    const input: OrchestrationSessionCreateInput = { name: 'Recoverable Session', runtime };
+    if (runtime === 'wsl') input.wslDistribution = 'Ubuntu';
     const fixture = createFixture();
     await fixture.manager.initialize();
     const changedEvents: Array<{ sessionId: string; kind: string }> = [];
@@ -751,13 +775,13 @@ describe('OrchestrationSessionManager', () => {
       throw new Error('hidden owner provisioning failed');
     });
 
-    await expect(fixture.manager.create({ name: 'Recoverable Session' })).rejects.toThrow('hidden owner provisioning failed');
+    await expect(fixture.manager.create(input)).rejects.toThrow('hidden owner provisioning failed');
     const afterFailure = await fixture.manager.list();
     expect(afterFailure.sessions.some(session => session.name === 'Recoverable Session')).toBe(false);
     expect(afterFailure.selectedSessionId).toBe(LEGACY_ORCHESTRATION_SESSION_ID);
     expect(changedEvents).toEqual([]);
 
-    const retried = await fixture.manager.create({ name: 'Recoverable Session' });
+    const retried = await fixture.manager.create(input);
     expect(retried.session.name).toBe('Recoverable Session');
   });
 

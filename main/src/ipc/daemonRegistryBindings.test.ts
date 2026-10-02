@@ -17,6 +17,7 @@ import { registerSessionHandlers } from './session';
 import { registerVoiceHandlers } from './voice';
 import { registerUsageHandlers } from './usage';
 import type { AppServices } from './types';
+import { isDaemonOwnedChannel } from '../../../shared/types/daemon';
 
 const USAGE_CHANNELS = [
   'usage:get-report',
@@ -64,6 +65,7 @@ const PANE_CHAT_CHANNELS = [
   'pane-chat:set-agent',
 ] as const;
 const ORCHESTRATION_SESSION_CHANNELS = [
+  'orchestration-sessions:runtimes',
   'orchestration-sessions:promote',
   'orchestration-sessions:list',
   'orchestration-sessions:select',
@@ -401,6 +403,8 @@ describe('daemon registry IPC bindings', () => {
   });
 
   it('binds daemon-owned orchestration Session channels through the shared registry', () => {
+    // Discovery must run on the same host that launches the Session agent.
+    expect(isDaemonOwnedChannel('orchestration-sessions:runtimes')).toBe(true);
     const registry = new PaneCommandRegistry();
     const ipcMain = createIpcMainStub();
 
