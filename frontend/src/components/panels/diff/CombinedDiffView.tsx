@@ -207,7 +207,7 @@ const CombinedDiffView = memo(forwardRef<CombinedDiffViewHandle, CombinedDiffVie
         </div>
         <div className="flex flex-shrink-0 items-center gap-1">
           {scope.kind !== 'session' && (
-            <button type="button" onClick={() => setScope({ kind: 'session' })} className="rounded px-1.5 py-0.5 text-[11px] font-medium text-text-tertiary hover:bg-surface-hover hover:text-text-primary">
+            <button type="button" onClick={() => { pendingFile.current = null; setScope({ kind: 'session' }); }} className="rounded px-1.5 py-0.5 text-[11px] font-medium text-text-tertiary hover:bg-surface-hover hover:text-text-primary">
               All changes
             </button>
           )}

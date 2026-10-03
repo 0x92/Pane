@@ -20,15 +20,3 @@ export function writeCommitFileCache(sessionId: string, commitRef: string, value
   if (commitRef === WORKING_TREE_REF) return;
   cache.set(commitFileCacheKey(sessionId, commitRef), value);
 }
-
-/** Drop cached listings after a git operation rewrites history. */
-export function invalidateCommitFileCache(sessionId?: string): void {
-  if (!sessionId) {
-    cache.clear();
-    return;
-  }
-  const prefix = `${sessionId}:`;
-  for (const key of cache.keys()) {
-    if (key.startsWith(prefix)) cache.delete(key);
-  }
-}
