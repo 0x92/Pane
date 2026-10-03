@@ -210,6 +210,7 @@ test('Create Pull Request validates the selected target branch', async ({ page }
     initialPanels: panels,
     activeProjectId: project.id,
     pullRequestDraft,
+    pullRequestDiff: { baseRef: 'origin/main', diff: localCombinedDiff.diff, truncated: false },
     pullRequestBranches: { all: ['main', 'release'], local: ['main'] },
     pullRequestChanges: {
       baseRef: 'origin/main',
@@ -221,16 +222,20 @@ test('Create Pull Request validates the selected target branch', async ({ page }
     },
   });
   await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.getByRole('button', { name: /^Expand repository Review fixture$/ }).click();
+  await page.getByRole('button', { name: /^Expand project Review fixture$/ }).click();
   await page.getByRole('button', { name: 'Review changes before PR', exact: true }).click();
 
-  await page.getByRole('button', { name: 'Create Pull Request', exact: true }).evaluate(button => button.click());
+  await page.getByRole('tab', { name: 'Details', exact: true }).click();
+  await page.getByRole('button', { name: 'Create Pull Request', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Create pull request' });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('input').first()).toHaveValue('Open pull requests from Pane');
   await expect(dialog.locator('select')).toHaveValue('dcouple/Pane');
   await expect(dialog.locator('option').first()).toHaveText('dcouple/Pane (upstream)');
   await expect(dialog.getByText('1 file', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('cell', { name: '+ export const reviewAvailable = true;', exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Show diff', exact: true }).click();
+  await expect(dialog.getByRole('cell', { name: '+ export const reviewAvailable = true;', exact: true })).toBeVisible();
   await capture(page, testInfo, 'pr-387-01-create-dialog.png');
 
   await dialog.getByRole('combobox', { name: 'Base branch' }).fill('missing-branch');
@@ -255,9 +260,9 @@ test('Review displays and expands current pull request status', async ({ page },
     pullRequestStatus,
   });
   await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.getByRole('button', { name: /^Expand repository Review fixture$/ }).click();
+  await page.getByRole('button', { name: /^Expand project Review fixture$/ }).click();
   await page.getByRole('button', { name: pullRequestStatus.title, exact: true }).click();
-  await page.getByRole('tab', { name: 'Review', exact: true }).click();
+  await page.getByRole('tab', { name: 'Changes', exact: true }).click();
 
   const status = page.getByRole('button', { name: /Open #387 Open pull requests from Pane/ });
   await expect(status).toBeVisible();

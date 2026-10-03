@@ -39,11 +39,6 @@ function stubRunner(
   };
   // SAFETY: These tests exercise only the CommandRunner members supplied by this fixture.
   return {
-    exec: vi.fn((command: string) => {
-      const output = pick(command);
-      if (output instanceof Error) throw output;
-      return output;
-    }),
     execAsync: vi.fn(async (command: string) => {
       const output = pick(command);
       if (output instanceof Error) throw output;

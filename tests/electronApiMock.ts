@@ -415,6 +415,8 @@ export async function installElectronApiMock(page: Page, options: ElectronApiMoc
       calls.push({ channel, args });
       if (calls.length > 500) calls.shift();
       invokeCalls.set(channel, calls);
+      if (channel === 'panels:agent-statuses') return success([]);
+      if (channel === 'file:list') return Promise.resolve({ success: true, files: [] });
       if (channel === 'terminal:ack') terminalAckedBytes += Number(args[1]);
 
       const key = args[0] === undefined ? undefined : String(args[0]);

@@ -564,17 +564,17 @@ export class PullRequestManager {
     const blockers: string[] = [];
     let baseBranches: BaseBranchOptions = { all: [], local: [] };
     // `origin/main` is a tracking ref; a pull request needs the branch name.
-    const base = normalizeBaseBranch(baseBranch, this.remotes(worktreePath, commandRunner));
+    const base = normalizeBaseBranch(baseBranch, (await this.remotes(worktreePath, commandRunner)));
 
-    const branch = this.currentBranch(worktreePath, commandRunner);
+    const branch = (await this.currentBranch(worktreePath, commandRunner));
     if (!branch) blockers.push('This worktree has a detached HEAD, so there is no branch to propose.');
 
-    const commits = branch ? this.commitsAhead(worktreePath, baseBranch, commandRunner) : [];
+    const commits = branch ? (await this.commitsAhead(worktreePath, baseBranch, commandRunner)) : [];
     if (branch && commits.length === 0) {
       blockers.push(`No commits on ${branch} that ${baseBranch} does not already have.`);
     }
 
-    const hasUncommittedChanges = this.hasUncommittedChanges(worktreePath, commandRunner);
+    const hasUncommittedChanges = (await this.hasUncommittedChanges(worktreePath, commandRunner));
 
     let targets: PullRequestTarget[] = [];
     let defaultTarget = '';
@@ -587,7 +587,7 @@ export class PullRequestManager {
     } else if (!await this.isGhAuthenticated(gh, worktreePath, commandRunner)) {
       blockers.push('The GitHub CLI is installed but not signed in. Run `gh auth login` once.');
     } else {
-      const view = await this.repoView(projectPath, commandRunner, this.originRepo(worktreePath, commandRunner));
+      const view = await this.repoView(projectPath, commandRunner, (await this.originRepo(worktreePath, commandRunner)));
       if (view) {
         const resolved = resolveTargets(view);
         targets = resolved.targets;
@@ -633,10 +633,10 @@ export class PullRequestManager {
     projectPath: string,
     commandRunner: CommandRunner
   ): Promise<CreatePullRequestResult> {
-    const branch = this.currentBranch(worktreePath, commandRunner);
+    const branch = (await this.currentBranch(worktreePath, commandRunner));
     if (!branch) throw new Error('This worktree has a detached HEAD, so there is no branch to push.');
 
-    const remote = resolvePushRemote(this.remotes(worktreePath, commandRunner));
+    const remote = resolvePushRemote((await this.remotes(worktreePath, commandRunner)));
     if (!remote) throw new Error('This repository has no remote to push to.');
 
     const gh = await this.resolveGh(worktreePath, commandRunner);
@@ -649,7 +649,7 @@ export class PullRequestManager {
       { timeout: PUSH_TIMEOUT_MS }
     );
 
-    const forkOwner = this.originRepo(worktreePath, commandRunner)?.split('/')[0] ?? null;
+    const forkOwner = (await this.originRepo(worktreePath, commandRunner))?.split('/')[0] ?? null;
 
     // The body goes through a file: it is markdown with newlines, quotes and
     // backticks, and no amount of shell escaping makes that pleasant. Where the
@@ -755,17 +755,17 @@ export class PullRequestManager {
 
   // --- git and gh plumbing ---
 
-  private currentBranch(worktreePath: string, commandRunner: CommandRunner): string | null {
+  private async currentBranch(worktreePath: string, commandRunner: CommandRunner): Promise<string | null> {
     try {
-      return commandRunner.exec('git branch --show-current', worktreePath, { silent: true }).trim() || null;
+      return (await commandRunner.execAsync('git branch --show-current', worktreePath, { silent: true })).stdout.trim() || null;
     } catch {
       return null;
     }
   }
 
-  private remotes(worktreePath: string, commandRunner: CommandRunner): string[] {
+  private async remotes(worktreePath: string, commandRunner: CommandRunner): Promise<string[]> {
     try {
-      return commandRunner.exec('git remote', worktreePath, { silent: true })
+      return (await commandRunner.execAsync('git remote', worktreePath, { silent: true })).stdout
         .split('\n')
         .map(line => line.trim())
         .filter(Boolean);
@@ -774,28 +774,24 @@ export class PullRequestManager {
     }
   }
 
-  private commitsAhead(
+  private async commitsAhead(
     worktreePath: string,
     baseBranch: string,
     commandRunner: CommandRunner
-  ): CommitSummary[] {
+  ): Promise<CommitSummary[]> {
     // Oldest first: the first commit is the one the title comes from.
     const range = `${quoteArg(commandRunner, baseBranch)}..HEAD`;
     try {
-      const raw = commandRunner.exec(
-        `git log ${range} --reverse --format=%s%x00%b%x01`,
-        worktreePath,
-        { silent: true }
-      );
+      const raw = (await commandRunner.execAsync(`git log ${range} --reverse --format=%s%x00%b%x01`, worktreePath, { silent: true })).stdout;
       return parseCommitSummaries(raw);
     } catch {
       return [];
     }
   }
 
-  private hasUncommittedChanges(worktreePath: string, commandRunner: CommandRunner): boolean {
+  private async hasUncommittedChanges(worktreePath: string, commandRunner: CommandRunner): Promise<boolean> {
     try {
-      return commandRunner.exec('git status --porcelain', worktreePath, { silent: true }).trim().length > 0;
+      return (await commandRunner.execAsync('git status --porcelain', worktreePath, { silent: true })).stdout.trim().length > 0;
     } catch {
       return false;
     }
@@ -838,7 +834,7 @@ export class PullRequestManager {
   ): Promise<BaseBranchOptions> {
     // Local knowledge first: it needs no network, and a branch pushed a minute
     // ago is in the tracking refs before anyone asks GitHub about it.
-    const local = this.trackingBranchesFor(repo, projectPath, commandRunner);
+    const local = (await this.trackingBranchesFor(repo, projectPath, commandRunner));
 
     const gh = await this.resolveGh(projectPath, commandRunner);
     if (!gh) {
@@ -874,21 +870,17 @@ export class PullRequestManager {
     // fetched: a full fetch of a busy upstream leaves hundreds of tracking refs
     // behind, which is exactly the noise this list exists to avoid. The
     // default branch joins them because nearly every pull request targets it.
-    const own = new Set(this.localHeads(projectPath, commandRunner));
+    const own = new Set((await this.localHeads(projectPath, commandRunner)));
     if (defaultBranch) own.add(defaultBranch);
 
     return { all, local: all.filter(name => own.has(name)) };
   }
 
   /** Branches that exist as heads in this clone — yours, across all worktrees. */
-  private localHeads(projectPath: string, commandRunner: CommandRunner): string[] {
+  private async localHeads(projectPath: string, commandRunner: CommandRunner): Promise<string[]> {
     try {
       return parseTrackingBranches(
-        commandRunner.exec(
-          'git for-each-ref --format=%(refname:lstrip=2) refs/heads',
-          projectPath,
-          { silent: true }
-        )
+        (await commandRunner.execAsync('git for-each-ref --format=%(refname:lstrip=2) refs/heads', projectPath, { silent: true })).stdout
       );
     } catch {
       return [];
@@ -900,31 +892,16 @@ export class PullRequestManager {
    * repository. A fork and its upstream both have remotes here, and only the
    * matching one's branches are valid bases for a pull request into it.
    */
-  private trackingBranchesFor(
-    repo: string,
-    projectPath: string,
-    commandRunner: CommandRunner
-  ): string[] {
-    const remote = this.remotes(projectPath, commandRunner).find(name => {
+  private async trackingBranchesFor(repo: string, projectPath: string, commandRunner: CommandRunner): Promise<string[]> {
+    for (const name of await this.remotes(projectPath, commandRunner)) {
       try {
-        const url = commandRunner.exec(`git remote get-url ${quoteArg(commandRunner, name)}`, projectPath, { silent: true });
-        return parseGitHubRemote(url)?.toLowerCase() === repo.toLowerCase();
-      } catch {
-        return false;
-      }
-    });
-    if (!remote) return [];
-
-    try {
-      const raw = commandRunner.exec(
-        `git for-each-ref --format=%(refname:lstrip=3) ${quoteArg(commandRunner, `refs/remotes/${remote}`)}`,
-        projectPath,
-        { silent: true }
-      );
-      return parseTrackingBranches(raw);
-    } catch {
-      return [];
+        const { stdout: url } = await commandRunner.execAsync(`git remote get-url ${quoteArg(commandRunner, name)}`, projectPath, { silent: true });
+        if (parseGitHubRemote(url)?.toLowerCase() !== repo.toLowerCase()) continue;
+        const { stdout } = await commandRunner.execAsync(`git for-each-ref --format=%(refname:lstrip=3) refs/remotes/${name}`, projectPath, { silent: true });
+        return parseTrackingBranches(stdout);
+      } catch { /* Try the next remote. */ }
     }
+    return [];
   }
 
   /**
@@ -938,7 +915,7 @@ export class PullRequestManager {
     baseBranch: string,
     commandRunner: CommandRunner
   ): Promise<PullRequestChanges> {
-    const baseRef = this.resolveComparisonRef(worktreePath, baseBranch, commandRunner);
+    const baseRef = (await this.resolveComparisonRef(worktreePath, baseBranch, commandRunner));
     const empty: PullRequestChanges = {
       baseRef, files: [], totalFiles: 0, truncated: false, additions: 0, deletions: 0,
     };
@@ -946,8 +923,8 @@ export class PullRequestManager {
 
     try {
       const range = `${quoteArg(commandRunner, baseRef)}...HEAD`;
-      const numstatRaw = commandRunner.exec(`git diff --numstat -M -z ${range}`, worktreePath, { silent: true });
-      const nameStatusRaw = commandRunner.exec(`git diff --name-status -M -z ${range}`, worktreePath, { silent: true });
+      const numstatRaw = (await commandRunner.execAsync(`git diff --numstat -M -z ${range}`, worktreePath, { silent: true })).stdout;
+      const nameStatusRaw = (await commandRunner.execAsync(`git diff --name-status -M -z ${range}`, worktreePath, { silent: true })).stdout;
 
       const all = mergeFileChanges(parseNumstatZ(numstatRaw), parseNameStatusZ(nameStatusRaw));
       const files = all.slice(0, MAX_FILES_PER_COMMIT);
@@ -975,14 +952,10 @@ export class PullRequestManager {
     baseBranch: string,
     commandRunner: CommandRunner
   ): Promise<PullRequestDiff> {
-    const baseRef = this.resolveComparisonRef(worktreePath, baseBranch, commandRunner);
+    const baseRef = (await this.resolveComparisonRef(worktreePath, baseBranch, commandRunner));
     if (!baseRef) return { baseRef: baseBranch, diff: '', truncated: false };
 
-    const raw = commandRunner.exec(
-      `git diff -M ${quoteArg(commandRunner, baseRef)}...HEAD`,
-      worktreePath,
-      { silent: true, maxBuffer: MAX_DIFF_BYTES * 2 }
-    );
+    const raw = (await commandRunner.execAsync(`git diff -M ${quoteArg(commandRunner, baseRef)}...HEAD`, worktreePath, { silent: true, maxBuffer: MAX_DIFF_BYTES * 2 })).stdout;
 
     const truncated = raw.length > MAX_DIFF_BYTES;
     return { baseRef, diff: truncated ? raw.slice(0, MAX_DIFF_BYTES) : raw, truncated };
@@ -995,11 +968,11 @@ export class PullRequestManager {
    * only as a tracking ref — a fresh worktree often has no local `main` — so the
    * remote-tracking form is tried first, and only a ref that resolves is used.
    */
-  private resolveComparisonRef(
+  private async resolveComparisonRef(
     worktreePath: string,
     baseBranch: string,
     commandRunner: CommandRunner
-  ): string {
+  ): Promise<string> {
     const base = baseBranch.trim();
     if (!base) return '';
 
@@ -1009,11 +982,7 @@ export class PullRequestManager {
 
     for (const candidate of candidates) {
       try {
-        commandRunner.exec(
-          `git rev-parse --verify --quiet ${quoteArg(commandRunner, `${candidate}^{commit}`)}`,
-          worktreePath,
-          { silent: true }
-        );
+        await commandRunner.execAsync(`git rev-parse --verify --quiet ${quoteArg(commandRunner, `${candidate}^{commit}`)}`, worktreePath, { silent: true });
         return candidate;
       } catch {
         // Not a ref here — try the next spelling.
@@ -1023,11 +992,11 @@ export class PullRequestManager {
   }
 
   /** The fork this clone pushes to, as `owner/repo`. */
-  private originRepo(worktreePath: string, commandRunner: CommandRunner): string | null {
-    const remote = resolvePushRemote(this.remotes(worktreePath, commandRunner));
+  private async originRepo(worktreePath: string, commandRunner: CommandRunner): Promise<string | null> {
+    const remote = resolvePushRemote((await this.remotes(worktreePath, commandRunner)));
     if (!remote) return null;
     try {
-      const url = commandRunner.exec(`git remote get-url ${quoteArg(commandRunner, remote)}`, worktreePath, { silent: true });
+      const url = (await commandRunner.execAsync(`git remote get-url ${quoteArg(commandRunner, remote)}`, worktreePath, { silent: true })).stdout;
       return parseGitHubRemote(url);
     } catch {
       return null;

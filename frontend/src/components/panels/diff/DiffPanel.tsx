@@ -188,7 +188,7 @@ const DiffPanel: React.FC<DiffPanelProps> = ({
           )}
           {/* Did the agent break the build? Asked here because this is where it comes up. */}
           {sessionId && (
-            <PullRequestChecks sessionId={sessionId} prUrl={session?.gitStatus?.prUrl} />
+            <PullRequestChecks isVisible={isActive} sessionId={sessionId} prUrl={session?.gitStatus?.prUrl} />
           )}
         </div>
 
@@ -213,7 +213,7 @@ const DiffPanel: React.FC<DiffPanelProps> = ({
         one-off action in the git menu; watching it is what happens here.
       */}
       {sessionId && (
-        <PullRequestStatusBar sessionId={sessionId} prUrl={session?.gitStatus?.prUrl} />
+        <PullRequestStatusBar isVisible={isActive} sessionId={sessionId} prUrl={session?.gitStatus?.prUrl} />
       )}
 
       {/* Stale indicator bar */}

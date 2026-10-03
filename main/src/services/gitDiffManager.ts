@@ -1,7 +1,7 @@
 import { parseNumstatZ, parseNameStatusZ, mergeFileChanges, splitNulSeparated } from './gitDiffParsers';
 import { createReadStream } from 'fs';
 import { linuxToUNCPath, posixJoin, type WSLContext } from '../utils/wslUtils';
-import { MAX_FILES_PER_COMMIT, WORKING_TREE_REF, type GitCommitFileChange, type GitCommitFilesResult } from '../../../shared/types/git';
+import { MAX_FILES_PER_COMMIT, WORKING_TREE_REF, type GitCommitFilesResult } from '../../../shared/types/git';
 import type { Logger } from '../utils/logger';
 import type { AnalyticsManager } from './analyticsManager';
 import { CommandRunner } from '../utils/commandRunner';

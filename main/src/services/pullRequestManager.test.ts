@@ -417,11 +417,6 @@ function stubRunner(responses: Array<[match: string, output: string | Error]>): 
   };
   // SAFETY: The service tests exercise only the CommandRunner members supplied by this fixture.
   return {
-    exec: vi.fn((command: string) => {
-      const output = pick(command);
-      if (output instanceof Error) throw output;
-      return output;
-    }),
     execAsync: vi.fn(async (command: string) => {
       const output = pick(command);
       if (output instanceof Error) throw output;
@@ -807,7 +802,7 @@ describe('PullRequestManager.getDiff', () => {
 
     expect(result).toMatchObject({ baseRef: 'origin/main', truncated: false });
     expect(result.diff).toContain('diff --git');
-    const commands = vi.mocked(runner.exec).mock.calls.map(call => call[0]);
+    const commands = vi.mocked(runner.execAsync).mock.calls.map(call => call[0]);
     expect(commands.some(command => command.includes('...HEAD'))).toBe(true);
   });
 

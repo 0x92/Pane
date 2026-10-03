@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { GitDiffManager } from './gitDiffManager';
+import { GitDiffManager, parseUntrackedPathsZ } from './gitDiffManager';
 import { parseNumstatZ, parseNameStatusZ, mergeFileChanges } from './gitDiffParsers';
 import { WORKING_TREE_REF } from '../../../shared/types/git';
 import { CommandRunner } from '../utils/commandRunner';

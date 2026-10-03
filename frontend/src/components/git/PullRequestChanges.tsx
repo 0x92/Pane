@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, FileDiff, Loader2 } from 'lucide-react';
 import { API } from '../../utils/api';
 import { parseUnifiedDiffToFiles } from '../../utils/parseUnifiedDiff';
-import DiffViewer from '../panels/diff/DiffViewer';
+import { DiffModeEnum, DiffView } from '@git-diff-view/react';
+import { isLightTheme, useTheme } from '../../contexts/ThemeContext';
+import '@git-diff-view/react/styles/diff-view.css';
 import { FileChangeList } from './FileChangeList';
 import type { PullRequestChanges as Changes } from '../../../../shared/types/pullRequest';
 
@@ -23,6 +25,7 @@ export interface PullRequestChangesProps {
  * diff is opened.
  */
 export function PullRequestChanges({ sessionId, baseBranch }: PullRequestChangesProps) {
+  const { theme } = useTheme();
   const [changes, setChanges] = useState<Changes | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,9 +63,10 @@ export function PullRequestChanges({ sessionId, baseBranch }: PullRequestChanges
   }, [sessionId, baseBranch]);
 
   useEffect(() => {
-    if (!showDiff || diff) return;
+    if (!showDiff) return;
 
     let cancelled = false;
+    setDiff(null);
     setDiffLoading(true);
     setDiffError(null);
 
@@ -80,7 +84,7 @@ export function PullRequestChanges({ sessionId, baseBranch }: PullRequestChanges
       .finally(() => { if (!cancelled) setDiffLoading(false); });
 
     return () => { cancelled = true; };
-  }, [showDiff, diff, sessionId, baseBranch]);
+  }, [showDiff, sessionId, baseBranch]);
 
   const diffFiles = useMemo(() => (diff ? parseUnifiedDiffToFiles(diff.text) : []), [diff]);
 
@@ -170,7 +174,12 @@ export function PullRequestChanges({ sessionId, baseBranch }: PullRequestChanges
                 </p>
               )}
               <div className="max-h-80 overflow-auto">
-                <DiffViewer files={diffFiles} />
+                <div className="space-y-3">{diffFiles.map(file => (
+                  <section key={file.path} aria-label={file.path}>
+                    <h4 className="px-2 py-1 text-xs text-text-secondary">{file.path}</h4>
+                    {file.isBinary ? <p className="p-2 text-xs text-text-tertiary">Binary file</p> : <DiffView data={{ oldFile: { fileName: file.oldPath }, newFile: { fileName: file.path }, hunks: [file.rawDiff] }} diffViewMode={DiffModeEnum.Unified} diffViewTheme={isLightTheme(theme) ? 'light' : 'dark'} diffViewWrap={true} diffViewFontSize={13} />}
+                  </section>
+                ))}</div>
               </div>
             </>
           )}

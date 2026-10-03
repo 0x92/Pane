@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -45,6 +45,7 @@ export interface PullRequestStatusBarProps {
   sessionId: string;
   /** The session's pull request URL; nothing renders without one. */
   prUrl?: string;
+  isVisible?: boolean;
 }
 
 /**
@@ -55,7 +56,7 @@ export interface PullRequestStatusBarProps {
  * merges, how much it grew. That belongs where the changes are reviewed rather
  * than behind a browser tab.
  */
-export function PullRequestStatusBar({ sessionId, prUrl }: PullRequestStatusBarProps) {
+export function PullRequestStatusBar({ sessionId, prUrl, isVisible = true }: PullRequestStatusBarProps) {
   const target = parsePullRequestUrl(prUrl);
   const repo = target?.repo;
   const number = target?.number;
@@ -64,29 +65,34 @@ export function PullRequestStatusBar({ sessionId, prUrl }: PullRequestStatusBarP
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
+  const requestId = useRef(0);
+
   const load = useCallback(async () => {
-    if (!repo || !number) return;
+    if (!isVisible || !repo || !number) return;
+    const owned = ++requestId.current;
     setLoading(true);
     try {
       const response = await API.pullRequests.getStatus(sessionId, repo, number);
-      if (response.success && response.data) setStatus(response.data);
+      if (owned === requestId.current && response.success && response.data) setStatus(response.data);
     } catch {
       // Leave the previous state on screen: a failed refresh is not news.
     } finally {
-      setLoading(false);
+      if (owned === requestId.current) setLoading(false);
     }
-  }, [sessionId, repo, number]);
+  }, [sessionId, repo, number, isVisible]);
 
   useEffect(() => {
+    requestId.current += 1;
     setStatus(null);
-    if (!repo || !number) return;
+    setLoading(false);
+    if (!isVisible || !repo || !number) return;
 
     void load();
     const timer = setInterval(() => { void load(); }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [load, repo, number]);
+    return () => { requestId.current += 1; clearInterval(timer); };
+  }, [load, repo, number, isVisible]);
 
-  if (!repo || !number) return null;
+  if (!isVisible || !repo || !number) return null;
 
   if (!status) {
     return loading ? (
