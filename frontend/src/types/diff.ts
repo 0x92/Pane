@@ -31,25 +31,6 @@ export interface FileDiff {
   rawDiff: string;
 }
 
-export interface DiffViewerProps {
-  files: FileDiff[];
-  className?: string;
-  sessionId?: string;
-  onOpenInEditor?: (filePath: string) => void;
-}
-
-export interface ExecutionListProps {
-  sessionId: string;
-  executions: ExecutionDiff[];
-  selectedExecutions: number[];
-  onSelectionChange: (selectedIds: number[]) => void;
-  onCommit?: () => void;
-  onRevert?: (commitHash: string) => void;
-  onRestore?: () => void;
-  historyLimitReached?: boolean;
-  historyLimit?: number;
-}
-
 export interface CombinedDiffViewProps {
   sessionId: string;
   isGitOperationRunning?: boolean;

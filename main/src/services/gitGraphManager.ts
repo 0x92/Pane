@@ -269,7 +269,7 @@ export class GitGraphManager {
     }
   }
 
-  private async getHeadHash(projectPath: string, commandRunner: GitGraphCommandRunner): string | null {
+  private async getHeadHash(projectPath: string, commandRunner: GitGraphCommandRunner): Promise<string | null> {
     try {
       return (await commandRunner.execAsync('git rev-parse HEAD', projectPath)).stdout.trim() || null;
     } catch {
