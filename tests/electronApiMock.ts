@@ -47,6 +47,7 @@ type ElectronApiMockOptions = {
     repositoriesSectionExpanded: boolean;
   }>;
   initialExecutions?: JsonObject[];
+  initialGitGraph?: JsonObject;
   diffManifests?: Record<string, DiffManifest>;
   fileDiffs?: Record<string, FileDiffResult>;
   diffManifestDelayMs?: Record<string, number>;
@@ -833,6 +834,7 @@ export async function installElectronApiMock(page: Page, options: ElectronApiMoc
         getArchivedWithProjects: () => success([]),
         getResumable: () => success([]),
         getExecutions: () => success(clone(mockOptions.initialExecutions ?? [])),
+        getGitGraph: () => success(clone(mockOptions.initialGitGraph ?? { entries: [], currentBranch: 'main' })),
         getGitCommands: () => success(clone(mockOptions.gitCommands ?? null)),
         getDiffManifest: async (sessionId: string, scope: DiffScope) => {
           const key = scopeMockKey(scope);

@@ -30,7 +30,6 @@ interface GitHistoryGraphProps {
   onCommitClick?: (hash: string) => void;
   /**
    * Show a per-commit toggle that lists the files the commit touched.
-   * Only meaningful in the `wide` layout — the compact sidebar has no room.
    */
   expandable?: boolean;
   /** Called when a file inside an expanded commit is activated. */
@@ -201,8 +200,11 @@ const CommitRow = memo(function CommitRow({
       </Row>
   );
 
-  if (layout === 'wide') {
+  if (layout === 'wide' || expandable) {
     if (!expandable) return row;
+    const historyRow = layout === 'wide' ? row : (
+      <Tooltip content={<CommitTooltipContent entry={entry} />} side="left" interactive>{row}</Tooltip>
+    );
 
     const filesPanelId = `git-history-files-${entry.hash}`;
     return (
@@ -220,7 +222,7 @@ const CommitRow = memo(function CommitRow({
               ? <ChevronDown className="h-3 w-3" aria-hidden="true" />
               : <ChevronRight className="h-3 w-3" aria-hidden="true" />}
           </button>
-          <div className="min-w-0 flex-1">{row}</div>
+          <div className="min-w-0 flex-1">{historyRow}</div>
         </div>
         {isExpanded && (
           <div id={filesPanelId} className="ml-4 border-l border-border-secondary">

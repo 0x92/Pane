@@ -202,13 +202,24 @@ describe('working-directory capture stays bounded and off the main thread', () =
     expect(result.stats.additions).toBe(fileCount * 2);
   }, 60_000);
 
-  it('keeps the synchronous path free of anything that scales with file count', async () => {
+  it('awaits head resolution before starting the file-count work', async () => {
     const runner = realRunner();
-    await new GitDiffManager().captureWorkingDirectoryDiff(repo, runner);
-
-    const syncCalls = vi.mocked(runner.exec).mock.calls;
-    expect(syncCalls.every(([command]) => command.includes('rev-parse'))).toBe(true);
+    const execute = vi.mocked(runner.execAsync).getMockImplementation();
+    if (!execute) throw new Error('Missing real runner fixture');
+    let finishHead: ((value: { stdout: string; stderr: string }) => void) | undefined;
+    const head = new Promise<{ stdout: string; stderr: string }>(resolve => { finishHead = resolve; });
+    vi.mocked(runner.execAsync).mockImplementation(async (command, cwd, options) => (
+      command.includes('rev-parse') ? head : execute(command, cwd, options)
+    ));
+    const pending = new GitDiffManager().captureWorkingDirectoryDiff(repo, runner);
+    expect(vi.mocked(runner.execAsync).mock.calls.some(([command]) => command.includes('ls-files'))).toBe(false);
+    if (!finishHead) throw new Error('Missing head completion');
+    finishHead({ stdout: 'a'.repeat(40), stderr: '' });
+    const result = await pending;
+    expect(result.beforeHash).toBe('a'.repeat(40));
+    expect(vi.mocked(runner.execAsync).mock.calls.filter(([command]) => command.includes('ls-files'))).toHaveLength(1);
   }, 60_000);
+
 });
 
 describe('splitNulSeparated', () => {

@@ -19,20 +19,6 @@ export interface ExecutionDiff {
   history_limit_reached?: boolean;
 }
 
-interface GitDiffStats {
-  additions: number;
-  deletions: number;
-  filesChanged: number;
-}
-
-export interface GitDiffResult {
-  diff: string;
-  stats: GitDiffStats;
-  changedFiles: string[];
-  beforeHash?: string;
-  afterHash?: string;
-}
-
 export interface FileDiff {
   path: string;
   oldPath: string;

@@ -14,16 +14,17 @@ const MERGE_HASH = 'b'.repeat(40);
 const LARGE_COMMIT_HASH = 'c'.repeat(40);
 
 /**
- * Builds a CommandRunner stub whose `exec` dispatches on a substring of the
+ * Builds a CommandRunner stub whose awaited `execFile` dispatches on a substring of the
  * command, so each test only has to describe the outputs it cares about.
  */
 function stubRunner(responses: Array<[match: string, output: string]>): CommandRunner {
   const runner = new CommandRunner({ path: '/repo' });
-  vi.spyOn(runner, 'exec').mockImplementation((command: string) => {
+  vi.spyOn(runner, 'execFile').mockImplementation(async (executable, args) => {
+    const command = [executable, ...args].join(' ');
     for (const [match, output] of responses) {
-      if (command.includes(match)) return output;
+      if (command.includes(match)) return { stdout: output, stderr: '' };
     }
-    return '';
+    return { stdout: '', stderr: '' };
   });
   return runner;
 }
@@ -123,15 +124,15 @@ describe('mergeFileChanges', () => {
   });
 });
 
-describe('GitDiffManager.getCommitFileChanges', () => {
-  it('lists files for a normal commit', () => {
+describe('GitDiffManager.getCommitFileChanges', async () => {
+  it('lists files for a normal commit', async () => {
     const runner = stubRunner([
       ['rev-list', `${COMMIT_HASH} parent1\n`],
       ['--numstat', '10\t2\tsrc/a.ts\0'],
       ['--name-status', 'M\0src/a.ts\0'],
     ]);
 
-    const result = new GitDiffManager().getCommitFileChanges('/repo', COMMIT_HASH, runner);
+    const result = await new GitDiffManager().getCommitFileChanges('/repo', COMMIT_HASH, runner);
 
     expect(result.ref).toBe(COMMIT_HASH);
     expect(result.isMergeAgainstFirstParent).toBe(false);
@@ -140,21 +141,21 @@ describe('GitDiffManager.getCommitFileChanges', () => {
     expect(result.files[0]).toMatchObject({ path: 'src/a.ts', status: 'modified', additions: 10, deletions: 2 });
   });
 
-  it('flags merge commits and diffs them against the first parent', () => {
+  it('flags merge commits and diffs them against the first parent', async () => {
     const runner = stubRunner([
       ['rev-list', `${MERGE_HASH} parent1 parent2\n`],
       ['--numstat', '1\t0\tsrc/a.ts\0'],
       ['--name-status', 'M\0src/a.ts\0'],
     ]);
 
-    const result = new GitDiffManager().getCommitFileChanges('/repo', MERGE_HASH, runner);
+    const result = await new GitDiffManager().getCommitFileChanges('/repo', MERGE_HASH, runner);
 
     expect(result.isMergeAgainstFirstParent).toBe(true);
-    const commands = vi.mocked(runner.exec).mock.calls.map(call => call[0]);
+    const commands = vi.mocked(runner.execFile).mock.calls.map(call => [call[0], ...call[1]].join(' '));
     expect(commands.some(cmd => cmd.includes('--numstat') && cmd.includes('--first-parent'))).toBe(true);
   });
 
-  it('truncates commits above the per-commit cap', () => {
+  it('truncates commits above the per-commit cap', async () => {
     const numstat = Array.from({ length: 600 }, (_, i) => `1\t0\tfile${i}.ts\0`).join('');
     const runner = stubRunner([
       ['rev-list', `${LARGE_COMMIT_HASH} parent1\n`],
@@ -162,21 +163,21 @@ describe('GitDiffManager.getCommitFileChanges', () => {
       ['--name-status', ''],
     ]);
 
-    const result = new GitDiffManager().getCommitFileChanges('/repo', LARGE_COMMIT_HASH, runner);
+    const result = await new GitDiffManager().getCommitFileChanges('/repo', LARGE_COMMIT_HASH, runner);
 
     expect(result.totalFiles).toBe(600);
     expect(result.files).toHaveLength(500);
     expect(result.truncated).toBe(true);
   });
 
-  it('includes untracked files without counts for the working tree', () => {
+  it('includes untracked files without counts for the working tree', async () => {
     const runner = stubRunner([
       ['git diff --numstat', '3\t1\ttracked.ts\0'],
       ['git diff --name-status', 'M\0tracked.ts\0'],
       ['status --porcelain', '?? untracked.ts\0'],
     ]);
 
-    const result = new GitDiffManager().getCommitFileChanges('/repo', WORKING_TREE_REF, runner);
+    const result = await new GitDiffManager().getCommitFileChanges('/repo', WORKING_TREE_REF, runner);
 
     expect(result.ref).toBe(WORKING_TREE_REF);
     expect(result.files).toHaveLength(2);
@@ -188,23 +189,23 @@ describe('GitDiffManager.getCommitFileChanges', () => {
     });
   });
 
-  it('returns an empty result instead of throwing on git failure', () => {
+  it('returns an empty result instead of throwing on git failure', async () => {
     const runner = stubRunner([]);
-    vi.mocked(runner.exec).mockImplementation(() => {
+    vi.mocked(runner.execFile).mockImplementation(async () => {
       throw new Error('fatal: bad revision');
     });
 
-    const result = new GitDiffManager().getCommitFileChanges('/repo', COMMIT_HASH, runner);
+    const result = await new GitDiffManager().getCommitFileChanges('/repo', COMMIT_HASH, runner);
 
     expect(result.files).toEqual([]);
     expect(result.totalFiles).toBe(0);
   });
-  it('rejects a shell-like ref before running a command', () => {
+  it('rejects a shell-like ref before running a command', async () => {
     const runner = stubRunner([]);
 
-    const result = new GitDiffManager().getCommitFileChanges('/repo', 'HEAD; touch /tmp/pwned', runner);
+    const result = await new GitDiffManager().getCommitFileChanges('/repo', 'HEAD; touch /tmp/pwned', runner);
 
     expect(result.files).toEqual([]);
-    expect(runner.exec).not.toHaveBeenCalled();
+    expect(runner.execFile).not.toHaveBeenCalled();
   });
 });

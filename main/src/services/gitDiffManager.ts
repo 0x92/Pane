@@ -160,7 +160,8 @@ async function countNewlines(fsPath: string): Promise<number> {
     let count = 0;
     const stream = createReadStream(fsPath, { highWaterMark: 64 * 1024 });
 
-    stream.on('data', (buffer: Buffer) => {
+    stream.on('data', (chunk: string | Buffer) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       for (let i = 0; i < buffer.length; i++) {
         if (buffer[i] === 0x0a) count++;
       }
