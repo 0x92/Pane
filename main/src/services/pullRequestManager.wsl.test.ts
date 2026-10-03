@@ -230,3 +230,20 @@ describe('PullRequestManager.create on a host project', () => {
     expect(written.startsWith(tmpdir())).toBe(true);
   });
 });
+
+
+describe('PullRequestManager tracking branches on a WSL project', () => {
+  it('quotes the complete remote prefix and retains branch filtering', async () => {
+    const remote = 'origin-' + String.fromCharCode(96) + 'whoami' + String.fromCharCode(96) + '-$(id)';
+    const runner = stubRunner([
+      ['git remote get-url', 'https://github.com/dcouple/Pane.git\n'],
+      ['git remote', remote + '\n'],
+      ['for-each-ref --format=%(refname:lstrip=3)', 'main\nfeature/x\nHEAD\n'],
+      ['--version', new Error('gh unavailable')],
+    ], 'Ubuntu');
+    const result = await new PullRequestManager().listBaseBranches('dcouple/Pane', '/home/dev/p', runner);
+    expect(result.all).toEqual(['main', 'feature/x']);
+    const command = vi.mocked(runner.execAsync).mock.calls.find(([value]) => value.includes('for-each-ref'))?.[0];
+    expect(command).toContain(quoteArg(runner, 'refs/remotes/' + remote));
+  });
+});

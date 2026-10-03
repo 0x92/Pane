@@ -897,7 +897,7 @@ export class PullRequestManager {
       try {
         const { stdout: url } = await commandRunner.execAsync(`git remote get-url ${quoteArg(commandRunner, name)}`, projectPath, { silent: true });
         if (parseGitHubRemote(url)?.toLowerCase() !== repo.toLowerCase()) continue;
-        const { stdout } = await commandRunner.execAsync(`git for-each-ref --format=%(refname:lstrip=3) refs/remotes/${name}`, projectPath, { silent: true });
+        const { stdout } = await commandRunner.execAsync(`git for-each-ref --format=%(refname:lstrip=3) ${quoteArg(commandRunner, `refs/remotes/${name}`)}`, projectPath, { silent: true });
         return parseTrackingBranches(stdout);
       } catch { /* Try the next remote. */ }
     }
