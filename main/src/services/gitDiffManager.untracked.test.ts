@@ -43,7 +43,6 @@ const HOSTILE_NAMES = [
 /** A runner that answers git for real, as a host project would. */
 function realRunner(): CommandRunner {
   const runner = new CommandRunner({ path: '' });
-  vi.spyOn(runner, 'exec').mockImplementation((command, cwd) => run(command, cwd));
   vi.spyOn(runner, 'execAsync').mockImplementation(async (command, cwd) => ({ stdout: run(command, cwd), stderr: '' }));
   return runner;
 }
