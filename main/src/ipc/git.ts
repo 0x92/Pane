@@ -506,7 +506,7 @@ export function registerGitHandlers(
             const session = sessionByPath.get(key);
             const paneWorktree: PaneWorktreeRef = {
               path: worktree.path,
-              branch: worktree.branch,
+              branch: worktree.branch ?? '',
               isMainCheckout: key === projectPathKey,
             };
             if (session) {

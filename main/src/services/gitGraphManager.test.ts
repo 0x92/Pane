@@ -330,7 +330,7 @@ describe('GitGraphManager focus and divergence', () => {
       if (command.includes('symbolic-ref')) return 'main\n';
       return '';
     };
-    const runner = { exec } satisfies GitGraphCommandRunner;
+    const runner = { execAsync: async (command: string) => ({ stdout: exec(command), stderr: '' }) } satisfies GitGraphCommandRunner;
 
     const graph = await new GitGraphManager().getRepoGraph('/repo', {}, runner, noWorktrees);
 
