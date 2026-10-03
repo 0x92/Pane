@@ -1,3 +1,4 @@
+import { registerUsageHandlers } from './usage';
 import { describe, expect, it, vi } from 'vitest';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
