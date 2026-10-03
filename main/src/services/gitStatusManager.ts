@@ -631,7 +631,7 @@ export class GitStatusManager extends EventEmitter {
     }
 
     if (!await this.isGhAvailable(projectPath, commandRunner)) {
-      return { ok: false };
+      return { ok: false, error: new Error('GitHub CLI is unavailable') };
     }
 
     try {
