@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Loader2, User, Clock, Hash, GitFork } from 'lucide-react';
 import { API } from '../../utils/api';
 import { parseUnifiedDiffToFiles } from '../../utils/parseUnifiedDiff';
-import DiffViewer from '../panels/diff/DiffViewer';
+import { GitGraphPatchView } from './GitGraphPatchView';
 import { CopyableField } from '../ui/CopyableField';
 import { Badge } from '../ui/Badge';
 import type { GitGraphNode } from '../../../../shared/types/gitGraph';
@@ -15,7 +15,7 @@ interface GitGraphCommitDetailProps {
 
 /**
  * Right-hand pane of the graph view: metadata for the selected commit plus its
- * full patch, rendered with the same {@link DiffViewer} the diff panel uses so
+ * full patch, rendered with the same diff library the editor diff tabs use so
  * expand/collapse, split view and syntax highlighting behave identically.
  */
 export function GitGraphCommitDetail({ projectId, node }: GitGraphCommitDetailProps) {
@@ -115,7 +115,7 @@ export function GitGraphCommitDetail({ projectId, node }: GitGraphCommitDetailPr
             This commit has no file changes.
           </div>
         ) : (
-          <DiffViewer files={files} className="h-full" />
+          <GitGraphPatchView files={files} />
         )}
       </div>
     </div>

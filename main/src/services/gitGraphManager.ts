@@ -23,7 +23,7 @@ const RECORD_SEP = '\x01';
 const FIELD_SEP = '\x00';
 const LOG_FORMAT = '%x01%H%x00%h%x00%P%x00%s%x00%aI%x00%an%x00%ae';
 
-export type GitGraphCommandRunner = Pick<CommandRunner, 'exec'>;
+export type GitGraphCommandRunner = Pick<CommandRunner, 'execAsync'>;
 
 /** Git messages that mean "valid repo, just nothing to show". */
 function isEmptyRepoError(message: string): boolean {
@@ -149,12 +149,12 @@ export class GitGraphManager {
     resolveWorktrees: () => Promise<PaneWorktreeRef[]>
   ): Promise<RepoGitGraph> {
     const limit = Math.min(Math.max(options.limit ?? DEFAULT_GRAPH_LIMIT, 1), MAX_GRAPH_LIMIT);
-    const remotes = this.getRemotes(projectPath, commandRunner);
+    const remotes = await this.getRemotes(projectPath, commandRunner);
     const remoteScope = resolveRemoteScope(options.remoteScope, remotes);
     // A focused ref replaces the ref set entirely: "just this branch's history".
     const focusRef = options.focusRef
       && isPlainRefName(options.focusRef)
-      && this.isResolvableCommit(projectPath, options.focusRef, commandRunner)
+      && await this.isResolvableCommit(projectPath, options.focusRef, commandRunner)
       ? options.focusRef
       : undefined;
 
@@ -183,7 +183,7 @@ export class GitGraphManager {
     const logCommand = `git log ${refScope} --date-order --format="${LOG_FORMAT}" -n ${limit + 1}`;
 
     try {
-      nodes = parseGraphLog(commandRunner.exec(logCommand, projectPath));
+      nodes = parseGraphLog((await commandRunner.execAsync(logCommand, projectPath)).stdout);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isNotARepoError(message)) {
@@ -203,12 +203,12 @@ export class GitGraphManager {
       return { ...empty, notice: 'This repository has no commits yet.' };
     }
 
-    const currentBranch = this.getCurrentBranch(projectPath, commandRunner);
-    const { refs, refsTruncated } = this.getRefs(projectPath, currentBranch, remoteScope, commandRunner);
+    const currentBranch = await this.getCurrentBranch(projectPath, commandRunner);
+    const { refs, refsTruncated } = await this.getRefs(projectPath, currentBranch, remoteScope, commandRunner);
 
     // A detached HEAD has no branch ref, so surface it as its own marker.
     if (!currentBranch) {
-      const headHash = this.getHeadHash(projectPath, commandRunner);
+      const headHash = await this.getHeadHash(projectPath, commandRunner);
       if (headHash) refs.push({ kind: 'head', name: 'HEAD', hash: headHash, isCurrent: true });
     }
 
@@ -247,9 +247,9 @@ export class GitGraphManager {
   }
 
   /** Remotes configured in this clone; empty for a repo with none. */
-  private getRemotes(projectPath: string, commandRunner: GitGraphCommandRunner): string[] {
+  private async getRemotes(projectPath: string, commandRunner: GitGraphCommandRunner): Promise<string[]> {
     try {
-      return commandRunner.exec('git remote', projectPath)
+      return (await commandRunner.execAsync('git remote', projectPath)).stdout
         .split('\n')
         .map(line => line.trim())
         .filter(name => name.length > 0 && isPlainRemoteName(name));
@@ -259,9 +259,9 @@ export class GitGraphManager {
     }
   }
 
-  private getCurrentBranch(projectPath: string, commandRunner: GitGraphCommandRunner): string | null {
+  private async getCurrentBranch(projectPath: string, commandRunner: GitGraphCommandRunner): Promise<string | null> {
     try {
-      const output = commandRunner.exec('git symbolic-ref --short -q HEAD', projectPath).trim();
+      const output = (await commandRunner.execAsync('git symbolic-ref --short -q HEAD', projectPath)).stdout.trim();
       return output || null;
     } catch {
       // Non-zero exit means a detached HEAD, which is not an error here.
@@ -269,30 +269,30 @@ export class GitGraphManager {
     }
   }
 
-  private getHeadHash(projectPath: string, commandRunner: GitGraphCommandRunner): string | null {
+  private async getHeadHash(projectPath: string, commandRunner: GitGraphCommandRunner): string | null {
     try {
-      return commandRunner.exec('git rev-parse HEAD', projectPath).trim() || null;
+      return (await commandRunner.execAsync('git rev-parse HEAD', projectPath)).stdout.trim() || null;
     } catch {
       return null;
     }
   }
 
-  private isResolvableCommit(
+  private async isResolvableCommit(
     projectPath: string,
     refName: string,
     commandRunner: GitGraphCommandRunner
-  ): boolean {
+  ): Promise<boolean> {
     try {
-      return commandRunner.exec(
+      return (await commandRunner.execAsync(
         `git rev-parse --verify --quiet "${refName}^{commit}"`,
         projectPath
-      ).trim().length > 0;
+      )).stdout.trim().length > 0;
     } catch {
       return false;
     }
   }
 
-  private getRefs(
+  private async getRefs(
     projectPath: string,
     currentBranch: string | null,
     remoteScope: string,
@@ -310,10 +310,10 @@ export class GitGraphManager {
 
     for (const format of formats) {
       try {
-        const raw = commandRunner.exec(
+        const raw = (await commandRunner.execAsync(
           `git for-each-ref --count=${MAX_GRAPH_REFS + 1} --format="${format}" ${scopes}`,
           projectPath
-        );
+        )).stdout;
         const parsed = parseForEachRef(raw, currentBranch);
         const refsTruncated = parsed.length > MAX_GRAPH_REFS;
         return { refs: refsTruncated ? parsed.slice(0, MAX_GRAPH_REFS) : parsed, refsTruncated };

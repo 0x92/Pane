@@ -23,17 +23,17 @@ interface StubRunner extends GitGraphCommandRunner {
 
 function stubRunner(responses: Array<[match: string, output: string | Error]>): StubRunner {
   const commands: string[] = [];
-  const exec = (command: string) => {
+  const execAsync = async (command: string) => {
     commands.push(command);
     for (const [match, output] of responses) {
       if (command.includes(match)) {
         if (output instanceof Error) throw output;
-        return output;
+        return { stdout: output, stderr: '' };
       }
     }
-    return '';
+    return { stdout: '', stderr: '' };
   };
-  return { exec, commands };
+  return { execAsync, commands };
 }
 
 const noWorktrees = async () => [];

@@ -539,7 +539,7 @@ export function registerGitHandlers(
         return { success: false, error: 'A valid commit hash is required' };
       }
 
-      const data = gitDiffManager.getCommitDiff(ctx.project.path, commitHash, ctx.commandRunner);
+      const data = await gitDiffManager.getCommitDiff(ctx.project.path, commitHash, ctx.commandRunner);
       return { success: true, data };
     } catch (error) {
       console.error('Failed to get commit detail:', error);
