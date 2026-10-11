@@ -1909,7 +1909,7 @@ export const RUNPANE_CONTRACT = {
       },
       {
         "name": "--template",
-        "description": "Print the handoff note template, with this checkout's origin and git state filled in."
+        "description": "Print the handoff note template, with this checkout's (or Session's) origin and git state filled in."
       },
       {
         "name": "--push",
@@ -3137,7 +3137,7 @@ export const RUNPANE_CONTRACT = {
         "",
         "Options:",
         "  <destination>                   Freeform: agent, model, effort, and machine, such as \"codex gpt-5 high on parsas-macbook-pro\".",
-        "  --template                      Print the note template, with this checkout's origin and git state filled in.",
+        "  --template                      Print the note template, with this checkout's (or Session's) origin and git state filled in.",
         "  --note-file <path|->            The note to check and send; every template section must be filled in.",
         "  --machine <name>                Destination machine (Tailscale name or unique prefix); overrides the text.",
         "  --agent <codex|claude|cursor>   Receiving agent; overrides the text.",
@@ -3145,7 +3145,7 @@ export const RUNPANE_CONTRACT = {
         "  --effort <level>                minimal, low, medium, high, xhigh, or max; supported for Claude and Codex only; overrides the text. Cursor effort is rejected.",
         "  --repo <selector>               Saved repository on the destination; defaults to the one with the same remote.",
         "  --push                          Commit uncommitted work (not the note) as WIP and push the branch first (never forces).",
-        "  --dry-run                       Check destination reachability, saved repo and OS; print note and git state; send nothing.",
+        "  --dry-run                       Check destination reachability, saved repo and OS; print note and git state; send nothing. From a Session: the name it would get.",
         "  --json                          Print machine-readable output.",
         "",
         "Examples:",
@@ -13817,7 +13817,7 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--template",
             "required": false,
-            "description": "Print the note template, with this checkout's origin and git state in its front matter, and exit."
+            "description": "Print the note template, with this checkout's (or Session's) origin and git state in its front matter, and exit."
           },
           {
             "name": "--note-file",
