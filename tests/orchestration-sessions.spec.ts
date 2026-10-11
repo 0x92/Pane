@@ -2779,3 +2779,21 @@ test('an archived Session restored with Undo returns to its place, and tiling a 
   expect(await listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Delta', 'Bravo', 'Charlie']);
   expect(await reorderCalls(page)).toEqual([]);
 });
+
+test('a real mouse drag reorders, in the tree and in the rail', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await installSessionsFixture(page, fourSessions());
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await expect(page.getByTestId('orchestration-session-a')).toBeVisible({ timeout: 10_000 });
+
+  // Browser-generated drag events, unlike dispatched ones, let React re-render between the
+  // window's drop listener and the row's own drop handler.
+  await page.getByTestId('orchestration-session-d').dragTo(page.getByTestId('orchestration-session-b'), { targetPosition: { x: 40, y: 3 } });
+  await expect.poll(() => listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Delta', 'Bravo', 'Charlie']);
+
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await page.getByTestId('compact-orchestration-session-c').dragTo(page.getByTestId('compact-orchestration-session-a'), { targetPosition: { x: 18, y: 2 } });
+  await expect.poll(() => page.locator('[data-testid^="compact-orchestration-session-"]').evaluateAll(nodes => nodes.map(node => node.getAttribute('title'))))
+    .toEqual(['Charlie', 'Alpha', 'Delta', 'Bravo']);
+});

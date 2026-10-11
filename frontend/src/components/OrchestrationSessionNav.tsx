@@ -142,8 +142,10 @@ export function OrchestrationSessionNav({
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuState | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const draggedSessionId = useDraggedSessionId();
-  // The list a Session drag started in; the drag reorders only that list.
-  const [dragOrigin, setDragOrigin] = useState<{ sessionId: string; list: SessionOrderList } | null>(null);
+  // The list a Session drag started in; the drag reorders only that list. A ref, not state:
+  // the window's drop listener ends the in-flight drag (and re-renders) before the row's own
+  // drop handler runs, so only the drag's own drop or dragend may clear it.
+  const dragOrigin = useRef<{ sessionId: string; list: SessionOrderList } | null>(null);
   const [drop, setDrop] = useState<SessionListDrop | null>(null);
   const [orderAnnouncement, setOrderAnnouncement] = useState('');
   // The row Alt+Up/Down moved, refocused after the list renders in its new order.
@@ -271,28 +273,34 @@ export function OrchestrationSessionNav({
     if (row && document.activeElement !== row) row.focus();
   }, [sessions]);
 
-  // A drag that ends anywhere, dropped or cancelled, clears its origin and drop line.
+  // A drag that ends anywhere, dropped or cancelled, takes its drop line with it.
   useEffect(() => {
-    if (draggedSessionId !== null) return;
-    setDragOrigin(null);
-    setDrop(null);
+    if (draggedSessionId === null) setDrop(null);
   }, [draggedSessionId]);
 
   /** Drag handlers for one Session in one list: the row starts the drag, the whole Session takes drops. */
   const sessionDragProps = (session: OrchestrationSessionRecord, list: SessionOrderList) => {
-    const accepts = dragOrigin !== null && dragOrigin.list === list && dragOrigin.sessionId === draggedSessionId;
+    // Only a drag that started in this list, over a Session other than the dragged one.
+    const fromThisList = () => {
+      const origin = dragOrigin.current;
+      return origin !== null && origin.list === list && origin.sessionId !== session.id ? origin : null;
+    };
     return {
       source: {
         draggable: true,
         onDragStart: (event: DragEvent<HTMLElement>) => {
           startSessionDrag(event.dataTransfer, session.id);
-          setDragOrigin({ sessionId: session.id, list });
+          dragOrigin.current = { sessionId: session.id, list };
+        },
+        onDragEnd: () => {
+          dragOrigin.current = null;
+          setDrop(null);
         },
       },
-      target: accepts ? {
+      target: {
         onDragOver: (event: DragEvent<HTMLElement>) => {
-          if (dragOrigin.sessionId === session.id) {
-            setDrop(null);
+          if (!fromThisList()) {
+            if (drop?.list === list) setDrop(null);
             return;
           }
           event.preventDefault();
@@ -300,16 +308,23 @@ export function OrchestrationSessionNav({
           const edge = dropEdge(event);
           if (drop?.list !== list || drop.targetId !== session.id || drop.edge !== edge) setDrop({ list, targetId: session.id, edge });
         },
+        onDragLeave: (event: DragEvent<HTMLElement>) => {
+          const into = event.relatedTarget;
+          if (into instanceof Node && event.currentTarget.contains(into)) return;
+          if (drop?.list === list && drop.targetId === session.id) setDrop(null);
+        },
         onDrop: (event: DragEvent<HTMLElement>) => {
+          const origin = fromThisList();
+          if (!origin) return;
           event.preventDefault();
-          const movedId = readDraggedSessionId(event.dataTransfer) ?? dragOrigin.sessionId;
+          const movedId = readDraggedSessionId(event.dataTransfer) ?? origin.sessionId;
           const moved = listSessions(list).find(item => item.id === movedId);
           const order = moved && dropOrder(listSessions(list).map(item => item.id), movedId, { targetId: session.id, edge: dropEdge(event) });
+          dragOrigin.current = null;
           setDrop(null);
-          setDragOrigin(null);
           if (moved && order) void moveSession(moved, order);
         },
-      } : {},
+      },
       indicator: drop?.list === list && drop.targetId === session.id ? drop.edge : null,
     };
   };
