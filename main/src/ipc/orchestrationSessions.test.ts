@@ -2,6 +2,7 @@ import type { IpcMain } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { PaneCommandRegistry } from '../daemon/commandRegistry';
 import { registerOrchestrationSessionHandlers } from './orchestrationSessions';
+import { PaneError } from '../../../shared/paneError';
 import type { AppServices } from './types';
 
 describe('orchestration-sessions:create', () => {
@@ -19,5 +20,38 @@ describe('orchestration-sessions:create', () => {
     await registry.invokeRemote('orchestration-sessions:create', [{ name: 'New chat', nameFromFirstMessage: true, agent: 'codex', isPinned: true }]);
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'New chat', nameFromFirstMessage: true, isPinned: true }));
+  });
+});
+
+describe('orchestration-sessions:reorder', () => {
+  function registerWith(reorder: (sessionIds: string[]) => Promise<object>): PaneCommandRegistry {
+    const registry = new PaneCommandRegistry();
+    registerOrchestrationSessionHandlers(
+      // SAFETY: The handlers only call ipcMain.handle, and this test invokes the registry directly.
+      { handle: () => undefined } as IpcMain,
+      // SAFETY: The reorder channel reads only orchestrationSessionManager.reorder.
+      { orchestrationSessionManager: { reorder } } as AppServices,
+      registry,
+    );
+    return registry;
+  }
+
+  it('passes the requested order to the host and returns the reordered list', async () => {
+    const reorder = vi.fn(async () => ({ sessions: [] }));
+
+    const result = await registerWith(reorder).invokeRemote('orchestration-sessions:reorder', [{ sessionIds: ['b', 'a'] }]);
+
+    expect(reorder).toHaveBeenCalledWith(['b', 'a']);
+    expect(result).toEqual({ success: true, data: { sessions: [] } });
+  });
+
+  it('keeps the next step of a Pane error', async () => {
+    const reorder = vi.fn(async () => {
+      throw new PaneError('ERR_SESSION_ORDER_TOO_LONG', 'Too many Sessions.', 'Send fewer.');
+    });
+
+    const result = await registerWith(reorder).invokeRemote('orchestration-sessions:reorder', [{ sessionIds: ['a'] }]);
+
+    expect(result).toEqual({ success: false, error: 'Too many Sessions. Next: Send fewer.' });
   });
 });

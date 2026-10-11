@@ -412,6 +412,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     create: (input: OrchestrationSessionCreateInput): Promise<IPCResponse> => invokeIpc('orchestration-sessions:create', input),
     get: (selector: OrchestrationSessionSelector): Promise<IPCResponse> => invokeIpc('orchestration-sessions:get', selector),
     update: (selector: OrchestrationSessionSelector, input: OrchestrationSessionUpdateInput): Promise<IPCResponse> => invokeIpc('orchestration-sessions:update', selector, input),
+    reorder: (sessionIds: string[]): Promise<IPCResponse> => invokeIpc('orchestration-sessions:reorder', { sessionIds }),
     setAgent: (selector: OrchestrationSessionSelector, agent: 'claude' | 'codex' | 'cursor'): Promise<IPCResponse> => invokeIpc('orchestration-sessions:set-agent', selector, agent),
     associate: (selector: OrchestrationSessionSelector, association: OrchestrationAssociationInput): Promise<IPCResponse> => invokeIpc('orchestration-sessions:associate', selector, association),
     detach: (selector: OrchestrationSessionSelector, paneId?: string): Promise<IPCResponse> => invokeIpc('orchestration-sessions:detach', selector, paneId),

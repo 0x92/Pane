@@ -8,6 +8,7 @@ import type {
   OrchestrationSessionSelector,
 } from '../../../shared/types/orchestrationSession';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
+import { PaneError, paneErrorText } from '../../../shared/paneError';
 
 const selectorSchema = boundary.object({
   sessionId: boundary.optional(boundary.nonEmptyString),
@@ -73,6 +74,9 @@ const associationSchema = boundary.object({
   paneId: boundary.nonEmptyString,
   panelIds: boundary.optional(boundary.array(boundary.nonEmptyString)),
 });
+const reorderSchema = boundary.object({
+  sessionIds: boundary.array(boundary.nonEmptyString),
+});
 const detachSchema = boundary.object({
   ...selectorSchemaFields(),
   paneId: boundary.optional(boundary.nonEmptyString),
@@ -129,6 +133,11 @@ export function registerOrchestrationSessionHandlers(
     ));
   });
   commandRegistry.bindChannel(ipcMain, 'orchestration-sessions:update');
+
+  commandRegistry.register('orchestration-sessions:reorder', async (value: PaneCommandValue) => {
+    return invokeSafely(() => requireManager().reorder(decodeBoundary(value, reorderSchema).sessionIds));
+  });
+  commandRegistry.bindChannel(ipcMain, 'orchestration-sessions:reorder');
 
   commandRegistry.register('orchestration-sessions:set-agent', async (value: PaneCommandValue, agent?: PaneCommandValue) => {
     const decoded = agent === undefined
@@ -189,7 +198,7 @@ async function invokeSafely<Value>(operation: () => Promise<Value>): Promise<obj
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Sessions operation failed',
+      error: error instanceof PaneError ? paneErrorText(error) : error instanceof Error ? error.message : 'Sessions operation failed',
     };
   }
 }

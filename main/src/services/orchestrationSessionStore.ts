@@ -108,6 +108,7 @@ const sessionSchema: BoundarySchema<OrchestrationSessionRecord> = boundary.objec
 const storeSchema: BoundarySchema<OrchestrationSessionStoreData> = boundary.object({
   version: boundary.literal(ORCHESTRATION_SESSION_STORE_VERSION),
   selectedSessionId: boundary.optional(boundary.nonEmptyString),
+  order: boundary.optional(boundary.array(boundary.nonEmptyString)),
   sessions: boundary.array(sessionSchema),
 });
 
@@ -190,6 +191,8 @@ function validateStore(value: JsonValue | OrchestrationSessionStoreData): Orches
   if (decoded.selectedSessionId && !ids.has(decoded.selectedSessionId)) {
     throw new Error(`orchestration Session store selects missing Session ${decoded.selectedSessionId}`);
   }
+  // The order is a preference, not a record: forget ids of Sessions that no longer exist.
+  if (decoded.order) decoded.order = [...new Set(decoded.order)].filter(id => ids.has(id));
   return decoded;
 }
 
