@@ -619,9 +619,14 @@ Agents show pages and files with `runpane panels open --file <path>` or
 formats; HTML opens as read-only source. Use `--url` with an HTTP, HTTPS or file
 URL for an intentional live browser tab. By default the tab opens in split view:
 the first one splits the stage to the right of the conversation, and later ones
-join that side group as tabs.
+join that side group as tabs. A page opened while you are looking at another
+Session or Pane is in that side group when you come back, without taking focus
+from the tab you left showing; tabs you have already arranged stay where you put
+them.
 `--tab` opens it as a plain tab instead. Reopening the same file or URL reuses
-and reloads its tab. This works the same in Sessions and in project Panes.
+and reloads its tab; without `--tab`, a reopened tab that sits in the
+conversation's group moves to the side group. This works the same in Sessions
+and in worktree Panes.
 
 Generated Session instructions ask the orchestrator to write plans, reports, and
 other documents as self-contained HTML files in its Session folder and open them
