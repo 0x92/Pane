@@ -4,11 +4,12 @@ import { ThemeContext } from '../../frontend/src/contexts/themeContextValue';
 import { DEFAULT_APPEARANCE } from '../../shared/types/appearance';
 
 const html = document.getElementById('html-source')!.textContent!;
-const calls: Array<{ channel: string; request: unknown }> = [];
+interface IpcRequest { sessionId?: string; filePath?: string; content?: string }
+const calls: Array<{ channel: string; request: IpcRequest }> = [];
 const log = document.getElementById('ipc-log')!;
 Object.assign(window, {
   electronAPI: {
-    invoke: async (channel: string, request: unknown) => {
+    invoke: async (channel: string, request: IpcRequest) => {
       calls.push({ channel, request });
       log.textContent = JSON.stringify(calls.filter(call => call.channel !== 'git:file-status'));
       if (channel === 'file:read') return { success: true, content: html };
