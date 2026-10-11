@@ -31,6 +31,7 @@ import { OuterResizeSeparator } from './ui/OuterResizeSeparator';
 import { usePanelStore } from '../stores/panelStore';
 import { useProjectViewActionsStore } from '../stores/projectViewActionsStore';
 import { panelApi } from '../services/panelApi';
+import { requestBrowserNavigation } from './panels/browser/browserNavigation';
 import { setPendingViewCommit } from './panels/diff/pendingViewCommit';
 import { PanelTabBar } from './panels/PanelTabBar';
 import { PanelContainer } from './panels/PanelContainer';
@@ -1127,9 +1128,7 @@ export const SessionView = memo(() => {
       await panelApi.updatePanel(existingPanel.id, { title, state: updatedPanel.state });
       updatePanelState(updatedPanel);
       await handlePanelSelect(updatedPanel);
-      window.dispatchEvent(new CustomEvent('browser-panel:navigate', {
-        detail: { url, sessionId: activeSession.id },
-      }));
+      requestBrowserNavigation({ url, sessionId: activeSession.id, panelId: existingPanel.id });
       return;
     }
 
