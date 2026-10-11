@@ -247,7 +247,8 @@ export const useOrchestrationSessionStore = create<OrchestrationSessionState>((s
     const orchestrationApi = getOrchestrationApi();
     if (!orchestrationApi) throw new Error('Sessions are unavailable in this Pane runtime');
     const generation = operationGeneration;
-    const previous = get().sessions.map(session => session.id).filter(id => sessionIds.includes(id));
+    const listed = new Set(sessionIds);
+    const previous = get().sessions.flatMap(session => listed.has(session.id) ? [session.id] : []);
     // A list read before this move must not briefly put the old order back.
     refreshSequence += 1;
     set(state => ({ sessions: moveWithinOwnPlaces(state.sessions, sessionIds, session => session.id) }));
