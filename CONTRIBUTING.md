@@ -71,7 +71,10 @@ install's data:
 - **Electron's browser profile** (localStorage, cache, cookies) is not covered
   by `PANE_DIR`. An unpackaged build uses the same profile folder as the
   installed app (`~/Library/Application Support/Pane` on macOS). `pnpm dev`
-  and `pnpm electron-dev`, and therefore Playwright, can't change it. To isolate
+  and `pnpm electron-dev`, and therefore Playwright, can't change it. That
+  includes the browser tab logins in `Partitions/pane-browser`, so an
+  unisolated dev build is signed in wherever the installed app is, and its
+  Settings → Privacy → Clear browser data signs the installed app out. To isolate
   it, build once and launch Electron yourself with `--user-data-dir`:
   ```bash
   pnpm run build:frontend && pnpm run build:main

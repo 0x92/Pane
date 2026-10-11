@@ -65,6 +65,7 @@ export type SettingsSettingId =
   | 'kitty-keyboard'
   | 'terminal-shortcuts'
   | 'analytics'
+  | 'browser-data'
   | 'verbose-logging'
   | 'developer-mode'
   | 'journey-timings'

@@ -5,7 +5,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { PaneCommandRegistry, PaneCommandValue } from '../daemon/commandRegistry';
+import { rejectWithPaneErrorText, type PaneCommandRegistry, type PaneCommandValue } from '../daemon/commandRegistry';
 import { getPaneWebviewContextMap } from '../core/runtime';
 import { panelManager } from '../services/panelManager';
 import { terminalPanelManager } from '../services/terminalPanelManager';
@@ -21,6 +21,7 @@ import { getWSLHome, linuxToUNCPath, posixJoin, windowsPathToWSLMount } from '..
 import { boundary, decodeBoundary, type BoundarySchema } from '../../../shared/validation/boundaryDecoder';
 import { readBrowserPanelFile } from '../services/browserPanelFiles';
 import { prepareRemoteBrowserFiles } from '../daemon/client/remoteBrowserFiles';
+import { clearPaneBrowserData } from '../services/browserData';
 import { ChunkedUploadStore, type UploadStart } from '../services/chunkedUploadStore';
 
 const execFileAsync = promisify(execFile);
@@ -462,6 +463,8 @@ export function registerPanelHandlers(
     return readBrowserPanelFile(panelManager.getPanel(panelId), url);
   });
   ipcMain.handle('browser-panel:prepare-file', (_event, panelId: string) => prepareRemoteBrowserFiles(panelId));
+  // Browser data lives on the machine showing the browser, so this is never forwarded to a remote host.
+  ipcMain.handle('browser-data:clear', () => rejectWithPaneErrorText(clearPaneBrowserData()));
   // Panel CRUD operations
   commandRegistry.register('panels:create', async (request: CreatePanelRequest) => {
     try {
