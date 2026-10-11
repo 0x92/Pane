@@ -2,7 +2,7 @@ import type { CustomCommandResume } from '../shared/types/customCommandResume';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { installElectronApiMock } from './electronApiMock';
 import type { JsonObject } from '../shared/validation/boundaryDecoder';
-import type { PanelActivationRequest, ToolPanel } from '../shared/types/panels';
+import type { PanelActivationRequest, PanelLayoutNode, SessionPanelLayout, ToolPanel } from '../shared/types/panels';
 
 type UiAssociationFixture = {
   paneId: string;
@@ -71,6 +71,7 @@ type SessionFixtureOptions = {
   overviewPanes?: Record<string, UiPaneOverviewFixture[]>;
   defaultOrchestratorAgent?: UiSessionFixture['agent'];
   initialConfig?: JsonObject;
+  rememberPaneLayouts?: boolean;
 };
 
 function sessionFixture(
@@ -159,6 +160,7 @@ async function installSessionsFixture(
     initialProjects: fixtureOptions.projects ?? [{ id: 1, name: 'Pane fixtures', path: '/tmp/pane-fixtures', active: true }],
     activeProjectId: fixtureOptions.activeProjectId,
     initialSessions: paneSessions,
+    rememberPaneLayouts: fixtureOptions.rememberPaneLayouts,
   });
   await page.addInitScript(({ seed, listDelayMs, getDelayMs, overviewPanes, distributions }: { seed: UiSessionFixture[]; listDelayMs: number; getDelayMs: number; overviewPanes: Record<string, UiPaneOverviewFixture[]>; distributions: string[] }) => {
     type SessionRecord = UiSessionFixture;
@@ -2731,3 +2733,84 @@ test(`a ${failure} terminal load offers Retry and recovers without switching Ses
 });
 
 }
+
+/** The group this desktop remembers as focused for a Pane or Session, as its panel ids. */
+async function rememberedFocusedGroup(page: Page, paneId: string): Promise<string[] | null> {
+  return page.evaluate(paneId => {
+    // SAFETY: installElectronApiMock's rememberPaneLayouts keeps layouts under this key, keyed `${hostId}/${paneId}`.
+    const layouts = JSON.parse(window.localStorage.getItem('__pane_test_pane_layouts__') ?? '{}') as Record<string, SessionPanelLayout>;
+    const layout = Object.entries(layouts).find(([key]) => key.endsWith(`/${paneId}`))?.[1];
+    if (!layout) return null;
+    const find = (node: PanelLayoutNode): string[] | null => node.type === 'group'
+      ? (node.id === layout.focusedGroupId ? node.panelIds : null)
+      : node.children.map(find).find(Boolean) ?? null;
+    return find(layout.root);
+  }, paneId);
+}
+
+test('a page an agent opens while you are in another Session lands beside the conversation when you return', async ({ page }) => {
+  await installSessionsFixture(page, [
+    sessionFixture('away', 'Away demo', '', '', '2026-09-16T12:00:00.000Z'),
+    sessionFixture('elsewhere', 'Elsewhere', '', '', '2026-09-16T12:01:00.000Z'),
+  ], [], { rememberPaneLayouts: true });
+  await page.goto('/');
+  // Visit the Session once, so this desktop remembers its layout.
+  await page.getByTestId('orchestration-session-away').click();
+  const workspaceTabs = page.getByTestId('session-workspace-tabs');
+  await expect(workspaceTabs.getByRole('tab')).toHaveCount(1);
+  const agentTabName = await workspaceTabs.getByRole('tab').first().innerText();
+  await page.getByTestId('orchestration-session-elsewhere').click();
+  await expect(page.getByRole('heading', { name: 'Elsewhere', exact: true })).toBeAttached();
+  await expect.poll(() => rememberedFocusedGroup(page, '__orchestration_session_awayterminal__')).not.toBeNull();
+
+  await openAgentPage(page, 'away', 'report-page', 'report.html');
+  await page.getByTestId('orchestration-session-away').click();
+
+  const groupStrips = page.locator('.panel-group-tab-bar');
+  await expect(groupStrips).toHaveCount(2);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveText(agentTabName);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveAttribute('aria-selected', 'true');
+  expect(await tabNames(groupStrips.nth(1))).toEqual(['report.html']);
+  // The conversation keeps the focus this desktop remembered.
+  await expect.poll(() => rememberedFocusedGroup(page, '__orchestration_session_awayterminal__')).toEqual(['__orchestration_panel_away_claude']);
+});
+
+test('reopening a page that sits beside the Session conversation moves it into the split', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('reopen', 'Reopen demo', '', '', new Date(0).toISOString())]);
+  await page.goto('/');
+  await page.getByTestId('orchestration-session-reopen').click();
+  const workspaceTabs = page.getByTestId('session-workspace-tabs');
+  await expect(workspaceTabs.getByRole('tab')).toHaveCount(1);
+  const agentTabName = await workspaceTabs.getByRole('tab').first().innerText();
+  const open = (placement: 'split' | 'tab', reused: boolean) => page.evaluate(({ placement, reused }) => {
+    // SAFETY: installElectronApiMock adds these controls before the app loads.
+    const mockWindow = window as typeof window & { __paneTestElectronMock: { emitPanelCreated: (panel: ToolPanel) => void; emitPanelUpdated: (panel: ToolPanel) => void; emitPanelActivation: (request: PanelActivationRequest) => void } };
+    const mock = mockWindow.__paneTestElectronMock;
+    const now = new Date(0).toISOString();
+    const sessionId = '__orchestration_session_reopenterminal__';
+    // As the host does for `panels open --file notes.html [--tab]`: create or reopen, then bring forward.
+    (reused ? mock.emitPanelUpdated : mock.emitPanelCreated)({
+      id: 'notes-page', sessionId, type: 'browser', title: 'notes.html',
+      state: { isActive: true, hasBeenViewed: false, customState: { currentUrl: 'about:blank', reopenedAt: reused ? new Date().toISOString() : undefined } },
+      metadata: { createdAt: now, lastActiveAt: now, position: 5, openPlacement: placement },
+    });
+    mock.emitPanelActivation({ sessionId, panelId: 'notes-page', placement });
+  }, { placement, reused });
+
+  await open('tab', false);
+  await expect(workspaceTabs.getByRole('tab', { name: 'notes.html' })).toHaveAttribute('aria-selected', 'true');
+  await expect(workspaceTabs.getByRole('tab')).toHaveCount(2);
+
+  await open('split', true);
+  const groupStrips = page.locator('.panel-group-tab-bar');
+  await expect(groupStrips).toHaveCount(2);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveText(agentTabName);
+  expect(await tabNames(groupStrips.nth(1))).toEqual(['notes.html']);
+  await expect(groupStrips.nth(1).getByRole('tab', { name: 'notes.html' })).toHaveAttribute('aria-selected', 'true');
+
+  // Already beside the conversation: it stays there and stays shown.
+  await open('split', true);
+  await expect(groupStrips).toHaveCount(2);
+  expect(await tabNames(groupStrips.nth(1))).toEqual(['notes.html']);
+  await expect(groupStrips.nth(1).getByRole('tab', { name: 'notes.html' })).toHaveAttribute('aria-selected', 'true');
+});

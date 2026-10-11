@@ -28,6 +28,7 @@ import {
   primaryGroup,
   reconcile,
   removePanelFromLayout,
+  showPanelInSplit,
   subsetInsertIndex,
   updateSizes,
   type DropZone,
@@ -193,12 +194,10 @@ export function SessionWorkspacePanels({
       const storedIds = layoutPanelIds(base);
       const stage = (usePanelStore.getState().panels[sessionId] ?? saved)
         .filter(panel => isStagePanel(panel, agentPanelIdsRef.current, storedIds));
-      // This desktop's own memory takes new tabs inactive into its own groups;
-      // the shared split placement only shapes the host's seed layout.
-      const splitIds = new Set<string>();
-      if (!remembered) {
-        for (const panel of stage) if (panel.metadata?.openPlacement === 'split') splitIds.add(panel.id);
-      }
+      // Agent pages this desktop has never placed (opened while it showed
+      // something else) go beside the conversation, inactive. Tabs already in
+      // its remembered layout keep their place.
+      const splitIds = new Set(stage.filter(panel => panel.metadata?.openPlacement === 'split').map(panel => panel.id));
       applyLayout(reconcile(base, [agentPanelId, ...stage.map(panel => panel.id)], splitIds).layout);
       setLoaded(true);
     }).catch(error => {
@@ -253,8 +252,9 @@ export function SessionWorkspacePanels({
     if (!current || !panel) return;
     if (panel.id !== agentPanelId && !isStagePanel(panel, agentPanelIdsRef.current, layoutPanelIds(current))) return;
     const focused = findGroup(current.root, current.focusedGroupId ?? '') ?? primaryGroup(current.root);
+    // A split request also moves a tab out of the conversation's group.
     const root = activationRequest.placement === 'split'
-      ? placePanelInSplit(current.root, panel.id)
+      ? showPanelInSplit(current.root, panel.id)
       : addPanelToGroup(current.root, focused.id, panel.id);
     applyLayout(activatePanelInLayout({ ...current, root }, panel.id));
   }, [activationRequest, loaded, sessionId, agentPanelId, applyLayout]);
