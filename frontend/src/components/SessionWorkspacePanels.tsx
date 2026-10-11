@@ -22,11 +22,15 @@ import {
   addPanelToGroup,
   createSingleGroupLayout,
   findGroup,
+  findGroupContainingPanel,
+  movePanel,
   placePanelInSplit,
   primaryGroup,
   reconcile,
   removePanelFromLayout,
+  subsetInsertIndex,
   updateSizes,
+  type DropZone,
 } from '../utils/panelLayout';
 
 const EMPTY_PANELS: ToolPanel[] = [];
@@ -348,6 +352,41 @@ export function SessionWorkspacePanels({
     if (current) applyLayout({ ...current, root: updateSizes(current.root, splitNodeId, sizes) });
   }, [sessionId, applyLayout]);
   const handleClose = useCallback((panel: ToolPanel) => { void closePanel(panel); }, [closePanel]);
+
+  // Tab drag and drop, the same gesture as a worktree Pane: a group's centre
+  // takes the tab, an edge splits, a strip slot inserts. The state is local to
+  // this mounted Session, so a tiled neighbour never offers itself as a target.
+  const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null);
+  const [dropZones, setDropZones] = useState<Map<string, DropZone | null>>(new Map());
+  const endTabDrag = useCallback(() => {
+    setDraggedPanelId(null);
+    setDropZones(new Map());
+  }, []);
+  const handleDropZoneChange = useCallback((groupId: string, zone: DropZone | null) => {
+    setDropZones(prev => {
+      const next = new Map(prev);
+      if (zone === null) next.delete(groupId);
+      else next.set(groupId, zone);
+      return next;
+    });
+  }, []);
+  const handleDropTab = useCallback((groupId: string, zone: DropZone) => {
+    const current = usePanelStore.getState().layouts[sessionId];
+    endTabDrag();
+    if (!current || !draggedPanelId) return;
+    const source = findGroupContainingPanel(current.root, draggedPanelId);
+    // Its own centre, or a group's only tab onto that group, changes nothing.
+    if (source?.id === groupId && (zone === 'center' || source.panelIds.length === 1)) return;
+    const root = zone === 'center'
+      ? movePanel(current.root, draggedPanelId, { groupId, index: findGroup(current.root, groupId)?.panelIds.length ?? 0 })
+      : movePanel(current.root, draggedPanelId, { groupId, edge: zone });
+    applyLayout({ ...current, root });
+  }, [sessionId, draggedPanelId, applyLayout, endTabDrag]);
+  const handleStripDrop = useCallback((groupId: string, panelId: string, insertIndex: number) => {
+    const current = usePanelStore.getState().layouts[sessionId];
+    endTabDrag();
+    if (current) applyLayout({ ...current, root: movePanel(current.root, panelId, { groupId, index: insertIndex }) });
+  }, [sessionId, applyLayout, endTabDrag]);
   // A single group keeps its tabs in the workspace toolbar, directly under the
   // title bar. Once split, every group owns a strip — the agent tab included —
   // so all tab strips sit on one row and the toolbar row goes away.
@@ -361,7 +400,12 @@ export function SessionWorkspacePanels({
       <PanelTabStrip panels={primaryTabs} activePanelId={primary?.activePanelId ?? agentPanelId} idNamespace={`session-${sessionId}`}
         alwaysShowClose
         onPanelSelect={panel => { if (primary) selectPanel(primary.id, panel); }}
-        onPanelClose={handleClose} />
+        onPanelClose={handleClose}
+        onDragStart={setDraggedPanelId} onDragEnd={endTabDrag}
+        onStripDrop={(panelId, index) => {
+          if (primary) handleStripDrop(primary.id, panelId, subsetInsertIndex(primary.panelIds, primaryTabs.map(panel => panel.id), index));
+        }}
+        isTabDragging={draggedPanelId !== null} draggedPanelId={draggedPanelId} />
     </div>
   );
   const titleBarActions = (
@@ -397,7 +441,10 @@ export function SessionWorkspacePanels({
             {layout && <SplitLayout layout={layout} panels={tabs} focusedGroupId={focusWithin ? layout.focusedGroupId ?? primaryGroup(layout.root).id : ''}
               isMainRepo={false} onSizesChange={resizeSplit} onPanelSelect={selectPanel} onPanelClose={handleClose}
               onFocusGroup={focusGroup} alwaysShowClose keepPermanentTabsInGroups
-              renderAddTool={renderGroupAddTool} />}
+              renderAddTool={renderGroupAddTool}
+              isTabDragging={draggedPanelId !== null} draggedPanelId={draggedPanelId} dropZones={dropZones}
+              onDropZoneChange={handleDropZoneChange} onDropTab={handleDropTab} onDragStart={setDraggedPanelId}
+              onDragEnd={endTabDrag} onStripDrop={handleStripDrop} />}
           </div>
           <div className="flex flex-shrink-0 flex-col border-t border-border-primary" style={{ height: showTerminal ? '35%' : 32 }}>
             <button type="button" disabled={!loaded} aria-label={showTerminal ? 'Collapse terminal' : 'Expand terminal'}
