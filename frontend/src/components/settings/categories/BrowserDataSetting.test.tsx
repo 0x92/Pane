@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BrowserDataSetting, clearBrowserData } from './PrivacySettings';
+import { BrowserDataSetting } from './BrowserDataSetting';
+import { clearBrowserData } from '../clearBrowserData';
 import { SETTINGS_CATEGORIES, settingDomId } from '../catalog';
 
 // Clicking through the confirmation belongs to tests/browser-auth-persistence.spec.ts;

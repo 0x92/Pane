@@ -1,7 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import BrowserPanel from '../../frontend/src/components/panels/browser/BrowserPanel';
-import { BrowserDataSetting } from '../../frontend/src/components/settings/categories/PrivacySettings';
+import { BrowserDataSetting } from '../../frontend/src/components/settings/categories/BrowserDataSetting';
 import { useConfigStore } from '../../frontend/src/stores/configStore';
 import '../../frontend/src/index.css';
 import type { AppConfig } from '../../frontend/src/types/config';
