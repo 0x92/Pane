@@ -146,6 +146,18 @@ out of Pinned until it is restored. RunPane can set the same preference with
 `isPinned` (default false), and update JSON accepts it without changing the
 preference when omitted.
 
+Drag a Session up or down in Pinned, in Sessions, or in the compact rail to
+change its place; a line shows where it will land. With a Session row focused,
+**Alt+↑** and **Alt+↓** move it one place and a screen reader hears its new
+position. A drag or keypress reorders only the list it starts in: Pinned
+Sessions move among themselves, and a Session dragged across the Pinned line
+stays where it was. The order is saved on the host, so every desktop, the phone
+and `runpane sessions list` show it, and it survives restarts. New Sessions
+start at the bottom. A host that has never saved an order lists Sessions oldest
+first. A host running an older Pane cannot save an order: the list snaps back
+and the error says to update Pane on that host. Dragging a Session onto the
+workspace still tiles it.
+
 Click a Session row to open its chat, or use **Switch to Session: <name>** in the
 command palette (`⌘⇧P` / `Ctrl+Shift+P`), which also has **New Session**. A Session with associated Panes shows a
 chevron that expands or collapses them; a Session without Panes shows none.
@@ -196,8 +208,18 @@ navigation. Restore the Session from the sidebar’s Archived section. This is
 separate from archiving a project Pane and does not delete delegated work.
 
 The existing Session update contract accepts `archived: true` or
-`archived: false`. List results retain archived records; active navigation
-filters them. Archiving the selected Session chooses an available active
+`archived: false`. List results retain archived records, in the saved order;
+active navigation filters them. An archived Session keeps its place, so Undo or
+Restore puts it back where it was.
+
+`orchestration-sessions:reorder` takes `{ sessionIds }`. The listed Sessions
+trade the places they already hold, so a list that shows only some Sessions
+(Pinned, or the active ones while others are archived) rearranges just those;
+unknown ids are ignored. It writes an optional `order` id list beside the
+Sessions in `orchestration-sessions.json` (the store stays at version 1) and
+changes no Session's revision, `updatedAt` or activity. An older Pane reading
+the file ignores `order`, lists Sessions oldest first, and drops it the next
+time it writes. Archiving the selected Session chooses an available active
 Session or clears the selection if none remain. Restoring a Session does not
 replace an unrelated selection.
 
@@ -328,7 +350,7 @@ The daemon and Electron IPC channels are:
 
 `orchestration-sessions:list`, `orchestration-sessions:select`,
 `orchestration-sessions:create`, `orchestration-sessions:get`,
-`orchestration-sessions:update`, `orchestration-sessions:set-agent`,
+`orchestration-sessions:update`, `orchestration-sessions:reorder`, `orchestration-sessions:set-agent`,
 `orchestration-sessions:associate`, `orchestration-sessions:detach`, and
 `orchestration-sessions:overview`.
 
