@@ -201,6 +201,28 @@ filters them. Archiving the selected Session chooses an available active
 Session or clears the selection if none remain. Restoring a Session does not
 replace an unrelated selection.
 
+### Move a Session to another machine
+
+Right-click a Session, or use its ⋯ button, and choose **Move to host…** to
+continue it on another of your machines. The dialog lists your Tailscale
+machines running Pane, except the one the Session is on; machines Pane can't
+reach are shown disabled with the reason. If none can be reached, it says so:
+open Pane on the other machine, or sign in to Tailscale. While you view a host
+connected with a pairing code rather than over Tailscale, the item is disabled,
+because Pane can't tell which machine that is. Choosing a machine
+sends the Session's agent a prompt to hand the Session off with
+[`runpane handoff`](RUNPANE_WORKSPACES.md#hand-a-task-to-another-machine) and
+the `handoff` skill.
+
+The agent writes a handoff note, and handoff creates a Session on that machine
+with the same name (numbered "<name> 2" if the name is taken), goal and agent.
+Its next action is to read the note, which handoff saved in that machine's
+`~/.pane/handoffs/`. Like every Session, it waits for your first message: switch
+to that machine, open the Session, and send "continue". Only the note moves. The
+conversation, the Session folder and its Panes stay where they are, and the
+original Session is not archived; archive it from the same menu when you are
+done with it.
+
 ## Session startup
 
 Creating, opening, restoring, restarting, or switching the agent in a Session

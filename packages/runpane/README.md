@@ -216,6 +216,12 @@ runpane handoff --template > ~/handoff.md
 runpane handoff "claude opus on parsas-macbook-pro" --note-file ~/handoff.md --push
 ```
 
+From a Session's terminal (its folder is outside git), handoff moves the Session:
+it skips git, writes the note to the other machine, and creates a Session there
+with the same name (numbered if taken), goal and agent, whose next action is to
+read the note. It refuses this machine before sending, and `--json` reports
+`receiver.route: "session"` and the new `session`.
+
 `--dry-run` checks destination daemon reachability and resolves its saved repository
 (name, path, environment and OS) without committing, pushing, fetching, writing a
 note or creating a Pane. These checks also run before `--push` changes sender work.

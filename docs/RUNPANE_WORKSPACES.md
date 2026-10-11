@@ -89,6 +89,8 @@ runpane handoff "claude opus on parsas-macbook-pro" --note-file ~/handoff.md --p
 
 The destination machine needs Pane running, the repository saved in Pane with a remote for the same GitHub repository, and its own `runpane` on PATH (otherwise it uses `npx runpane@latest`). The note lands in that machine's `~/.pane/handoffs/`, the agent starts in a new Pane branched from your branch, and it reports back to your panel with `runpane workspace <your machine> panels submit`. The note's sections are in the `handoff` skill's [note template](../main/src/services/paneChatBundle/skills/handoff/references/note-template.md).
 
+Run from a Session's terminal, whose folder is outside git, handoff moves the Session instead (the Session menu's **Move to host…** asks the Session's agent to do this). It skips the git steps and pushes nothing, writes the note to the other machine's `~/.pane/handoffs/` the same way, and creates a Session there with the same name, goal and agent, whose next action is to read the note. The destination needs only Pane running with workspaces; no repository has to be saved there. The new Session waits for your first message, and the original stays where it is. A Session can't be handed off to the machine it is on. See [Move a Session to another machine](SESSIONS.md#move-a-session-to-another-machine).
+
 ## Paths across Windows, WSL, and macOS
 
 `read`, `write`, and `exec --cwd` take any path form and translate it on the machine that runs the request, so agents do not need `cat` on one machine and `Get-Content` on another:
