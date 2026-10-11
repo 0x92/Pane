@@ -1,7 +1,7 @@
 import { CreateOrchestrationSessionDialog, type SessionCreateRequest } from './CreateOrchestrationSessionDialog';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { create as createStore } from 'zustand';
-import { Archive, ChevronDown, ChevronRight, MoreHorizontal, Pin, PinOff, Plus, Pencil, RefreshCw, Terminal } from 'lucide-react';
+import { Archive, ArrowRightLeft, ChevronDown, ChevronRight, MoreHorizontal, Pin, PinOff, Plus, Pencil, RefreshCw, Terminal } from 'lucide-react';
 import { useNavigationStore } from '../stores/navigationStore';
 import { useSessionStore } from '../stores/sessionStore';
 import {
@@ -21,6 +21,8 @@ import { PopoverButton, TerminalPopover } from './terminal/TerminalPopover';
 import { cn } from '../utils/cn';
 import { SessionActivityDot, SessionActivitySummary } from './SessionActivity';
 import { startSessionDrag } from '../utils/sessionDrag';
+import { MoveSessionToHostDialog } from './MoveSessionToHostDialog';
+import { useMoveToHostBlockedReason } from '../hooks/useMoveToHostBlockedReason';
 
 interface OrchestrationSessionNavProps {
   compact?: boolean;
@@ -110,6 +112,7 @@ export function OrchestrationSessionNav({
   const [localSectionExpanded, setLocalSectionExpanded] = useState(true);
   const [localPinnedSectionExpanded, setLocalPinnedSectionExpanded] = useState(true);
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuState | null>(null);
+  const [movingSessionId, setMovingSessionId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const hostRevision = useOrchestrationSessionStore(state => state.hostRevision);
   const pendingToast = useArchivedSessionToastStore(state => state.toast);
@@ -198,7 +201,8 @@ export function OrchestrationSessionNav({
     if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
     event.preventDefault();
     const bounds = event.currentTarget.getBoundingClientRect();
-    openSessionMenu(session, bounds.left, bounds.bottom);
+    // The row is the trigger: focus moves into the menu for arrow keys and returns here on Escape.
+    openSessionMenu(session, bounds.left, bounds.bottom, event.currentTarget);
   }, [openSessionMenu]);
 
   const archiveSession = useCallback(async () => {
@@ -247,6 +251,10 @@ export function OrchestrationSessionNav({
       setActionError(cause instanceof Error ? cause.message : 'Failed to restore Session');
     }
   }, [archivedToast, openSession, refresh, update]);
+
+  const moveDialogElement = (
+    <MoveSessionToHostDialog sessionId={movingSessionId} onClose={() => setMovingSessionId(null)} onMoved={sessionId => void openSession(sessionId)} />
+  );
 
   const archivedToastElement = archivedToast && (
     <UndoToast
@@ -426,7 +434,9 @@ export function OrchestrationSessionNav({
           onClose={() => setSessionMenu(null)}
           onArchive={() => void archiveSession()}
           onPin={() => void pinSession()}
+          onMoveToHost={() => { setMovingSessionId(sessionMenu?.sessionId ?? null); setSessionMenu(null); }}
         />
+        {moveDialogElement}
         <CreateOrchestrationSessionDialog isOpen={showCreate} onClose={() => setShowCreate(false)} onCreate={createSession} />
         {archivedToastElement}
       </div>
@@ -530,7 +540,9 @@ export function OrchestrationSessionNav({
         onClose={() => setSessionMenu(null)}
         onArchive={() => void archiveSession()}
         onPin={() => void pinSession()}
+        onMoveToHost={() => { setMovingSessionId(sessionMenu?.sessionId ?? null); setSessionMenu(null); }}
       />
+      {moveDialogElement}
       <CreateOrchestrationSessionDialog isOpen={showCreate} onClose={() => setShowCreate(false)} onCreate={createSession} />
       {archivedToastElement}
     </>
@@ -542,9 +554,11 @@ interface SessionContextMenuProps {
   onClose: () => void;
   onArchive: () => void;
   onPin: () => void;
+  onMoveToHost: () => void;
 }
 
-function SessionContextMenu({ menu, onClose, onArchive, onPin }: SessionContextMenuProps) {
+function SessionContextMenu({ menu, onClose, onArchive, onPin, onMoveToHost }: SessionContextMenuProps) {
+  const moveBlockedReason = useMoveToHostBlockedReason();
   const [renaming, setRenaming] = useState<SessionContextMenuState | null>(null);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -595,6 +609,16 @@ function SessionContextMenu({ menu, onClose, onArchive, onPin }: SessionContextM
           setRenaming(menu); setName(menu.sessionName); setError(null); onClose();
         }}>
           <span className="flex items-center gap-2"><Pencil className="h-4 w-4" />Rename Session…</span>
+        </PopoverButton>
+        <PopoverButton
+          role="menuitem"
+          // Focusable while unavailable, so arrow keys reach it and its reason is announced.
+          aria-disabled={moveBlockedReason !== null}
+          title={moveBlockedReason ?? undefined}
+          className={cn(moveBlockedReason && 'cursor-not-allowed opacity-50')}
+          onClick={() => { if (!moveBlockedReason) onMoveToHost(); }}
+        >
+          <span className="flex items-center gap-2"><ArrowRightLeft className="h-4 w-4" />Move to host…</span>
         </PopoverButton>
         <PopoverButton role="menuitem" variant="danger" onClick={onArchive}>
           <span className="flex items-center gap-2">

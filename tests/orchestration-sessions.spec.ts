@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { installElectronApiMock } from './electronApiMock';
 import type { JsonObject } from '../shared/validation/boundaryDecoder';
 import type { PanelActivationRequest, ToolPanel } from '../shared/types/panels';
+import type { TailnetMachine, TailnetMachineList } from '../shared/types/workspaceAccess';
 
 type UiAssociationFixture = {
   paneId: string;
@@ -71,6 +72,7 @@ type SessionFixtureOptions = {
   overviewPanes?: Record<string, UiPaneOverviewFixture[]>;
   defaultOrchestratorAgent?: UiSessionFixture['agent'];
   initialConfig?: JsonObject;
+  tailnetMachines?: TailnetMachineList;
 };
 
 function sessionFixture(
@@ -159,6 +161,7 @@ async function installSessionsFixture(
     initialProjects: fixtureOptions.projects ?? [{ id: 1, name: 'Pane fixtures', path: '/tmp/pane-fixtures', active: true }],
     activeProjectId: fixtureOptions.activeProjectId,
     initialSessions: paneSessions,
+    tailnetMachines: fixtureOptions.tailnetMachines,
   });
   await page.addInitScript(({ seed, listDelayMs, getDelayMs, overviewPanes, distributions }: { seed: UiSessionFixture[]; listDelayMs: number; getDelayMs: number; overviewPanes: Record<string, UiPaneOverviewFixture[]>; distributions: string[] }) => {
     type SessionRecord = UiSessionFixture;
@@ -2486,3 +2489,150 @@ test(`a ${failure} terminal load offers Retry and recovers without switching Ses
 });
 
 }
+
+function tailnetMachine(name: string, overrides: Partial<TailnetMachine> = {}): TailnetMachine {
+  return { name, dnsName: `${name}.tail1234.ts.net`, url: `https://${name}.tail1234.ts.net:8443`, os: 'macOS', ownerLogin: 'tyler@github', mine: true, state: 'available', ...overrides };
+}
+
+/** Answers the Session agent's `runpane panels submit` and records what it was sent. */
+async function recordAgentSubmissions(page: Page): Promise<() => Promise<unknown[]>> {
+  await page.addInitScript(() => {
+    const invoke = window.electronAPI.invoke;
+    const submitted: unknown[] = [];
+    Object.assign(window, { __moveSubmissions: submitted });
+    window.electronAPI.invoke = async (channel, ...args) => {
+      if (channel !== 'runpane:panels:submit') return invoke(channel, ...args);
+      submitted.push(args[0]);
+      return { ok: true, panelId: 'agent', inputBytes: 1, enter: 'cr', sequenceName: 'enter-cr', verifiedSubmitted: true, sentAt: new Date().toISOString() };
+    };
+  });
+  return () => page.evaluate(() => {
+    // SAFETY: recordAgentSubmissions' init script sets __moveSubmissions before the app loads.
+    return (window as typeof window & { __moveSubmissions: unknown[] }).__moveSubmissions;
+  });
+}
+
+test('Move to host… sits between Rename and Archive in the Session menu, by mouse, keyboard and in the rail', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await installSessionsFixture(page, [sessionFixture('alpha', 'Alpha', 'Goal.', 'Context.', '2026-09-16T12:00:00.000Z')]);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  const row = page.getByTestId('orchestration-session-alpha');
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  await row.click({ button: 'right' });
+  const menu = page.getByRole('menu', { name: 'Session actions for Alpha' });
+  await expect(menu.getByRole('menuitem')).toHaveText(['Pin Session', 'Rename Session…', 'Move to host…', 'Archive Session']);
+  await page.keyboard.press('Escape');
+
+  await row.focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(menu.getByRole('menuitem', { name: 'Pin Session' })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(menu.getByRole('menuitem', { name: 'Move to host…' })).toBeFocused();
+  await page.screenshot({ path: 'tmp/verify/session-move-host/01-menu-keyboard.png' });
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await page.getByTestId('compact-orchestration-session-alpha').click({ button: 'right' });
+  await expect(menu.getByRole('menuitem')).toHaveText(['Pin Session', 'Rename Session…', 'Move to host…', 'Archive Session']);
+  await page.screenshot({ path: 'tmp/verify/session-move-host/01b-menu-rail.png' });
+});
+
+test('Move to host… lists only machines that can take the Session and asks its agent to hand off', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const session = { ...sessionFixture('alpha', 'Alpha', 'Goal.', 'Context.', '2026-09-16T12:00:00.000Z'), agent: 'codex' as const };
+  await installSessionsFixture(page, [session], [], {
+    tailnetMachines: { ok: true, tailnet: 'example.github', domain: 'tail1234.ts.net', machines: [
+      tailnetMachine('tylers-mac-mini'),
+      tailnetMachine('tylers-mac-mini-1', { state: 'offline' }),
+      tailnetMachine('sams-laptop', { mine: false, ownerLogin: 'sam@github' }),
+    ] },
+  });
+  const submissions = await recordAgentSubmissions(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await page.getByTestId('orchestration-session-alpha').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Move to host…' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Move Session to another host' });
+  await expect(dialog.getByRole('radio')).toHaveCount(3);
+  await expect(dialog.getByRole('radio', { name: 'tylers-mac-mini', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('radio', { name: 'tylers-mac-mini-1' })).toBeDisabled();
+  await expect(dialog.getByTestId('move-session-target-tylers-mac-mini-1')).toContainText('Offline');
+  await expect(dialog.getByRole('radio', { name: 'sams-laptop' })).toBeDisabled();
+  await expect(dialog.getByTestId('move-session-target-sams-laptop')).toContainText('sam@github');
+  // This computer runs the Session, and discovery never lists it.
+  await expect(dialog.getByRole('radio', { name: 'devbox' })).toHaveCount(0);
+  await page.screenshot({ path: 'tmp/verify/session-move-host/02-dialog.png' });
+
+  await dialog.getByRole('radio', { name: 'tylers-mac-mini', exact: true }).check({ force: true });
+  await dialog.getByRole('button', { name: 'Move Session' }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await submissions()).toEqual([{
+    panelId: '__orchestration_panel_alpha_codex',
+    source: 'user',
+    input: 'Hand this Session off to codex on tylers-mac-mini. Use the handoff skill: write the note from `runpane handoff --template`, '
+      + 'check it with `--dry-run`, then run `runpane handoff "codex on tylers-mac-mini" --note-file <note>` from this Session\'s folder. '
+      + 'Don\'t push anything. Tell me the Session it created.',
+  }]);
+});
+
+test('Move to host… viewing a Tailscale host offers this computer and leaves out the host', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('alpha', 'Alpha', 'Goal.', 'Context.', '2026-09-16T12:00:00.000Z')], [], {
+    initialConfig: { remoteDaemon: { host: { config: { enabled: false, listenHost: '127.0.0.1', listenPort: 42137, pairingRequired: true, allowInsecureHttpOnLoopback: true }, clients: [] },
+      client: { mode: 'remote', activeProfileId: 'mini', profiles: [{ id: 'mini', label: 'tylers-mac-mini', baseUrl: 'https://tylers-mac-mini.tail1234.ts.net:8443', token: '', transport: 'http+sse', tailnetMachine: 'tylers-mac-mini', tailnetDomain: 'tail1234.ts.net' }] } } },
+    tailnetMachines: { ok: true, tailnet: 'example.github', domain: 'tail1234.ts.net', machines: [tailnetMachine('tylers-mac-mini')] },
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await page.getByTestId('orchestration-session-alpha').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Move to host…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Move Session to another host' });
+  await expect(dialog.getByRole('radio')).toHaveCount(1);
+  await expect(dialog.getByRole('radio', { name: 'devbox' })).toBeEnabled();
+});
+
+test('Move to host… with nothing reachable says why, names the fix, and sends nothing', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('alpha', 'Alpha', 'Goal.', 'Context.', '2026-09-16T12:00:00.000Z')], [], {
+    tailnetMachines: { ok: true, tailnet: 'example.github', domain: 'tail1234.ts.net', machines: [tailnetMachine('tylers-mac-mini', { state: 'offline' })] },
+  });
+  const submissions = await recordAgentSubmissions(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await page.getByTestId('orchestration-session-alpha').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Move to host…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Move Session to another host' });
+  await expect(dialog).toContainText('None of your other machines can take this Session right now. Open Pane on the machine you want');
+  await page.screenshot({ path: 'tmp/verify/session-move-host/03-nothing-reachable.png' });
+  await expect(dialog.getByRole('button', { name: 'Move Session' })).toBeDisabled();
+  expect(await submissions()).toEqual([]);
+});
+
+test('Move to host… is unavailable, with the reason, on a host paired with a code', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('alpha', 'Alpha', 'Goal.', 'Context.', '2026-09-16T12:00:00.000Z')], [], {
+    initialConfig: { remoteDaemon: { host: { config: { enabled: false, listenHost: '127.0.0.1', listenPort: 42137, pairingRequired: true, allowInsecureHttpOnLoopback: true }, clients: [] },
+      client: { mode: 'remote', activeProfileId: 'studio', profiles: [{ id: 'studio', label: 'Studio', baseUrl: 'https://studio.example:8443', token: 'paired', transport: 'http+sse' }] } } },
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await page.getByTestId('orchestration-session-alpha').click({ button: 'right' });
+  const item = page.getByRole('menuitem', { name: 'Move to host…' });
+  await expect(item).toHaveAttribute('aria-disabled', 'true');
+  await expect(item).toHaveAttribute('title', /pairing code, not over Tailscale/);
+  await item.click({ force: true });
+  await expect(page.getByRole('dialog', { name: 'Move Session to another host' })).toHaveCount(0);
+});
+
+test('Move to host… with Tailscale signed out passes on the reason and the fix', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('alpha', 'Alpha', 'Goal.', 'Context.', '2026-09-16T12:00:00.000Z')], [], {
+    tailnetMachines: { ok: false, reason: 'Tailscale is signed out', fix: 'Sign in to Tailscale, then try again.' },
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await page.getByTestId('orchestration-session-alpha').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Move to host…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Move Session to another host' });
+  await expect(dialog).toContainText('Tailscale is signed out. Sign in to Tailscale, then try again.');
+  await expect(dialog.getByRole('button', { name: 'Move Session' })).toBeDisabled();
+});

@@ -719,7 +719,7 @@ async function handOffSession({ parsed, sessionId, destination, machines, self, 
       goal: source.goal,
       context: `Handed off from Session "${source.name}" on ${self}, which stays there. The sending agent's handoff note is at ${notePath} on this machine: read it first, including its "Receiver instructions".`,
       nextAction: `Read the handoff note at ${notePath} and continue from it.`,
-      ...(launchCommand ? { launchCommand } : {}),
+      launchCommand,
     }], runpaneSessionResultSchema, REPORT_TIMEOUT_MS);
   } catch (error) {
     throw new RunpaneError(
