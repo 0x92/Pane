@@ -5,7 +5,7 @@ import { DOCS_BROWSER_PARTITION, SHARED_BROWSER_PARTITION } from '../../../share
 import { PaneError, reasonOf } from '../../../shared/paneError';
 
 /** Folders under `<userData>/Partitions` that Clear browser data keeps: the stores Pane still uses. */
-export const KEPT_PARTITION_FOLDERS: ReadonlySet<string> = new Set(
+const KEPT_PARTITION_FOLDERS: ReadonlySet<string> = new Set(
   [SHARED_BROWSER_PARTITION, DOCS_BROWSER_PARTITION].map(partition => partition.replace(/^persist:/, '')),
 );
 
