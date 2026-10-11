@@ -2265,6 +2265,251 @@ test('a Session dropped on another tiles beside it, survives a reload, and close
   await expect(page.getByTestId('orchestration-session-beta')).toBeVisible();
 });
 
+/**
+ * Drag a Session workspace tab by hand, the way the browser would.
+ *
+ * Like dragSessionOntoTile, one DataTransfer carries the gesture: dragstart on
+ * the tab, then dragover (and, unless `drop` is false, drop) on whatever is
+ * under each point, then dragend back on the tab. Returns whether each
+ * dragover was accepted, which is how the page tells the browser it is a drop
+ * target there (an unaccepted drop is refused and the tab snaps back).
+ */
+async function dragTab(
+  page: Page,
+  tab: Locator,
+  points: Array<{ x: number; y: number }>,
+  { drop = true }: { drop?: boolean } = {},
+): Promise<boolean[]> {
+  await tab.evaluate(source => {
+    const transfer = new DataTransfer();
+    // SAFETY: only this helper reads or writes that window property, as the DataTransfer it just created.
+    const store = window as typeof window & { __paneTabDrag?: { transfer: DataTransfer; source: Element } };
+    store.__paneTabDrag = { transfer, source };
+    source.dispatchEvent(new DragEvent('dragstart', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+  });
+  // The page gets a frame to mount its drop targets, as a real drag gives it.
+  await page.waitForTimeout(50);
+  const accepted: boolean[] = [];
+  const dispatchAt = (point: { x: number; y: number }, eventType: 'dragover' | 'drop') => page.evaluate(({ x, y, eventType }) => {
+    // SAFETY: the dragstart above parked the gesture on that window property.
+    const drag = (window as typeof window & { __paneTabDrag?: { transfer: DataTransfer } }).__paneTabDrag;
+    if (!drag) throw new Error('Missing drag payload');
+    const over = document.elementFromPoint(x, y);
+    if (!over) throw new Error('Nothing under the drop point');
+    return !over.dispatchEvent(new DragEvent(eventType, { dataTransfer: drag.transfer, bubbles: true, cancelable: true, clientX: x, clientY: y }));
+  }, { ...point, eventType });
+  for (const point of points) {
+    accepted.push(await dispatchAt(point, 'dragover'));
+    await page.waitForTimeout(50);
+  }
+  if (drop) {
+    const last = points[points.length - 1];
+    if (accepted[accepted.length - 1]) await dispatchAt(last, 'drop');
+  }
+  await page.evaluate(() => {
+    // SAFETY: the dragstart above parked the gesture on that window property.
+    const store = window as typeof window & { __paneTabDrag?: { transfer: DataTransfer; source: Element } };
+    const drag = store.__paneTabDrag;
+    delete store.__paneTabDrag;
+    drag?.source.dispatchEvent(new DragEvent('dragend', { dataTransfer: drag.transfer, bubbles: true }));
+  });
+  return accepted;
+}
+
+/** The middle of a box, or a point `inset` px in from one of its edges. */
+function pointIn(box: { x: number; y: number; width: number; height: number }, edge?: 'left' | 'right') {
+  const y = box.y + box.height / 2;
+  if (edge === 'left') return { x: box.x + 12, y };
+  if (edge === 'right') return { x: box.x + box.width - 12, y };
+  return { x: box.x + box.width / 2, y };
+}
+
+test('dragging a Session tab to the stage edge opens a split beside the conversation', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('tabdrag', 'Tab drag demo', '', '', new Date(0).toISOString())]);
+  await page.goto('/');
+  await page.getByTestId('orchestration-session-tabdrag').click();
+  const workspaceTabs = page.getByTestId('session-workspace-tabs');
+  const addTool = page.locator('.pane-chat-shell').getByRole('button', { name: 'Add tool', exact: true });
+  await expect(addTool).toBeEnabled();
+  await addTool.click();
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Browser' }).click();
+  await expect(workspaceTabs.getByRole('tab', { name: 'Browser' })).toHaveAttribute('aria-selected', 'true');
+  const agentTabName = await workspaceTabs.getByRole('tab').first().innerText();
+
+  const stage = await layoutBox(page.locator('.pane-chat-shell [role="tabpanel"]:visible'));
+  const accepted = await dragTab(page, workspaceTabs.getByRole('tab', { name: 'Browser' }), [pointIn(stage, 'right')]);
+  expect(accepted).toEqual([true]);
+
+  const groupStrips = page.locator('.panel-group-tab-bar');
+  await expect(groupStrips).toHaveCount(2);
+  await expect(workspaceTabs).toHaveCount(0);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveCount(1);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveText(agentTabName);
+  await expect(groupStrips.nth(1).getByRole('tab', { name: 'Browser' })).toHaveAttribute('aria-selected', 'true');
+});
+
+/** As the host does when an agent opens a page: the tab is created, then brought forward. */
+async function openAgentPage(page: Page, sessionKey: string, id: string, title: string): Promise<void> {
+  await page.evaluate(({ sessionKey, id, title }) => {
+    // SAFETY: installElectronApiMock adds these controls before the app loads.
+    const mockWindow = window as typeof window & { __paneTestElectronMock: { emitPanelCreated: (panel: ToolPanel) => void; emitPanelActivation: (request: PanelActivationRequest) => void } };
+    const mock = mockWindow.__paneTestElectronMock;
+    const now = new Date(0).toISOString();
+    const sessionId = `__orchestration_session_${sessionKey}terminal__`;
+    mock.emitPanelCreated({
+      id, sessionId, type: 'browser', title,
+      state: { isActive: true, hasBeenViewed: false, customState: { currentUrl: 'about:blank' } },
+      metadata: { createdAt: now, lastActiveAt: now, position: 5, openPlacement: 'split' },
+    });
+    mock.emitPanelActivation({ sessionId, panelId: id, placement: 'split' });
+  }, { sessionKey, id, title });
+}
+
+/** Opens a Session with a Browser tab beside the conversation and an agent page split to its right. */
+async function openSplitSession(page: Page, key: string, pages: string[]): Promise<{ groupStrips: Locator; stages: Locator }> {
+  await page.getByTestId(`orchestration-session-${key}`).click();
+  const addTool = page.locator('.pane-chat-shell').getByRole('button', { name: 'Add tool', exact: true });
+  await expect(addTool).toBeEnabled();
+  await addTool.click();
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Browser' }).click();
+  await expect(page.getByTestId('session-workspace-tabs').getByRole('tab', { name: 'Browser' })).toHaveAttribute('aria-selected', 'true');
+  for (const title of pages) await openAgentPage(page, key, title.replace('.html', '-page'), title);
+  const groupStrips = page.locator('.panel-group-tab-bar');
+  await expect(groupStrips).toHaveCount(2);
+  await expect(groupStrips.nth(1).getByRole('tab')).toHaveCount(pages.length);
+  return { groupStrips, stages: page.locator('.pane-chat-shell [role="tabpanel"]:visible') };
+}
+
+async function tabNames(strip: Locator): Promise<string[]> {
+  return strip.getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label') ?? ''));
+}
+
+test('dragging a Session tab onto the split beside it moves it there and survives leaving the Session', async ({ page }) => {
+  await installSessionsFixture(page, [
+    sessionFixture('movetab', 'Move tab demo', '', '', '2026-09-16T12:00:00.000Z'),
+    sessionFixture('elsewhere', 'Elsewhere', '', '', '2026-09-16T12:01:00.000Z'),
+  ]);
+  await page.goto('/');
+  const { groupStrips, stages } = await openSplitSession(page, 'movetab', ['plan.html']);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveCount(2);
+
+  const rightStage = await layoutBox(stages.nth(1));
+  const accepted = await dragTab(page, groupStrips.nth(0).getByRole('tab', { name: 'Browser' }), [pointIn(rightStage)]);
+  expect(accepted).toEqual([true]);
+
+  await expect(groupStrips.nth(1).getByRole('tab', { name: 'Browser' })).toHaveAttribute('aria-selected', 'true');
+  expect(await tabNames(groupStrips.nth(1))).toEqual(['plan.html', 'Browser']);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveCount(1);
+  await expect(groupStrips.nth(0).getByRole('tab')).toHaveAttribute('aria-selected', 'true');
+
+  // Leaving flushes the layout; coming back shows the tab where it was dropped.
+  await page.getByTestId('orchestration-session-elsewhere').click();
+  await expect(page.getByRole('heading', { name: 'Elsewhere', exact: true })).toBeAttached();
+  await page.getByTestId('orchestration-session-movetab').click();
+  await expect(groupStrips).toHaveCount(2);
+  expect(await tabNames(groupStrips.nth(1))).toEqual(['plan.html', 'Browser']);
+});
+
+test('a Session tab dropped on a strip lands at the marked slot, and reorders within its own strip', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('striptab', 'Strip demo', '', '', new Date(0).toISOString())]);
+  await page.goto('/');
+  const { groupStrips } = await openSplitSession(page, 'striptab', ['one.html', 'two.html']);
+  const right = groupStrips.nth(1);
+  expect(await tabNames(right)).toEqual(['one.html', 'two.html']);
+
+  // The left half of a tab inserts before it.
+  const two = await layoutBox(right.getByRole('tab', { name: 'two.html' }));
+  expect(await dragTab(page, groupStrips.nth(0).getByRole('tab', { name: 'Browser' }), [{ x: two.x + 6, y: two.y + two.height / 2 }])).toEqual([true]);
+  expect(await tabNames(right)).toEqual(['one.html', 'Browser', 'two.html']);
+  await expect(right.getByRole('tab', { name: 'Browser' })).toHaveAttribute('aria-selected', 'true');
+
+  // The empty space after the last tab appends.
+  const last = await layoutBox(right.getByRole('tab', { name: 'two.html' }));
+  expect(await dragTab(page, right.getByRole('tab', { name: 'Browser' }), [{ x: last.x + last.width + 8, y: last.y + last.height / 2 }])).toEqual([true]);
+  expect(await tabNames(right)).toEqual(['one.html', 'two.html', 'Browser']);
+
+  // Past the second tab's midpoint reorders without splitting.
+  const second = await layoutBox(right.getByRole('tab', { name: 'two.html' }));
+  expect(await dragTab(page, right.getByRole('tab', { name: 'one.html' }), [{ x: second.x + second.width - 6, y: second.y + second.height / 2 }])).toEqual([true]);
+  expect(await tabNames(right)).toEqual(['two.html', 'one.html', 'Browser']);
+  await expect(groupStrips).toHaveCount(2);
+});
+
+test('emptying a Session group by drag closes it, and an edge drop opens a new one', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('emptytab', 'Empty group demo', '', '', new Date(0).toISOString())]);
+  await page.goto('/');
+  const { groupStrips, stages } = await openSplitSession(page, 'emptytab', ['plan.html']);
+  const workspaceTabs = page.getByTestId('session-workspace-tabs');
+
+  // A group's only tab dropped on its own stage changes nothing.
+  const planStage = await layoutBox(stages.nth(1));
+  await dragTab(page, groupStrips.nth(1).getByRole('tab', { name: 'plan.html' }), [pointIn(planStage, 'left')]);
+  await expect(groupStrips).toHaveCount(2);
+
+  await dragTab(page, groupStrips.nth(1).getByRole('tab', { name: 'plan.html' }), [pointIn(await layoutBox(stages.nth(0)))]);
+  await expect(groupStrips).toHaveCount(0);
+  await expect(workspaceTabs.getByRole('tab')).toHaveCount(3);
+
+  const stage = await layoutBox(stages.first());
+  await dragTab(page, workspaceTabs.getByRole('tab', { name: 'plan.html' }), [pointIn(stage, 'left')]);
+  await expect(groupStrips).toHaveCount(2);
+  expect(await tabNames(groupStrips.nth(0))).toEqual(['plan.html']);
+});
+
+test('a cancelled Session tab drag leaves the layout and the stage as they were', async ({ page }) => {
+  await installSessionsFixture(page, [sessionFixture('canceltab', 'Cancel demo', '', '', new Date(0).toISOString())]);
+  await page.goto('/');
+  const { groupStrips, stages } = await openSplitSession(page, 'canceltab', ['plan.html']);
+  const browserTab = groupStrips.nth(0).getByRole('tab', { name: 'Browser' });
+  const rightStage = await layoutBox(stages.nth(1));
+
+  // Hovered, then released without a drop: only dragend arrives.
+  expect(await dragTab(page, browserTab, [pointIn(rightStage, 'right')], { drop: false })).toEqual([true]);
+  expect(await tabNames(groupStrips.nth(0))).toHaveLength(2);
+  expect(await tabNames(groupStrips.nth(1))).toEqual(['plan.html']);
+  // No drop target is left mounted: the stage takes clicks again and refuses a stray dragover.
+  const stray = await page.evaluate(({ x, y }) => {
+    const over = document.elementFromPoint(x, y);
+    return over ? !over.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: x, clientY: y })) : null;
+  }, pointIn(rightStage));
+  expect(stray).toBe(false);
+  await expect(browserTab.locator('xpath=ancestor-or-self::*[@draggable="true"][1]')).not.toHaveClass(/opacity-50/);
+});
+
+test('a tab dragged over a tiled neighbour Session is refused there and moves nothing', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await installSessionsFixture(page, [
+    sessionFixture('alpha', 'Alpha', 'Alpha goal.', 'Alpha context.', '2026-09-16T12:00:00.000Z'),
+    sessionFixture('beta', 'Beta', 'Beta goal.', 'Beta context.', '2026-09-16T12:01:00.000Z'),
+  ]);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await page.getByTestId('orchestration-session-alpha').click();
+  await expect(page.getByRole('heading', { name: 'Alpha', exact: true })).toBeAttached();
+  const tileLayout = await layoutBox(page.getByTestId('session-tile-layout'));
+  await dragSessionOntoTile(page, 'orchestration-session-beta', { x: tileLayout.x + tileLayout.width - 20, y: tileLayout.y + tileLayout.height / 2 });
+  const tiles = page.getByTestId('session-tile-header');
+  await expect(tiles).toHaveCount(2);
+  const strips = page.getByTestId('session-workspace-tabs');
+  await expect(strips).toHaveCount(2);
+  await expect(strips.nth(0).getByRole('tab')).toHaveCount(1);
+  await expect(strips.nth(1).getByRole('tab')).toHaveCount(1);
+
+  // The drag is live over Alpha's own stage, but Beta's stage and strip both
+  // refuse Alpha's tab: no target there, and nothing moves.
+  const stages = page.locator('[data-session-content-id] [role="tabpanel"]:visible');
+  const [alphaStage, betaStage] = [await layoutBox(stages.nth(0)), await layoutBox(stages.nth(1))];
+  const betaTab = await layoutBox(strips.nth(1).getByRole('tab'));
+  const accepted = await dragTab(page, strips.nth(0).getByRole('tab'), [
+    pointIn(alphaStage), pointIn(betaStage, 'right'), pointIn(betaStage), { x: betaTab.x + betaTab.width + 8, y: betaTab.y + betaTab.height / 2 },
+  ]);
+  expect(accepted).toEqual([true, false, false, false]);
+  await expect(strips.nth(0).getByRole('tab')).toHaveCount(1);
+  await expect(strips.nth(1).getByRole('tab')).toHaveCount(1);
+  await expect(page.locator('.panel-group-tab-bar')).toHaveCount(0);
+  await expect(tiles).toHaveCount(2);
+});
+
 test('New offers Session and Pane, keeps one dialog, and restores keyboard focus', async ({ page }) => {
   await installSessionsFixture(page, []);
   await page.goto('/');
