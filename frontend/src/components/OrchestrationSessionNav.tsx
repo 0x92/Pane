@@ -616,7 +616,12 @@ function SessionContextMenu({ menu, onClose, onArchive, onPin, onMoveToHost }: S
           aria-disabled={moveBlockedReason !== null}
           title={moveBlockedReason ?? undefined}
           className={cn(moveBlockedReason && 'cursor-not-allowed opacity-50')}
-          onClick={() => { if (!moveBlockedReason) onMoveToHost(); }}
+          onClick={() => {
+            if (moveBlockedReason) return;
+            // The dialog returns focus to whatever had it when it opened; make that the row, not this closing item.
+            menu?.trigger?.focus();
+            onMoveToHost();
+          }}
         >
           <span className="flex items-center gap-2"><ArrowRightLeft className="h-4 w-4" />Move to host…</span>
         </PopoverButton>

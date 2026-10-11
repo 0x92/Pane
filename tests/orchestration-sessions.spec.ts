@@ -2531,7 +2531,12 @@ test('Move to host… sits between Rename and Archive in the Session menu, by mo
   await page.keyboard.press('ArrowDown');
   await expect(menu.getByRole('menuitem', { name: 'Move to host…' })).toBeFocused();
   await page.screenshot({ path: 'tmp/verify/session-move-host/01-menu-keyboard.png' });
+  // Closing the dialog returns focus to the row the menu was opened from, not the page.
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog', { name: 'Move Session to another host' })).toBeVisible();
   await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Move Session to another host' })).toBeHidden();
+  await expect(row).toBeFocused();
 
   await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
   await page.getByTestId('compact-orchestration-session-alpha').click({ button: 'right' });
