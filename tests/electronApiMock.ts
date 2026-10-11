@@ -71,6 +71,12 @@ export type ElectronApiMockOptions = {
   gitCommands?: JsonObject;
   /** Seeded split layout for the session under test (panels:get-layout). */
   initialLayout?: JsonObject | null;
+  /**
+   * Keep this desktop's own per-Pane layouts (uiState pane layouts) as the
+   * real ui-state store does, across reloads. Off by default: every visit then
+   * opens on the host's layout, as on a desktop that has never shown the Pane.
+   */
+  rememberPaneLayouts?: boolean;
   initialCombinedDiff?: JsonObject | null;
   initialMissionControlAgents?: JsonObject[];
   initialTerminalStates?: Record<string, JsonObject>;
@@ -324,6 +330,19 @@ export async function installElectronApiMock(page: Page, options: ElectronApiMoc
     const writeSessionWorkspaceLayouts = (layouts: Record<string, JsonObject>): void => {
       window.localStorage.setItem(sessionWorkspaceLayoutKey, JSON.stringify(layouts));
     };
+    // This desktop's per-host, per-Pane layouts, kept like the tiling above.
+    const paneLayoutKey = '__pane_test_pane_layouts__';
+    const readPaneLayouts = (): Record<string, JsonObject> => {
+      const raw = window.localStorage.getItem(paneLayoutKey);
+      if (!raw) return {};
+      try {
+        // SAFETY: only this mock writes that key, with the record below.
+        return JSON.parse(raw) as Record<string, JsonObject>;
+      } catch {
+        return {};
+      }
+    };
+    const paneLayoutId = (hostId: string | null, paneId: string) => `${hostId ?? ''}/${paneId}`;
     const uiState = {
       expandedProjects: [] satisfies number[],
       expandedFolders: [] satisfies string[],
@@ -1254,6 +1273,16 @@ export async function installElectronApiMock(page: Page, options: ElectronApiMoc
           if (layout === null) delete layouts[hostId ?? ''];
           else layouts[hostId ?? ''] = clone(layout);
           writeSessionWorkspaceLayouts(layouts);
+          return success();
+        },
+        getPaneLayout: (hostId: string | null, paneId: string) =>
+          success(mockOptions.rememberPaneLayouts ? readPaneLayouts()[paneLayoutId(hostId, paneId)] ?? null : null),
+        savePaneLayout: (hostId: string | null, paneId: string, layout: JsonObject | null) => {
+          if (!mockOptions.rememberPaneLayouts) return success();
+          const layouts = readPaneLayouts();
+          if (layout === null) delete layouts[paneLayoutId(hostId, paneId)];
+          else layouts[paneLayoutId(hostId, paneId)] = clone(layout);
+          window.localStorage.setItem(paneLayoutKey, JSON.stringify(layouts));
           return success();
         },
         getNavigationMemory: (hostId: string | null) =>
