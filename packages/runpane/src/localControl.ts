@@ -1175,12 +1175,12 @@ const orchestrationSessionRecordSchema: BoundarySchema<OrchestrationSessionRecor
   createdAt: boundary.nonEmptyString,
   updatedAt: boundary.nonEmptyString,
 });
-const runpaneSessionListResultSchema: BoundarySchema<RunpaneSessionListResult> = boundary.object({
+export const runpaneSessionListResultSchema: BoundarySchema<RunpaneSessionListResult> = boundary.object({
   ok: boundary.literal(true),
   sessions: boundary.array(orchestrationSessionRecordSchema),
   selectedSessionId: boundary.optional(boundary.nonEmptyString),
 });
-const runpaneSessionResultSchema: BoundarySchema<RunpaneSessionResult> = boundary.object({
+export const runpaneSessionResultSchema: BoundarySchema<RunpaneSessionResult> = boundary.object({
   ok: boundary.literal(true),
   session: orchestrationSessionRecordSchema,
   panelId: boundary.optional(boundary.nonEmptyString),
