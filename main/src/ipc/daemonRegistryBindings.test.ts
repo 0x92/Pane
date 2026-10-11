@@ -119,6 +119,7 @@ const FILE_CHANNELS = [
 
 const PANEL_CHANNELS = [
   'panels:read-browser-file',
+  'panels:open-html-file',
   'panels:create',
   'panels:delete',
   'panels:update',
