@@ -634,6 +634,12 @@ tab in its group. For a single Session, the strips align directly below the
 window title bar. Closing the last tab in the side group returns to a single
 group. Layouts are saved with the Session.
 
+Drag any tab to rearrange the stage, as in a project Pane: drop it in the
+middle of a group to join that group, against an edge (the outer quarter) to
+split beside it, or between tabs on a strip to place it there. Dragging the
+last tab out of a group closes that group. In tiled Sessions a tab moves only
+within its own Session.
+
 ## Tiling Sessions side by side
 
 ![Two Sessions tiled side by side, both streaming](screenshots/session-tiling.png)
