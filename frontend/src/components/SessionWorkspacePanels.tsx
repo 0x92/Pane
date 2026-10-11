@@ -197,7 +197,8 @@ export function SessionWorkspacePanels({
       // Agent pages this desktop has never placed (opened while it showed
       // something else) go beside the conversation, inactive. Tabs already in
       // its remembered layout keep their place.
-      const splitIds = new Set(stage.filter(panel => panel.metadata?.openPlacement === 'split').map(panel => panel.id));
+      const splitIds = new Set<string>();
+      for (const panel of stage) if (panel.metadata?.openPlacement === 'split') splitIds.add(panel.id);
       applyLayout(reconcile(base, [agentPanelId, ...stage.map(panel => panel.id)], splitIds).layout);
       setLoaded(true);
     }).catch(error => {
