@@ -125,6 +125,7 @@ import { runRemoteSetupCli } from './daemon/setupRemoteHostCli';
 import { PowerSaveManager } from './services/powerSaveManager';
 import { warmShellPath } from './utils/shellPath';
 import { routeWebviewPopups } from './services/webviewPopups';
+import { hardenWebviewPreferences } from './services/webviewPreferences';
 import { APP_MENU_ACTION_CHANNEL, attachEditContextMenu, installApplicationMenu, type AppMenuAction } from './services/nativeMenus';
 import { fitBoundsToWorkAreas, parseSavedWindowState, trackWindowState, WINDOW_STATE_KEY } from './utils/windowState';
 
@@ -566,12 +567,9 @@ async function createWindow() {
     }
   });
 
-  // Security hook: strip preload and enforce sandbox on any webview tags
+  // Security and opacity hook for every webview tag, including the docs dialog
   mainWindow.webContents.on('will-attach-webview', (_event, webPreferences, _params) => {
-    delete webPreferences.preload;
-    webPreferences.nodeIntegration = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
+    hardenWebviewPreferences(webPreferences);
   });
 
   // Set up popup interception on webviews IMMEDIATELY when they attach (before any page loads).
