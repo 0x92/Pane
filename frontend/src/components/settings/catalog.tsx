@@ -109,10 +109,10 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   {
     id: 'privacy',
     label: 'Privacy',
-    description: 'Analytics and data-sharing choices.',
+    description: 'Analytics, data-sharing choices, and browser logins.',
     icon: Shield,
-    settingIds: ['analytics'],
-    aliases: ['analytics', 'telemetry', 'tracking'],
+    settingIds: ['analytics', 'browser-data'],
+    aliases: ['analytics', 'telemetry', 'tracking', 'browser', 'cookies', 'logins', 'sign out'],
   },
   {
     id: 'advanced',

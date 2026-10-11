@@ -517,10 +517,21 @@ describe('daemon registry IPC bindings', () => {
     expect(
       ipcMain.boundChannels.filter(
         channel => channel !== 'terminal:clipboard-paste-image' && channel !== 'browser-panel:register-webview'
-          && channel !== 'browser-panel:prepare-file',
+          && channel !== 'browser-panel:prepare-file' && channel !== 'browser-data:clear',
       ).sort(),
     ).toEqual([...PANEL_CHANNELS].sort());
     expect(registry.has('terminal:clipboard-paste-image')).toBe(false);
+  });
+
+  it('clears browser data on the machine showing the browser, never on a remote host', () => {
+    const registry = new PaneCommandRegistry();
+    const ipcMain = createIpcMainStub();
+
+    registerPanelHandlers(ipcMain, createServicesStub(), registry);
+
+    expect(ipcMain.boundChannels).toContain('browser-data:clear');
+    expect(registry.has('browser-data:clear')).toBe(false);
+    expect(isDaemonOwnedChannel('browser-data:clear')).toBe(false);
   });
 
   it('keeps local IDE launching outside the daemon registry surface', () => {
