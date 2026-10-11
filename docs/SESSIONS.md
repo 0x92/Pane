@@ -616,8 +616,8 @@ Sessions keeps their shells and files separate.
 
 Agents show pages and files with `runpane panels open --file <path>` or
 `--url <url>`. Files open in an editor tab with read-only previews for supported
-formats; HTML opens as read-only source. Use `--url` with an HTTP, HTTPS or file
-URL for an intentional live browser tab. By default the tab opens in split view:
+formats; HTML opens as editable source. Use `--url` with an HTTP, HTTPS or file
+URL for a live browser tab. By default the tab opens in split view:
 the first one splits the stage to the right of the conversation, and later ones
 join that side group as tabs.
 `--tab` opens it as a plain tab instead. Reopening the same file or URL reuses
