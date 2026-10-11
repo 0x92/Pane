@@ -1555,7 +1555,7 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--file",
         "value": "<path>",
-        "description": "File inside the Pane worktree to open; supported formats have read-only previews, including HTML source."
+        "description": "File inside the Pane worktree to open; supported formats have read-only previews, and HTML opens as editable source."
       },
       {
         "name": "--initial-input",
@@ -2559,7 +2559,7 @@ export const RUNPANE_CONTRACT = {
         "Usage:",
         "  runpane panels open [--pane <pane-id>] (--url <url>|--file <path>) [--title <title>] [--split|--tab] [--focus|--no-focus] [--source user|agent] --yes [--json]",
         "",
-        "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats, including HTML source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
+        "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats; HTML opens as editable source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
         "",
         "Options:",
         "  --pane <pane-id>              Pane to open the tab in; defaults to PANE_SESSION_ID.",
@@ -3762,7 +3762,7 @@ export const RUNPANE_CONTRACT = {
         "Usage:",
         "  python -m runpane panels open [--pane <pane-id>] (--url <url>|--file <path>) [--title <title>] [--split|--tab] [--focus|--no-focus] [--source user|agent] --yes [--json]",
         "",
-        "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats, including HTML source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
+        "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats; HTML opens as editable source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
         "",
         "Options:",
         "  --pane <pane-id>              Pane to open the tab in; defaults to PANE_SESSION_ID.",
@@ -4428,7 +4428,7 @@ export const RUNPANE_CONTRACT = {
       "`runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. A branch whose upstream is gone counts as pushed when a merged GitHub pull request has HEAD as its head (`safetyCheck.mergedViaPr`). Add `--dry-run` to inspect the same evidence without archiving. `--remove-worktree` applies the same check and removal to an adopted worktree; local branches are always kept. Successful archives report `worktreeCleanup: completed` once the worktree is gone from its path and from git; `trashDeletion: pending` means its files are still being deleted in the background. `runpane panes archive --session <id|name> --merged` archives every Session Pane that is clean and pushed or merged, and reports a reason for each skipped Pane.",
       "`runpane panes rename` trims and updates a Pane's display name without changing its worktree, branch, panels, or focus, and returns the updated pane summary.",
       "`runpane panes focus` raises the Pane window and selects a Pane (and optionally one of its panels) exactly like clicking it in the UI. Because it steals the user's window focus, run it only on an explicit user request to open, focus, show, or switch to a Pane; never focus a Pane proactively, the same doctrine that keeps `panes create` background/no-focus for `--source agent`.",
-      "`runpane panels open` opens a URL or a file from the Pane worktree as a tab in an existing Pane (default: the calling panel's Pane from `PANE_SESSION_ID`), in split view beside the agent unless `--tab` is passed. Files open in an editor tab with read-only previews for supported formats, including HTML source; an existing tab showing the same target is reused. It brings the tab forward for clients already showing that Pane, and never raises or focuses the Pane window or switches anyone's Pane.",
+      "`runpane panels open` opens a URL or a file from the Pane worktree as a tab in an existing Pane (default: the calling panel's Pane from `PANE_SESSION_ID`), in split view beside the agent unless `--tab` is passed. Files open in an editor tab with read-only previews for supported formats, and HTML opens as editable source; an existing tab showing the same target is reused. It brings the tab forward for clients already showing that Pane, and never raises or focuses the Pane window or switches anyone's Pane.",
       "`runpane panels list` lists tool panels inside one Pane session.",
       "`runpane panels output` reads bounded recent terminal output from one panel and strips common terminal control noise for agent use.",
       "`runpane panels input` sends exact input bytes to one terminal panel. Prefer `--input-file` for newlines, Ctrl-C, quotes, or shell-sensitive text.",
@@ -11822,7 +11822,7 @@ export const RUNPANE_CONTRACT = {
       "panels open": {
         "name": "panels open",
         "summary": "Open a URL or file as a browser/editor tab in a Pane, in split view beside the agent by default.",
-        "details": "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats, including HTML source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
+        "details": "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats; HTML opens as editable source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -11842,7 +11842,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--file",
             "value": "<path>",
             "required": false,
-            "description": "File inside the Pane worktree, relative or absolute. WSL panes accept Linux, Windows drive, and WSL UNC paths without manual conversion. Files open in an editor tab; supported formats have read-only previews, including HTML source."
+            "description": "File inside the Pane worktree, relative or absolute. WSL panes accept Linux, Windows drive, and WSL UNC paths without manual conversion. Files open in an editor tab; supported formats have read-only previews, and HTML opens as editable source."
           },
           {
             "name": "--title",
@@ -11898,7 +11898,7 @@ export const RUNPANE_CONTRACT = {
         ],
         "notes": [
           "Prefer this over opening the system browser when showing the user a page, plan, report, or dev server.",
-          "Write plans and reports as self-contained HTML files. Use --url with a file URL to render a page in a live browser, or --file to inspect its read-only source; reopening the same target reuses its tab.",
+          "Write plans and reports as self-contained HTML files. Use --url with a file URL to render a page in a live browser, or --file to open its editable source; reopening the same target reuses its tab.",
           "Opening a tab does not steal window focus; use `panes focus` only on explicit user request."
         ]
       },
