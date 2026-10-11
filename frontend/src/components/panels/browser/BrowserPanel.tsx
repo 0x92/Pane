@@ -4,9 +4,8 @@ import type { ToolPanel, BrowserPanelState } from '../../../../../shared/types/p
 import { cn } from '../../../utils/cn';
 import { panelApi } from '../../../services/panelApi';
 import { usePanelStore } from '../../../stores/panelStore';
-import { useSessionStore } from '../../../stores/sessionStore';
 import { useResizable } from '../../../hooks/useResizable';
-import { normalizeUrl } from './browserUrl';
+import { normalizeUrl, WEBVIEW_ALLOW_POPUPS, webviewPartition } from './browserUrl';
 import { hasFileProtocol, localTargetOf, loopbackPortOf, remapLoopbackPort, type LocalTarget } from '../../../../../shared/utils/browserUrl';
 import { useListeningPorts } from '../../../hooks/useListeningPorts';
 import { useConfigStore } from '../../../stores/configStore';
@@ -84,7 +83,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ panel, isActive }) => {
   // loaded from this computer, even briefly while connection state is fetched.
   useEffect(() => {
     if (!isFileUrl && !isHostFileUrl) {
-      // A host-authored HTTP panel uses ordinary project cookies and writes.
+      // A host-authored HTTP panel uses the shared login store and ordinary writes.
       // Client-only links away from a file keep the host's file entry grant.
       remoteFileRef.current = false;
       setFileSession(null);
@@ -111,13 +110,6 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ panel, isActive }) => {
 
   const addPanel = usePanelStore((state) => state.addPanel);
   const setActivePanelInStore = usePanelStore((state) => state.setActivePanel);
-
-  // Look up the project ID for this session so all browser panels in the same project
-  // share a single partition (cookies, localStorage, auth state persist across sessions).
-  const projectId = useSessionStore((state) => {
-    const session = state.sessions.find(s => s.id === panel.sessionId);
-    return session?.projectId;
-  });
 
   // Resizable DevTools column
   const { width: devToolsWidth, startResize: startDevToolsResize } = useResizable({
@@ -633,8 +625,8 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ panel, isActive }) => {
             key={fileSession?.partition ?? 'local'}
             ref={webviewRef}
             src={target.url}
-            partition={fileSession?.partition ?? `persist:project-${projectId ?? panel.sessionId}`}
-            allowpopups
+            partition={webviewPartition(fileSession)}
+            {...WEBVIEW_ALLOW_POPUPS}
             className="flex-1 border-0"
             style={{ display: 'inline-flex' }}
           />}
