@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { ArrowLeft, ArrowRight, RotateCw, Loader2, ChevronDown, Copy, Check, Code } from 'lucide-react';
+import { ArrowLeft, ArrowRight, RotateCw, Loader2, ChevronDown, Copy, Check, FileCode } from 'lucide-react';
 import type { ToolPanel, BrowserPanelState } from '../../../../../shared/types/panels';
 import { cn } from '../../../utils/cn';
 import { panelApi } from '../../../services/panelApi';
@@ -577,11 +577,14 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ panel, isActive }) => {
           <button
             type="button"
             onClick={handleViewSource}
-            className="p-1 rounded hover:bg-surface-hover transition-colors"
-            title={`View source of ${sourceFile}`}
-            aria-label="View source"
+            className={cn(
+              'flex flex-shrink-0 items-center gap-1 rounded border border-border-primary px-2 py-1 text-xs text-text-secondary',
+              'transition-colors hover:bg-surface-hover hover:text-text-primary'
+            )}
+            title={`Open ${sourceFile} in the editor`}
           >
-            <Code className="w-3.5 h-3.5" />
+            <FileCode className="h-3 w-3" />
+            View source
           </button>
         )}
         {url && (
