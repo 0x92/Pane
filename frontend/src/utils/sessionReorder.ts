@@ -9,8 +9,9 @@ export function dropOrder(ids: readonly string[], movedId: string, drop: Session
   if (movedId === drop.targetId || !ids.includes(movedId) || !ids.includes(drop.targetId)) return null;
   const rest = ids.filter(id => id !== movedId);
   const at = rest.indexOf(drop.targetId) + (drop.edge === 'after' ? 1 : 0);
-  const next = [...rest.slice(0, at), movedId, ...rest.slice(at)];
-  return next.every((id, index) => id === ids[index]) ? null : next;
+  // Landing at its own index leaves every Session where it was.
+  if (at === ids.indexOf(movedId)) return null;
+  return [...rest.slice(0, at), movedId, ...rest.slice(at)];
 }
 
 /** The list's order after moving `id` one place (`step` -1 up, 1 down), or null at either end. */
