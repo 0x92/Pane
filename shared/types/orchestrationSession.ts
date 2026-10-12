@@ -118,6 +118,12 @@ export interface OrchestrationSessionRecord {
 export interface OrchestrationSessionStoreData {
   version: typeof ORCHESTRATION_SESSION_STORE_VERSION;
   selectedSessionId?: string;
+  /**
+   * The order people arranged Sessions in, oldest first when absent. Sessions it does not name
+   * (new ones, or any written by a Pane that predates ordering) follow it by creation time.
+   * Optional so the store stays at version 1: an older Pane ignores it and drops it on its next write.
+   */
+  order?: string[];
   sessions: OrchestrationSessionRecord[];
 }
 

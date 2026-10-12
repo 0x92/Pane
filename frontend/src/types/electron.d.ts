@@ -169,6 +169,8 @@ interface ElectronAPI {
     create: (input: OrchestrationSessionCreateInput) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     get: (selector: OrchestrationSessionSelector) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     update: (selector: OrchestrationSessionSelector, input: OrchestrationSessionUpdateInput) => Promise<IPCResponse<OrchestrationSessionRecord>>;
+    /** Saves the order of the listed Sessions among the places they hold; leaves every Session record unchanged. */
+    reorder: (sessionIds: string[]) => Promise<IPCResponse<OrchestrationSessionListResult>>;
     setAgent: (selector: OrchestrationSessionSelector, agent: PaneChatAgent) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     associate: (selector: OrchestrationSessionSelector, association: OrchestrationAssociationInput) => Promise<IPCResponse<OrchestrationSessionRecord>>;
     detach: (selector: OrchestrationSessionSelector, paneId?: string) => Promise<IPCResponse<OrchestrationSessionRecord>>;

@@ -204,6 +204,9 @@ async function installSessionsFixture(
     const selectedIds: string[] = [];
     let overviewCalls = 0;
     let nextOrchestrationUpdateError: string | null = null;
+    // A failed answer, or a thrown error the way an older host's refusal reaches the renderer.
+    let nextReorderFailure: { message: string; thrown: boolean } | null = null;
+    const reorderCalls: string[][] = [];
     let nextMembershipRejection: string | null = null;
     const rejectPendingMembership = () => {
       if (nextMembershipRejection === null) return;
@@ -371,6 +374,23 @@ async function installSessionsFixture(
         changed('updated', previousSelectedSessionId !== selectedSessionId);
         return success(clone(record));
       },
+      reorder: async (sessionIds: string[]) => {
+        reorderCalls.push([...sessionIds]);
+        if (nextReorderFailure) {
+          const failure = nextReorderFailure;
+          nextReorderFailure = null;
+          if (failure.thrown) throw new Error(failure.message);
+          return { success: false, error: failure.message };
+        }
+        // Like the host: the listed Sessions trade the places they hold.
+        const listed = [...new Set(sessionIds)].filter(id => sessions.some(session => session.id === id));
+        const byId = new Map(sessions.map(session => [session.id, session]));
+        let next = 0;
+        sessions = sessions.map(session => listed.includes(session.id) ? byId.get(listed[next++]) ?? session : session);
+        persistState();
+        changed('reordered');
+        return success({ sessions: clone(sessions), selectedSessionId });
+      },
       setAgent: async (selector: Selector, agent: SessionRecord['agent']) => {
         const record = find(selector);
         record.agent = agent;
@@ -435,6 +455,8 @@ async function installSessionsFixture(
       getOrchestrationSelectedSessionId: () => selectedSessionId,
       getOrchestrationRecord: (sessionId: string) => clone(sessions.find(session => session.id === sessionId) ?? null),
       failNextOrchestrationUpdate: (message: string) => { nextOrchestrationUpdateError = message; },
+      failNextOrchestrationReorder: (message: string, thrown = false) => { nextReorderFailure = { message, thrown }; },
+      getOrchestrationReorderCalls: () => clone(reorderCalls),
       // Stands in for a lost transport: the next associate or detach rejects instead of answering.
       rejectNextOrchestrationMembership: (message: string) => { nextMembershipRejection = message; },
       // Stands in for another host's Sessions: the list changes without an event.
@@ -2813,4 +2835,293 @@ test('reopening a page that sits beside the Session conversation moves it into t
   await expect(groupStrips).toHaveCount(2);
   expect(await tabNames(groupStrips.nth(1))).toEqual(['notes.html']);
   await expect(groupStrips.nth(1).getByRole('tab', { name: 'notes.html' })).toHaveAttribute('aria-selected', 'true');
+});
+
+type ReorderFixtureWindow = typeof window & {
+  __paneTestElectronMock: {
+    getOrchestrationReorderCalls: () => string[][];
+    failNextOrchestrationReorder: (message: string, thrown?: boolean) => void;
+  };
+};
+
+const fourSessions = () => [
+  sessionFixture('a', 'Alpha', '', '', '2026-09-16T12:00:00.000Z'),
+  sessionFixture('b', 'Bravo', '', '', '2026-09-16T12:01:00.000Z'),
+  sessionFixture('c', 'Charlie', '', '', '2026-09-16T12:02:00.000Z'),
+  sessionFixture('d', 'Delta', '', '', '2026-09-16T12:03:00.000Z'),
+];
+
+/** The Session names a sidebar list shows, top to bottom. */
+async function listedSessions(page: Page, listId: 'orchestration-sessions-list' | 'orchestration-pinned-list'): Promise<string[]> {
+  return page.locator(`#${listId} button[aria-label^="Open Session "]`).evaluateAll(nodes => (
+    nodes.map(node => (node.getAttribute('aria-label') ?? '').replace('Open Session ', ''))
+  ));
+}
+
+async function reorderCalls(page: Page): Promise<string[][]> {
+  // SAFETY: installSessionsFixture adds this control before the app loads.
+  return page.evaluate(() => (window as ReorderFixtureWindow).__paneTestElectronMock.getOrchestrationReorderCalls());
+}
+
+/**
+ * Drags a Session row onto the top or bottom edge of another element, the way a real drag reaches
+ * the page: dragstart, a dragover (then a frame for the drop line), the drop, and dragend.
+ */
+async function dragSessionOnto(
+  page: Page,
+  sourceTestId: string,
+  target: Locator,
+  edge: 'top' | 'bottom',
+  whileOver?: () => Promise<void>,
+): Promise<void> {
+  const box = await layoutBox(target);
+  const point = { x: box.x + box.width / 2, y: edge === 'top' ? box.y + 3 : box.y + box.height - 3 };
+  await page.evaluate((sourceId: string) => {
+    const source = document.querySelector(`[data-testid="${sourceId}"]`);
+    if (!source) throw new Error(`Missing drag source ${sourceId}`);
+    const transfer = new DataTransfer();
+    // SAFETY: only this helper reads or writes that window property, as the DataTransfer it just created.
+    (window as typeof window & { __paneDragTransfer?: DataTransfer }).__paneDragTransfer = transfer;
+    source.dispatchEvent(new DragEvent('dragstart', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+  }, sourceTestId);
+  const dispatchAt = async (eventType: 'dragover' | 'drop') => {
+    await page.evaluate(({ x, y, type }: { x: number; y: number; type: string }) => {
+      // SAFETY: the dragstart above parked this DataTransfer on that window property.
+      const transfer = (window as typeof window & { __paneDragTransfer?: DataTransfer }).__paneDragTransfer;
+      const over = document.elementFromPoint(x, y);
+      if (!transfer || !over) throw new Error('Missing drag payload or drop point');
+      over.dispatchEvent(new DragEvent(type, { dataTransfer: transfer, bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    }, { ...point, type: eventType });
+  };
+  await dispatchAt('dragover');
+  await page.waitForTimeout(50);
+  await dispatchAt('dragover');
+  if (whileOver) await whileOver();
+  await dispatchAt('drop');
+  await page.evaluate((sourceId: string) => {
+    // SAFETY: the dragstart above parked this DataTransfer on that window property.
+    const transfer = (window as typeof window & { __paneDragTransfer?: DataTransfer }).__paneDragTransfer;
+    document.querySelector(`[data-testid="${sourceId}"]`)?.dispatchEvent(new DragEvent('dragend', { dataTransfer: transfer, bubbles: true }));
+  }, sourceTestId);
+}
+
+test('a Session dragged in the Sessions list stays where it is dropped, across a reload', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await installSessionsFixture(page, fourSessions());
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await expect(page.getByTestId('orchestration-session-a')).toBeVisible({ timeout: 10_000 });
+  expect(await listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']);
+
+  await dragSessionOnto(page, 'orchestration-session-d', page.getByTestId('orchestration-session-b'), 'top', async () => {
+    const line = page.getByTestId('session-drop-indicator');
+    await expect(line).toBeVisible();
+    await page.screenshot({ path: 'tmp/verify/session-reorder/01-drop-line.png' });
+    // The line sits between Alpha and Bravo without moving either row.
+    const alpha = await layoutBox(page.getByTestId('orchestration-session-a'));
+    const bravo = await layoutBox(page.getByTestId('orchestration-session-b'));
+    const drawn = await layoutBox(line);
+    expect(drawn.y).toBeGreaterThanOrEqual(alpha.y + alpha.height - 3);
+    expect(drawn.y + drawn.height).toBeLessThanOrEqual(bravo.y + 3);
+    expect(bravo.y - alpha.y).toBeLessThan(alpha.height + 2);
+  });
+
+  await expect.poll(() => listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Delta', 'Bravo', 'Charlie']);
+  await expect(page.getByTestId('session-drop-indicator')).toHaveCount(0);
+  expect(await reorderCalls(page)).toEqual([['a', 'd', 'b', 'c']]);
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('orchestration-session-a')).toBeVisible({ timeout: 10_000 });
+  expect(await listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Delta', 'Bravo', 'Charlie']);
+});
+
+test('Pinned Sessions reorder among themselves, and a drag across the Pinned line does nothing', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const [alpha, bravo, charlie, delta] = fourSessions();
+  await installSessionsFixture(page, [alpha, { ...delta, isPinned: true }, { ...bravo, isPinned: true }, charlie]);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await expect(page.getByTestId('orchestration-pinned-session-b')).toBeVisible({ timeout: 10_000 });
+  expect(await listedSessions(page, 'orchestration-pinned-list')).toEqual(['Delta', 'Bravo']);
+
+  await dragSessionOnto(page, 'orchestration-pinned-session-b', page.getByTestId('orchestration-pinned-session-d'), 'top');
+
+  await expect.poll(() => listedSessions(page, 'orchestration-pinned-list')).toEqual(['Bravo', 'Delta']);
+  expect(await listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Bravo', 'Delta', 'Charlie']);
+  expect(await reorderCalls(page)).toEqual([['b', 'd']]);
+
+  // Across the Pinned line, either way: no drop line, no request, no pin change.
+  await dragSessionOnto(page, 'orchestration-pinned-session-b', page.getByTestId('orchestration-session-c'), 'bottom', async () => {
+    await expect(page.getByTestId('session-drop-indicator')).toHaveCount(0);
+  });
+  await dragSessionOnto(page, 'orchestration-session-c', page.getByTestId('orchestration-pinned-session-b'), 'top', async () => {
+    await expect(page.getByTestId('session-drop-indicator')).toHaveCount(0);
+  });
+  await page.screenshot({ path: 'tmp/verify/session-reorder/02-pinned.png' });
+  expect(await reorderCalls(page)).toHaveLength(1);
+  expect(await listedSessions(page, 'orchestration-pinned-list')).toEqual(['Bravo', 'Delta']);
+  expect(await listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Bravo', 'Delta', 'Charlie']);
+});
+
+test('a Session moves with its Panes, which stay under it as they were', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const [alpha, bravo, charlie] = fourSessions();
+  await installSessionsFixture(page, [
+    { ...alpha, associations: [{ paneId: 'pane-alpha-worker', panelIds: [], attachedAt: '2026-09-16T12:00:00.000Z' }] },
+    bravo,
+    charlie,
+  ], [paneFixture('pane-alpha-worker', 'Alpha worker')]);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  const worker = page.locator('#orchestration-session-panes-sessions-a').getByText('Alpha worker');
+  await expect(worker).toBeVisible({ timeout: 10_000 });
+
+  await dragSessionOnto(page, 'orchestration-session-a', page.getByTestId('orchestration-session-c'), 'bottom');
+
+  await expect.poll(() => listedSessions(page, 'orchestration-sessions-list')).toEqual(['Bravo', 'Charlie', 'Alpha']);
+  await expect(worker).toBeVisible();
+  const alphaRow = await layoutBox(page.getByTestId('orchestration-session-a'));
+  const workerRow = await layoutBox(worker);
+  expect(workerRow.y).toBeGreaterThan(alphaRow.y);
+  await expect(page.getByRole('button', { name: 'Collapse Alpha Panes' })).toHaveAttribute('aria-expanded', 'true');
+});
+
+test('the compact rail reorders Sessions by drag, and the tree shows the same order', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await installSessionsFixture(page, fourSessions());
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await expect(page.getByTestId('orchestration-session-a')).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await expect(page.getByTestId('compact-orchestration-session-c')).toBeVisible();
+
+  await dragSessionOnto(page, 'compact-orchestration-session-c', page.getByTestId('compact-orchestration-session-a'), 'top', async () => {
+    await page.screenshot({ path: 'tmp/verify/session-reorder/03-rail-drop.png' });
+  });
+
+  const railOrder = () => page.locator('[data-testid^="compact-orchestration-session-"]').evaluateAll(nodes => nodes.map(node => node.getAttribute('title')));
+  await expect.poll(railOrder).toEqual(['Charlie', 'Alpha', 'Bravo', 'Delta']);
+  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+  await expect.poll(() => listedSessions(page, 'orchestration-sessions-list')).toEqual(['Charlie', 'Alpha', 'Bravo', 'Delta']);
+});
+
+test('Alt+Up and Alt+Down move a focused Session one place and say where it went', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const [alpha, bravo, charlie, delta] = fourSessions();
+  await installSessionsFixture(page, [alpha, { ...bravo, isPinned: true }, charlie, { ...delta, isPinned: true }]);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  const bravoRow = page.getByTestId('orchestration-session-b');
+  await expect(bravoRow).toBeVisible({ timeout: 10_000 });
+
+  await bravoRow.focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect.poll(() => listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Charlie', 'Bravo', 'Delta']);
+  await expect(bravoRow).toBeFocused();
+  await expect(page.getByRole('status').filter({ hasText: 'Moved Bravo to position 3 of 4' })).toBeAttached();
+
+  // The ends do nothing.
+  const alphaRow = page.getByTestId('orchestration-session-a');
+  await alphaRow.focus();
+  await page.keyboard.press('Alt+ArrowUp');
+  await page.getByTestId('orchestration-session-d').focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  expect(await reorderCalls(page)).toHaveLength(1);
+
+  // In Pinned, the keys move among pinned Sessions only.
+  const pinnedDelta = page.getByTestId('orchestration-pinned-session-d');
+  await pinnedDelta.focus();
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect.poll(() => listedSessions(page, 'orchestration-pinned-list')).toEqual(['Delta', 'Bravo']);
+  await expect(pinnedDelta).toBeFocused();
+  expect((await reorderCalls(page)).at(-1)).toEqual(['d', 'b']);
+
+  // The same keys work on a focused rail item.
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  const railAlpha = page.getByTestId('compact-orchestration-session-a');
+  await railAlpha.focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect(railAlpha).toBeFocused();
+  await expect.poll(() => page.locator('[data-testid^="compact-orchestration-session-"]').evaluateAll(nodes => nodes.map(node => node.getAttribute('title'))))
+    .toEqual(['Charlie', 'Alpha', 'Delta', 'Bravo']);
+});
+
+test('a reorder the host does not save snaps back and says what to do', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await installSessionsFixture(page, fourSessions());
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await expect(page.getByTestId('orchestration-session-a')).toBeVisible({ timeout: 10_000 });
+
+  // SAFETY: installSessionsFixture adds this control before the app loads.
+  await page.evaluate(() => (window as ReorderFixtureWindow).__paneTestElectronMock.failNextOrchestrationReorder('Could not write orchestration-sessions.json: disk full.'));
+  await dragSessionOnto(page, 'orchestration-session-d', page.getByTestId('orchestration-session-a'), 'top');
+  const banner = page.locator('#orchestration-sessions-list [role="alert"]');
+  await expect(banner).toContainText('The Session order was not saved');
+  await expect(banner).toContainText('disk full');
+  expect(await listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']);
+
+  // An older host refuses the request outright; the message names that host and the update.
+  // SAFETY: installSessionsFixture adds this control before the app loads.
+  await page.evaluate(() => (window as ReorderFixtureWindow).__paneTestElectronMock.failNextOrchestrationReorder(
+    'Error invoking remote method \'daemon:invoke\': Error: Mac Mini runs an older Pane that does not have this command (orchestration-sessions:reorder). Nothing was changed. Next: Update Pane on Mac Mini (run `runpane update` there), then try again.',
+    true,
+  ));
+  await page.getByTestId('orchestration-session-b').focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect(banner).toContainText('Mac Mini runs an older Pane');
+  await expect(banner).toContainText('Update Pane on Mac Mini');
+  await expect(banner).not.toContainText('Error invoking remote method');
+  await page.screenshot({ path: 'tmp/verify/session-reorder/04-error-banner.png' });
+  expect(await listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']);
+
+  // The rail shows its error marker for the same failure.
+  // SAFETY: installSessionsFixture adds this control before the app loads.
+  await page.evaluate(() => (window as ReorderFixtureWindow).__paneTestElectronMock.failNextOrchestrationReorder('disk full'));
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await page.getByTestId('compact-orchestration-session-a').focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect(page.getByRole('alert', { name: /The Session order was not saved/ })).toBeVisible();
+});
+
+test('an archived Session restored with Undo returns to its place, and tiling a Session leaves the order alone', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const [alpha, bravo, charlie, delta] = fourSessions();
+  await installSessionsFixture(page, [alpha, delta, bravo, charlie]);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await expect(page.getByTestId('orchestration-session-b')).toBeVisible({ timeout: 10_000 });
+
+  await page.getByTestId('orchestration-session-b').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Archive Session', exact: true }).click();
+  await expect.poll(() => listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Delta', 'Charlie']);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect.poll(() => listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Delta', 'Bravo', 'Charlie']);
+
+  // Tiling uses the same drag; dropping on the workspace tiles and the sidebar order stays.
+  await page.getByTestId('orchestration-session-a').click();
+  await expect(page.getByRole('heading', { name: 'Alpha', exact: true })).toBeAttached();
+  const stage = await layoutBox(page.getByTestId('session-tile-layout'));
+  await dragSessionOntoTile(page, 'orchestration-session-c', { x: stage.x + stage.width - 20, y: stage.y + stage.height / 2 });
+  await expect(page.getByTestId('session-tile-header')).toHaveCount(2);
+  expect(await listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Delta', 'Bravo', 'Charlie']);
+  expect(await reorderCalls(page)).toEqual([]);
+});
+
+test('a real mouse drag reorders, in the tree and in the rail', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await installSessionsFixture(page, fourSessions());
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  await expect(page.getByTestId('orchestration-session-a')).toBeVisible({ timeout: 10_000 });
+
+  // Browser-generated drag events, unlike dispatched ones, let React re-render between the
+  // window's drop listener and the row's own drop handler.
+  await page.getByTestId('orchestration-session-d').dragTo(page.getByTestId('orchestration-session-b'), { targetPosition: { x: 40, y: 3 } });
+  await expect.poll(() => listedSessions(page, 'orchestration-sessions-list')).toEqual(['Alpha', 'Delta', 'Bravo', 'Charlie']);
+
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+  await page.getByTestId('compact-orchestration-session-c').dragTo(page.getByTestId('compact-orchestration-session-a'), { targetPosition: { x: 18, y: 2 } });
+  await expect.poll(() => page.locator('[data-testid^="compact-orchestration-session-"]').evaluateAll(nodes => nodes.map(node => node.getAttribute('title'))))
+    .toEqual(['Charlie', 'Alpha', 'Delta', 'Bravo']);
 });
