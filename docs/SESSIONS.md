@@ -161,6 +161,14 @@ workspace still tiles it.
 Click a Session row to open its chat, or use **Switch to Session: <name>** in the
 command palette (`⌘⇧P` / `Ctrl+Shift+P`), which also has **New Session**. A Session with associated Panes shows a
 chevron that expands or collapses them; a Session without Panes shows none.
+Every Session starts collapsed, including a new one and one that just got its
+first Pane, until you press its chevron. Opening the Session's chat, an agent
+adding Panes, or `runpane` focusing one of its Panes leaves it collapsed. Each
+device remembers the Sessions you opened, separately for each host: the
+desktop in its own settings, the remote web app (PWA) in browser storage
+(`pane.remotePwa.expandedSessions@<host id>`). Opening a Session under Pinned
+opens it under Sessions too. The native iOS and Android app does not follow
+this yet: its Sessions start expanded and it forgets on restart.
 Child Pane rows are indented beyond the Session chat icon and keep the ordinary
 Pane actions. Create Pane, opened while a Session is showing, has an
 **Add to <Session>** checkbox, on by default, that files the new Pane under that

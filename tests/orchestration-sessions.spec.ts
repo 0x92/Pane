@@ -982,24 +982,29 @@ test('Sessions group live managed Panes while preserving the focused Pane rows',
   await expect(page.getByTestId('orchestration-session-evolution')).toContainText('Pane evolution');
   await expect(page.getByTestId('orchestration-session-evolution')).toContainText('1');
   await expect(page.getByTestId('orchestration-session-doozy')).toContainText('Doozy fixes');
-  await expect(page.getByRole('button', { name: 'Pane/pane chat to session', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Pane/managed pane sidebar', exact: true })).toBeVisible();
-  await expect(page.getByText('missing-pane', { exact: true })).toHaveCount(0);
+  // Sessions start collapsed until you open them.
+  await expect(page.getByRole('button', { name: 'Expand Pane evolution Panes' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Expand Doozy fixes Panes' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Pane/pane chat to session', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Pane/managed pane sidebar', exact: true })).toHaveCount(0);
   await expect(page.getByTestId('sidebar').getByRole('group', { name: 'Pinned', exact: true }).getByText('Pinned pane', { exact: true })).toBeVisible();
 
   const evolutionRow = page.getByTestId('orchestration-session-evolution');
   const childrenToggle = page.getByRole('button', { name: 'Collapse Pane evolution Panes' });
+  // Opening a Session's view does not expand it; only its chevron does.
+  await evolutionRow.click();
+  await expect(page.getByRole('button', { name: 'Expand Pane evolution Panes' })).toHaveAttribute('aria-expanded', 'false');
+  await page.getByRole('button', { name: 'Expand Pane evolution Panes' }).press('Enter');
   await expect(childrenToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('button', { name: 'Pane/pane chat to session', exact: true })).toBeVisible();
+  await expect(page.getByText('missing-pane', { exact: true })).toHaveCount(0);
   await evolutionRow.click();
   await expect(childrenToggle).toHaveAttribute('aria-expanded', 'true');
   await childrenToggle.click();
   await expect(page.getByRole('button', { name: 'Expand Pane evolution Panes' })).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByRole('button', { name: 'Pane/pane chat to session', exact: true })).toBeHidden();
-  await evolutionRow.click();
-  await expect(page.getByRole('button', { name: 'Expand Pane evolution Panes' })).toHaveAttribute('aria-expanded', 'false');
-  await page.getByRole('button', { name: 'Expand Pane evolution Panes' }).press('Enter');
+  await page.getByRole('button', { name: 'Expand Pane evolution Panes' }).click();
   await expect(childrenToggle).toHaveAttribute('aria-expanded', 'true');
-  await page.getByRole('button', { name: 'Collapse Doozy fixes Panes' }).click();
 
   // Expansion choices survive the sidebar switching to the compact rail and back.
   await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
@@ -1067,6 +1072,87 @@ test('Sessions group live managed Panes while preserving the focused Pane rows',
   await doozyRow.click();
   await expect(selectedRow(repository)).not.toHaveClass(/bg-surface-selected/);
   await expect(selectedRow(child)).not.toHaveClass(/bg-surface-selected/);
+});
+
+test('Sessions stay collapsed until you open one, and this computer remembers it per host', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const association = (paneId: string) => [{ paneId, panelIds: [], attachedAt: '2026-09-16T12:00:00.000Z' }];
+  await installSessionsFixture(page, [
+    sessionFixture('alpha', 'Alpha', 'Goal.', 'Context.', '2026-09-16T12:00:00.000Z', association('pane-alpha'), false, true),
+    sessionFixture('beta', 'Beta', 'Goal.', 'Context.', '2026-09-16T12:01:00.000Z', association('pane-beta')),
+    sessionFixture('charlie', 'Charlie', 'Goal.', 'Context.', '2026-09-16T12:02:00.000Z', association('pane-charlie')),
+  ], [
+    paneFixture('pane-alpha', 'Alpha worker'),
+    paneFixture('pane-beta', 'Beta worker'),
+    paneFixture('pane-charlie', 'Charlie worker'),
+    paneFixture('pane-charlie-new', 'Charlie new worker'),
+  ]);
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await dismissStartupDialogs(page);
+  const pinnedAlpha = page.locator('#orchestration-session-panes-pinned-alpha');
+  const listedAlpha = page.locator('#orchestration-session-panes-sessions-alpha');
+  const pinnedToggle = page.locator('[aria-controls="orchestration-session-panes-pinned-alpha"]');
+  const listedToggle = (name: string) => page.locator(`[aria-controls="orchestration-session-panes-sessions-${name.toLowerCase()}"]`);
+
+  // Collapsed in both lists until opened.
+  await expect(listedToggle('Beta')).toHaveAttribute('aria-expanded', 'false', { timeout: 10_000 });
+  await expect(listedToggle('Alpha')).toHaveAttribute('aria-expanded', 'false');
+  await expect(pinnedToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: /^(Alpha|Beta|Charlie) worker$/ })).toHaveCount(0);
+
+  // Opening Alpha under Pinned opens it under Sessions too, and collapsing it there closes both.
+  await pinnedToggle.click();
+  await expect(pinnedAlpha.getByText('Alpha worker')).toBeVisible();
+  await expect(listedAlpha.getByText('Alpha worker')).toBeVisible();
+  await listedToggle('Alpha').click();
+  await expect(pinnedToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Alpha worker', exact: true })).toHaveCount(0);
+
+  // Open Alpha by mouse and Beta by keyboard; a reload keeps both, and Charlie stays collapsed.
+  await listedToggle('Alpha').click();
+  await listedToggle('Beta').press('Enter');
+  await expect(listedToggle('Beta')).toHaveAttribute('aria-expanded', 'true');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await dismissStartupDialogs(page);
+  await expect(listedToggle('Alpha')).toHaveAttribute('aria-expanded', 'true', { timeout: 10_000 });
+  await expect(listedToggle('Beta')).toHaveAttribute('aria-expanded', 'true');
+  await expect(listedToggle('Charlie')).toHaveAttribute('aria-expanded', 'false');
+
+  // An agent adding a Pane, runpane focusing it, and a resync leave Charlie collapsed.
+  await page.evaluate(async () => {
+    await window.electronAPI.orchestrationSessions.associate({ sessionId: 'charlie' }, { paneId: 'pane-charlie-new' });
+    // SAFETY: installSessionsFixture and installElectronApiMock add these controls before the app loads.
+    const mock = (window as typeof window & { __paneTestElectronMock: {
+      emitPaneFocusRequested: (paneId: string) => void;
+      emitRemoteDaemonResyncRequested: (event: { hostChanged: boolean }) => void;
+    } }).__paneTestElectronMock;
+    mock.emitPaneFocusRequested('pane-charlie-new');
+    mock.emitRemoteDaemonResyncRequested({ hostChanged: false });
+  });
+  await expect(page.getByTestId('orchestration-session-charlie')).toContainText('2');
+  await expect(page.getByTestId('window-title-bar-label')).toContainText('Charlie new worker');
+  await expect(listedToggle('Charlie')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#orchestration-session-panes-sessions-charlie')).toBeHidden();
+
+  // Another host starts collapsed and keeps its own choice; coming back restores this computer's.
+  const switchHost = (profileId: string | null) => page.evaluate((id) => {
+    // SAFETY: installElectronApiMock adds these controls before the app loads.
+    const mock = (window as typeof window & { __paneTestElectronMock: {
+      setActiveRemoteProfileId: (profileId: string | null) => void;
+      emitRemoteDaemonResyncRequested: (event: { hostChanged: boolean }) => void;
+    } }).__paneTestElectronMock;
+    mock.setActiveRemoteProfileId(id);
+    mock.emitRemoteDaemonResyncRequested({ hostChanged: true });
+  }, profileId);
+  await switchHost('host-b');
+  await expect(listedToggle('Alpha')).toHaveAttribute('aria-expanded', 'false');
+  await expect(listedToggle('Beta')).toHaveAttribute('aria-expanded', 'false');
+  await listedToggle('Charlie').click();
+  await expect(listedToggle('Charlie')).toHaveAttribute('aria-expanded', 'true');
+  await switchHost(null);
+  await expect(listedToggle('Alpha')).toHaveAttribute('aria-expanded', 'true');
+  await expect(listedToggle('Beta')).toHaveAttribute('aria-expanded', 'true');
+  await expect(listedToggle('Charlie')).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('Session rows show whether their child Panes are working or waiting', async ({ page }) => {
@@ -1335,7 +1421,7 @@ test('Session rows archive and restore without losing selection or associated Pa
   await expect(alphaRow).toBeVisible({ timeout: 10_000 });
   await alphaRow.click();
   await expect(page.getByRole('heading', { name: 'Alpha', exact: true })).toBeAttached({ timeout: 10_000 });
-  await alphaRow.click();
+  await page.getByRole('button', { name: 'Expand Alpha Panes' }).click();
   await expect(page.getByRole('button', { name: 'Associated Alpha Pane', exact: true })).toBeVisible();
 
   await alphaRow.click({ button: 'right' });
@@ -1458,6 +1544,7 @@ test('a Pane opened from a Session names it in the title bar as a way back', asy
   await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await dismissStartupDialogs(page);
 
+  await page.getByRole('button', { name: 'Expand Checkout launch Panes' }).click();
   await page.getByRole('button', { name: 'checkout-redesign', exact: true }).click();
   const label = page.getByTestId('window-title-bar-label');
   await expect(label).toHaveText('Checkout launch›checkout-redesign');
@@ -1498,6 +1585,10 @@ test('a Pane row menu adds the Pane to a Session and removes it again', async ({
   await paneRows.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Add to Session', exact: true }).click();
   await page.getByRole('menu', { name: 'Add Loose Pane to a Session' }).getByRole('menuitem', { name: 'Beta', exact: true }).click();
+  // The Session's first Pane gives it a chevron but leaves it collapsed.
+  await expect(page.getByRole('button', { name: 'Expand Beta Panes' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(paneRows).toHaveCount(1);
+  await page.getByRole('button', { name: 'Expand Beta Panes' }).click();
   await expect(paneRows).toHaveCount(2);
   await expect.poll(() => page.evaluate(() => {
     // SAFETY: installSessionsFixture adds this control before the app loads.
@@ -2977,6 +3068,7 @@ test('a Session moves with its Panes, which stay under it as they were', async (
   await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await dismissStartupDialogs(page);
   const worker = page.locator('#orchestration-session-panes-sessions-a').getByText('Alpha worker');
+  await page.getByRole('button', { name: 'Expand Alpha Panes' }).click();
   await expect(worker).toBeVisible({ timeout: 10_000 });
 
   await dragSessionOnto(page, 'orchestration-session-a', page.getByTestId('orchestration-session-c'), 'bottom');
