@@ -135,8 +135,8 @@ export function OrchestrationSessionNav({
   const activeView = useNavigationStore(state => state.activeView);
   const setActiveSession = useSessionStore(state => state.setActiveSession);
   const [showCreate, setShowCreate] = useState(false);
-  const collapsedSessions = useNavigationStore(state => state.collapsedSessions);
-  const toggleSessionCollapsed = useNavigationStore(state => state.toggleSessionCollapsed);
+  const expandedSessions = useNavigationStore(state => state.expandedSessions);
+  const toggleStoredSessionExpanded = useNavigationStore(state => state.toggleSessionExpanded);
   const [localSectionExpanded, setLocalSectionExpanded] = useState(true);
   const [localPinnedSectionExpanded, setLocalPinnedSectionExpanded] = useState(true);
   const [sessionMenu, setSessionMenu] = useState<SessionContextMenuState | null>(null);
@@ -210,11 +210,11 @@ export function OrchestrationSessionNav({
   }, [navigateToPaneChat, select, setActiveSession]);
 
   const toggleSessionExpanded = useCallback((sessionId: string) => {
-    const collapsedSessionIds = toggleSessionCollapsed(sessionId);
-    void window.electronAPI.uiState.saveCollapsedSessions(collapsedSessionIds).catch(error => {
-      console.error('Failed to save collapsed Sessions:', error);
+    const expandedSessionIds = toggleStoredSessionExpanded(sessionId);
+    void window.electronAPI.uiState.saveExpandedSessions(expandedSessionIds).catch(error => {
+      console.error('Failed to save opened Sessions:', error);
     });
-  }, [toggleSessionCollapsed]);
+  }, [toggleStoredSessionExpanded]);
 
   const openSessionMenu = useCallback((session: OrchestrationSessionRecord, x: number, y: number, trigger?: HTMLElement) => {
     setSessionMenu({
@@ -416,7 +416,7 @@ export function OrchestrationSessionNav({
       : [];
     // Rows the attention inbox hides still count toward the Session's activity.
     const visiblePaneIds = renderPane ? visibleAssociations.map(association => association.paneId) : [];
-    const expanded = paneRows.length > 0 && !collapsedSessions.has(session.id);
+    const expanded = paneRows.length > 0 && expandedSessions.has(session.id);
     const isLegacy = session.id === LEGACY_ORCHESTRATION_SESSION_ID;
     const label = session.name || 'Pane Chat';
     const rowId = sessionTestId(session, placement);
