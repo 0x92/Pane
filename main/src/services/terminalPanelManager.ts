@@ -911,7 +911,7 @@ export class TerminalPanelManager extends EventEmitter {
     void panelManager.updatePanel(terminal.panelId, { state: panel.state }).catch(error => {
       console.warn(`[TerminalPanelManager] Failed to persist ${agentType} session id for panel ${terminal.panelId}:`, error);
     });
-    console.log(`[TerminalPanelManager] Captured ${agentType} session id for panel ${terminal.panelId}: ${agentSessionId}`);
+    console.log(`[TerminalPanelManager] Captured ${agentType ?? (firstLineOnly ? 'Agent Farm' : 'reported')} session id for panel ${terminal.panelId}: ${agentSessionId}`);
   }
 
   setAnalyticsManager(analyticsManager: AnalyticsManager): void {
