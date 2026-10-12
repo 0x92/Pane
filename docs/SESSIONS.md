@@ -141,9 +141,10 @@ automatically; use an explicit resume command if you know their ID.
 
 Agent Farm is the one launcher Pane recognizes by name, because Agent Farm
 publishes this contract for Pane: when `PANE_PANEL_ID` is set it prints
-`PANE_AGENT_SESSION_ID=<launch id>` on the first line after each launch, and
-documents `{command} --resume <id>` as the way to reopen that conversation. Every
-other wrapper still needs an explicit config.
+`PANE_AGENT_SESSION_ID=<launch id>` once, before the agent starts, and documents
+`{command} --resume <id>` as the way to reopen that conversation. Pane keeps the
+first ID line of each launch and ignores later ones, which can only be agent
+output. Every other wrapper still needs an explicit config.
 
 A command counts when it is a single `agent-farm run <profile>` or
 `agent-farm agent <profile>`, optionally preceded by `VAR=value` assignments,
@@ -154,7 +155,7 @@ and aliases do not count. Such a panel with no explicit config behaves as
 it. The editor says so under the unticked checkbox. An explicit config always
 wins: tick **Enable custom command resume** and set your own templates.
 
-Panels created before this rule have no saved ID. On their next relaunch Pane
+A panel created before this rule usually has no saved ID. On its next relaunch Pane
 makes one attempt to read the last `PANE_AGENT_SESSION_ID=` line from the
 panel's saved terminal buffer. Agent Farm older than 0.2.20 prints no ID, so
 those panels relaunch fresh, as before.
