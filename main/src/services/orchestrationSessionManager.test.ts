@@ -628,6 +628,23 @@ describe('OrchestrationSessionManager', () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
+  it('keeps an Agent Farm Session\'s reported ID across refreshes and an unchanged settings save', async () => {
+    const fixture = createFixture();
+    const launchCommand = 'agent-farm run greenfield/implementer:opus';
+    const created = await fixture.manager.create({ name: 'Farm', agent: 'claude', launchCommand });
+    await panelManager.updatePanel(created.panel.id, { state: { ...created.panel.state, customState: {
+      ...created.panel.state.customState, agentSessionId: 'farm-launch-id', customResumeStarted: true,
+    } } });
+    for (const initialized of [false, true]) {
+      vi.mocked(terminalPanelManager.isTerminalInitialized).mockReturnValue(initialized);
+      await fixture.manager.update({ sessionId: created.session.id }, { launchCommand, profile: created.session.profile, customResume: null });
+      const view = await fixture.manager.getView({ sessionId: created.session.id });
+      expect(view.panel.id).toBe(created.panel.id);
+      expect(view.panel.state.customState).toMatchObject({ agentSessionId: 'farm-launch-id', customResumeStarted: true });
+      expect(view.panel.state.customState?.customResume ?? null).toBeNull();
+    }
+  });
+
   it('routes native custom commands to the right agent slot and preserves inactive histories', async () => {
     const fixture = createFixture();
     const created = await fixture.manager.create({ name: 'Switch commands', agent: 'claude' });

@@ -10,6 +10,7 @@ import type { TerminalPanelState } from '../../../shared/types/panels';
 import { MISSION_CONTROL_VIEWER_PREFIX } from '../../../shared/types/missionControl';
 
 import { TerminalPanelManager } from './terminalPanelManager';
+import { databaseService } from './database';
 import { ShellDetector } from '../utils/shellDetector';
 import { panelManager } from '../test/setup';
 import { RunCommandManager } from './runCommandManager';
@@ -1872,6 +1873,21 @@ describe('TerminalPanelManager wrapper launches', () => {
   it('relaunches an interrupted wrapper as given instead of resuming the agent directly', () => {
     const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
 
+    const result = manager.resolveCliLaunchCommand('panel-1', 'other-wrapper run free-range', {
+      agentType: 'codex',
+      agentDetection: 'process',
+      launchMode: 'wrapped',
+      agentSessionId: '019a0000-0000-7000-8000-000000000000',
+      wasInterrupted: true,
+    });
+
+    expect(result.commandToRun).toBe('other-wrapper run free-range');
+    expect(result.customState.wasInterrupted).toBeUndefined();
+  });
+
+  it('resumes an interrupted Agent Farm wrapper through Agent Farm with its saved ID', () => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+
     const result = manager.resolveCliLaunchCommand('panel-1', 'agent-farm run free-range', {
       agentType: 'codex',
       agentDetection: 'process',
@@ -1880,7 +1896,7 @@ describe('TerminalPanelManager wrapper launches', () => {
       wasInterrupted: true,
     });
 
-    expect(result.commandToRun).toBe('agent-farm run free-range');
+    expect(result.commandToRun).toBe('agent-farm run free-range --resume "019a0000-0000-7000-8000-000000000000"');
     expect(result.customState.wasInterrupted).toBeUndefined();
   });
 
@@ -2257,5 +2273,147 @@ describe('chat promotion shutdown', () => {
     await expect(manager.stopForPromotion(terminal.panelId)).rejects.toThrow('finish');
     expect(save).not.toHaveBeenCalled();
     expect(terminal.pty.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerminalPanelManager Agent Farm resume', () => {
+  const FARM = 'agent-farm run greenfield/implementer:opus';
+  const LAUNCH_ID = 'e6d42f7f-15b8-4e18-9e4c-7b2e64c7d675';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(panelManager.getPanel).mockReset();
+    vi.mocked(panelManager.updatePanel).mockReset();
+  });
+
+  const mockFarmPanel = (customState: TerminalPanelState) => {
+    vi.mocked(panelManager.updatePanel).mockResolvedValue(undefined);
+    vi.mocked(panelManager.getPanel).mockReturnValue({
+      id: 'panel-1',
+      sessionId: 'session-1',
+      type: 'terminal',
+      title: 'Agent Farm',
+      state: { isActive: true, customState },
+      metadata: { createdAt: '2026-01-01T00:00:00.000Z', lastActiveAt: '2026-01-01T00:01:00.000Z', position: 0 },
+    });
+  };
+
+  it('runs the plain command first and never saves the derived config', () => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+    const result = manager.resolveCliLaunchCommand('panel-1', FARM, { initialCommand: FARM });
+    expect(result.commandToRun).toBe(FARM);
+    expect(result.isCliCommand).toBe(true);
+    expect(result.customState).toMatchObject({ customResumeStarted: true, isCliPanel: true });
+    expect(result.customState).not.toHaveProperty('customResume');
+  });
+
+  it('reopens the reported launch ID after a restart', () => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+    const state: TerminalPanelState = {
+      initialCommand: FARM, agentType: 'claude', agentSessionId: LAUNCH_ID, customResumeStarted: true, wasInterrupted: true,
+    };
+    const result = manager.resolveCliLaunchCommand('panel-1', FARM, state);
+    expect(result.commandToRun).toBe(`${FARM} --resume "${LAUNCH_ID}"`);
+    expect(result.customState).toMatchObject({ agentType: 'claude', agentSessionId: LAUNCH_ID });
+    expect(result.customState).not.toHaveProperty('customResume');
+  });
+
+  it('keeps a declared wrapper launch command and agent when resuming', () => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+    const result = manager.resolveCliLaunchCommand('panel-1', FARM, {
+      initialCommand: FARM, agentType: 'claude', agentDetection: 'declared', launchMode: 'wrapped',
+      agentSessionId: LAUNCH_ID, customResumeStarted: true,
+    });
+    expect(result.commandToRun).toBe(`${FARM} --resume "${LAUNCH_ID}"`);
+    expect(result.customState).toMatchObject({
+      agentType: 'claude', agentDetection: 'declared', launchMode: 'wrapped', launchCommand: FARM,
+    });
+  });
+
+  it('uses an explicit config instead of the Agent Farm rule', () => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+    const customResume = {
+      mode: 'generated', initialTemplate: '{command} --id {sessionId}', resumeTemplate: '{command} --continue {sessionId}',
+    } as const;
+    const state: TerminalPanelState = { initialCommand: FARM, customResume, agentSessionId: 'mine', customResumeStarted: true };
+    expect(manager.resolveCliLaunchCommand('panel-1', FARM, state).commandToRun).toBe(`${FARM} --continue "mine"`);
+  });
+
+  it.each([
+    `${FARM} --resume abc`,
+    `${FARM} && echo done`,
+    'agent-farm profiles list',
+    'my-wrapper run greenfield/implementer',
+  ])('leaves %s as it was', command => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+    const result = manager.resolveCliLaunchCommand('panel-1', command, {
+      initialCommand: command, agentSessionId: LAUNCH_ID, customResumeStarted: true, wasInterrupted: true,
+    });
+    expect(result.commandToRun).toBe(command);
+  });
+
+  it('recovers the last ID line from an existing panel\'s saved buffer, once', () => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+    const buffers = vi.spyOn(databaseService, 'getPanelBuffers').mockReturnValue({
+      scrollback: `$ ${FARM}\r\nPANE_AGENT_SESSION_ID=old-launch\r\n...\r\n$ ${FARM}\r\nPANE_AGENT_SESSION_ID=${LAUNCH_ID}\r\n\x1b[2Jworking`,
+      serialized: '',
+      alternate: '',
+    });
+    const result = manager.resolveCliLaunchCommand('panel-1', FARM, { initialCommand: FARM, agentType: 'claude' });
+    expect(buffers).toHaveBeenCalledWith('panel-1');
+    expect(result.commandToRun).toBe(`${FARM} --resume "${LAUNCH_ID}"`);
+    expect(result.customState).toMatchObject({ agentSessionId: LAUNCH_ID, customResumeStarted: true });
+
+    // A launch under the rule marks the panel, so it is never scanned again.
+    buffers.mockClear();
+    manager.resolveCliLaunchCommand('panel-1', FARM, { ...result.customState, agentSessionId: undefined });
+    expect(buffers).not.toHaveBeenCalled();
+  });
+
+  it('starts fresh when the saved buffer has no ID line', () => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+    vi.spyOn(databaseService, 'getPanelBuffers').mockReturnValue({ scrollback: `$ ${FARM}\r\nhello\r\n`, serialized: '', alternate: '' });
+    const result = manager.resolveCliLaunchCommand('panel-1', FARM, { initialCommand: FARM });
+    expect(result.commandToRun).toBe(FARM);
+    expect(result.customState.agentSessionId).toBeUndefined();
+  });
+
+  it('does not scan buffers for an explicitly configured panel', () => {
+    const manager = testAccess<LaunchCommandAccess>(new TerminalPanelManager());
+    const buffers = vi.spyOn(databaseService, 'getPanelBuffers');
+    manager.resolveCliLaunchCommand('panel-1', FARM, { initialCommand: FARM, customResume: {
+      mode: 'reported', initialTemplate: '{command}', resumeTemplate: '{command} --resume {sessionId}',
+    } });
+    expect(buffers).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, 'claude'] as const)('captures the first ID line and ignores later ones (agent %s)', agentType => {
+    const manager = testAccess<AgentSessionCaptureAccess>(new TerminalPanelManager());
+    const terminal = createTerminal();
+    terminal.agentType = agentType;
+    mockFarmPanel({ initialCommand: FARM, agentType: agentType === 'claude' ? 'claude' : undefined });
+
+    manager.captureAgentSessionId(terminal, `PANE_AGENT_SESSION_ID=${LAUNCH_ID}\r\n`);
+    expect(terminal.capturedAgentSessionId).toBe(LAUNCH_ID);
+    const panel = panelManager.getPanel('panel-1');
+    expect(panel?.state.customState).toMatchObject({ agentSessionId: LAUNCH_ID });
+    expect(panel?.state.customState).not.toHaveProperty('customResume');
+
+    // The agent later prints another ID line, for example while reading logs.
+    terminal.agentType = 'claude';
+    manager.captureAgentSessionId(terminal, '\r\nPANE_AGENT_SESSION_ID=other-launch\r\n');
+    expect(terminal.capturedAgentSessionId).toBe(LAUNCH_ID);
+    expect(panel?.state.customState).toMatchObject({ agentSessionId: LAUNCH_ID });
+    disposeFlowControlRecord(terminal.flowControl);
+  });
+
+  it('captures from a declared Claude wrapper panel whose terminal is Codex-detected later', () => {
+    const manager = testAccess<AgentSessionCaptureAccess>(new TerminalPanelManager());
+    const terminal = createTerminal();
+    terminal.agentType = 'codex';
+    mockFarmPanel({ initialCommand: FARM, agentType: 'claude', launchMode: 'wrapped', agentDetection: 'declared' });
+    manager.captureAgentSessionId(terminal, `PANE_AGENT_SESSION_ID=${LAUNCH_ID}\r\n`);
+    expect(terminal.capturedAgentSessionId).toBe(LAUNCH_ID);
+    disposeFlowControlRecord(terminal.flowControl);
   });
 });

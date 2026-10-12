@@ -1,7 +1,7 @@
 import { withRunpaneOnPath } from './runpaneShim';
 import { sessionRuntimePath, sessionWSLContext } from './sessionRuntime';
 import { escapeForBash } from '../utils/wslUtils';
-import { validateCustomCommandResume, customResumeAgentType } from '../../../shared/types/customCommandResume';
+import { validateCustomCommandResume, customResumeAgentType, effectiveCustomResume } from '../../../shared/types/customCommandResume';
 import { prepareSessionWorkspace, sessionGitCeiling } from './sessionWorkspace';
 import { OrchestrationSessionStore } from './orchestrationSessionStore';
 import { getAppDirectory } from '../utils/appDirectory';
@@ -68,6 +68,8 @@ const FORCED_REDRAW_TRANSITION_MS = 50;
 const FORCED_REDRAW_SETTLE_MS = 80;
 const SHELL_PROMPT_SETTLE_MS = 300;
 const SHELL_PROMPT_FALLBACK_MS = 5000;
+/** A launcher's `PANE_AGENT_SESSION_ID=<id>` line, on a line of its own. */
+const REPORTED_SESSION_ID_LINE = /(?:^|[\r\n])PANE_AGENT_SESSION_ID=([A-Za-z0-9][A-Za-z0-9._:-]{0,255})(?=[\r\n])/g;
 // Held initial input for an agent is staged, then submitted with its own
 // Enter once the agent has echoed it and gone quiet for a moment.
 const INPUT_SETTLE_POLL_MS = 50;
@@ -316,6 +318,8 @@ interface TerminalProcess {
   filterInAltScreen: boolean;
   capturedAgentSessionId?: string;
   agentSessionScrapeBuffer: string;
+  /** Agent Farm reported its ID for this launch; later ID lines are agent output. */
+  reportedSessionIdLocked?: boolean;
 }
 
 interface AgentProbe {
@@ -408,11 +412,18 @@ export class TerminalPanelManager extends EventEmitter {
     shellType?: string,
     isWSL = false,
   ): CliLaunchResolution {
-    if (customState.customResume) {
-      const config = validateCustomCommandResume(customState.customResume);
+    const resume = effectiveCustomResume({ initialCommand, customResume: customState.customResume });
+    if (resume) {
+      const config = validateCustomCommandResume(resume.config);
       const allocated = config.mode === 'claude' || config.mode === 'generated';
-      const sessionId = customState.agentSessionId || (allocated ? randomUUID() : undefined);
-      const hasConversation = Boolean(customState.agentSessionId && (customState.customResumeStarted || customState.wasInterrupted));
+      // A panel launched before Pane recognized Agent Farm may still hold its
+      // ID line in saved output; read it once, before the first launch here.
+      const recoveredId = resume.source === 'agent-farm' && !customState.agentSessionId && !customState.customResumeStarted
+        ? this.recoverReportedSessionId(panelId)
+        : undefined;
+      const sessionId = customState.agentSessionId || recoveredId || (allocated ? randomUUID() : undefined);
+      const hasConversation = Boolean(recoveredId
+        || (customState.agentSessionId && (customState.customResumeStarted || customState.wasInterrupted)));
       // Claude resumes only an ID that has a transcript. When Pane can't see
       // the transcripts, trust the recorded conversation like other modes.
       const directClaude = /^claude(?:\s|$)/.test(initialCommand) && config.resumeTemplate.startsWith('{command} ');
@@ -424,10 +435,13 @@ export class TerminalPanelManager extends EventEmitter {
       const commandToRun = template.replace(/\{command\}|\{sessionId\}/g, token =>
         token === '{command}' ? initialCommand : this.quoteCommandArgument(sessionId!));
       const agentType = customResumeAgentType(config) ?? customState.agentType;
-      return { commandToRun, isCliCommand: true, customState: {
-        ...customState, agentType, agentSessionId: sessionId, customResumeStarted: true,
+      const launchState: TerminalPanelState = {
+        ...customState, agentType, customResumeStarted: true,
         isCliPanel: true, isCliReady: false, wasInterrupted: undefined,
-      } };
+      };
+      if (sessionId) launchState.agentSessionId = sessionId;
+      if (customState.launchMode === 'wrapped') launchState.launchCommand = customState.launchCommand ?? initialCommand;
+      return { commandToRun, isCliCommand: true, customState: launchState };
     }
     if (customState.launchMode === 'wrapped') {
       // A wrapper runs the agent itself: never rewrite it with session ids,
@@ -837,6 +851,19 @@ export class TerminalPanelManager extends EventEmitter {
     setTimeout(invokeOnce, SHELL_PROMPT_FALLBACK_MS);
   }
 
+  /** The last ID line in a panel's saved scrollback, if any. */
+  private recoverReportedSessionId(panelId: string): string | undefined {
+    try {
+      const scrollback = databaseService.getPanelBuffers(panelId)?.scrollback ?? '';
+      const recovered = Array.from(scrollback.matchAll(REPORTED_SESSION_ID_LINE)).at(-1)?.[1];
+      if (recovered) console.log(`[TerminalPanelManager] Recovered Agent Farm session id for panel ${panelId} from saved output: ${recovered}`);
+      return recovered;
+    } catch (error) {
+      console.warn(`[TerminalPanelManager] Could not read saved output for panel ${panelId}; launching without a session id:`, error);
+      return undefined;
+    }
+  }
+
   private extractAgentSessionId(agentType: CliAgentType | undefined, output: string): string | undefined {
     if (agentType === 'codex') return this.extractCodexResumeId(output);
     if (agentType === 'cursor') return extractCursorChatId(output);
@@ -847,21 +874,31 @@ export class TerminalPanelManager extends EventEmitter {
     const panel = panelManager.getPanel(terminal.panelId);
     if (!panel) return;
     const customState = terminalCustomState(panel.state);
-    if (!customState.customResume && terminal.agentType !== 'codex' && terminal.agentType !== 'cursor') return;
+    const resume = effectiveCustomResume(customState);
+    if (!resume && terminal.agentType !== 'codex' && terminal.agentType !== 'cursor') return;
+    // Agent Farm prints one ID line before the agent starts; anything later is agent output.
+    const firstLineOnly = resume?.source === 'agent-farm';
+    if (firstLineOnly && terminal.reportedSessionIdLocked) return;
 
     terminal.agentSessionScrapeBuffer = trimAnsiSafe(
       terminal.agentSessionScrapeBuffer + output,
       2000
     );
 
-    if (customState.customResume?.mode === 'generated') return;
-    const agentSessionId = customState.customResume?.mode === 'reported'
-      ? Array.from(terminal.agentSessionScrapeBuffer.matchAll(/(?:^|[\r\n])PANE_AGENT_SESSION_ID=([A-Za-z0-9][A-Za-z0-9._:-]{0,255})(?=[\r\n])/g)).at(-1)?.[1]
+    if (resume?.config.mode === 'generated') return;
+    const reported = resume?.config.mode === 'reported'
+      ? Array.from(terminal.agentSessionScrapeBuffer.matchAll(REPORTED_SESSION_ID_LINE))
+      : undefined;
+    const agentSessionId = reported
+      ? (firstLineOnly ? reported[0] : reported.at(-1))?.[1]
       : this.extractAgentSessionId(terminal.agentType, terminal.agentSessionScrapeBuffer);
     if (!agentSessionId) return;
+    if (firstLineOnly) terminal.reportedSessionIdLocked = true;
 
+    // The agent behind Agent Farm may be declared or detected differently from
+    // the terminal; its reported ID belongs to the launch either way.
     const agentType = this.resolveTerminalAgentType(customState);
-    if (agentType !== terminal.agentType || customState.agentSessionId === agentSessionId) return;
+    if ((!firstLineOnly && agentType !== terminal.agentType) || customState.agentSessionId === agentSessionId) return;
 
     terminal.capturedAgentSessionId = agentSessionId;
 
@@ -1234,7 +1271,7 @@ export class TerminalPanelManager extends EventEmitter {
     const launch = this.resolveCliLaunchCommand(panelId, initialCommand, state, state.shellType);
     const isDirectOpenCode = launch.customState.agentType === 'opencode'
       && launch.customState.launchMode !== 'wrapped'
-      && !launch.customState.customResume
+      && !effectiveCustomResume(launch.customState)
       && !launch.customState.preserveLaunchCommand;
     if (isDirectOpenCode && this.terminals.has(panelId)) {
       panel.state = (await this.persistOpenCodeLaunchState(panelId, {
@@ -1244,6 +1281,12 @@ export class TerminalPanelManager extends EventEmitter {
     } else {
       panel.state.customState = launch.customState;
       await panelManager.updatePanel(panelId, { state: panel.state });
+    }
+    const terminal = this.terminals.get(panelId);
+    if (terminal) {
+      // A new launch in this shell reports its own ID.
+      terminal.reportedSessionIdLocked = undefined;
+      terminal.agentSessionScrapeBuffer = '';
     }
     this.writeToTerminal(panelId, launch.commandToRun);
   }
@@ -1399,7 +1442,7 @@ export class TerminalPanelManager extends EventEmitter {
     let launchResolution: CliLaunchResolution | undefined;
     let launchStatePersistedBeforeSpawn = false;
     const directNativeOpenCode = existingState.launchMode !== 'wrapped'
-      && !existingState.customResume
+      && !effectiveCustomResume(existingState)
       && !existingState.preserveLaunchCommand
       && (existingState.agentType ?? resolveAgentTypeFromCommand(initialCommand)) === 'opencode';
     if (initialCommand && directNativeOpenCode) {
@@ -2292,8 +2335,9 @@ export class TerminalPanelManager extends EventEmitter {
   private resolveTerminalAgentType(
     customState: TerminalPanelState | undefined,
   ): CliAgentType | undefined {
-    if (customState?.customResume) {
-      return customResumeAgentType(customState.customResume) ?? customState.agentType;
+    const resume = customState ? effectiveCustomResume(customState) : undefined;
+    if (resume) {
+      return customResumeAgentType(resume.config) ?? customState?.agentType;
     }
     return customState?.agentType ?? resolveAgentTypeFromCommand(customState?.initialCommand);
   }
