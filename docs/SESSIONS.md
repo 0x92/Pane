@@ -57,10 +57,12 @@ The command, behavior profile, and saved task context have separate purposes.
 A command selects how the agent runs; a profile describes how it should behave;
 saved goals, decisions, and next actions help it respond to later user input.
 Custom commands (including Agent Farm wrappers) retain their arguments. Pane
-only adds native flags through compatible built-in adapters unless you explicitly
-configure custom command resume. Wrappers keep control of instruction discovery;
-Pane does not infer native flags from a wrapper name. A user command
-that explicitly starts work remains the user's choice.
+only adds native flags through compatible built-in adapters, an explicit custom
+command resume config, or Agent Farm's resume contract (see
+[Resuming custom launchers](#resuming-custom-launchers)). Wrappers keep control of
+instruction discovery; apart from that one Agent Farm exception, Pane does not
+infer flags from a wrapper name. A user command that explicitly starts work
+remains the user's choice.
 
 Each Session owns a stable folder at `<PANE_DIR>/sessions/<session-id>/` for
 notes, plans, attachments, generated instructions, and artifacts. Renaming,
@@ -110,6 +112,7 @@ select an installed distribution; omitted runtime selects the host.
 
 Use **Enable custom command resume** in Session launch settings or a saved custom
 command's editor. This is an explicit contract, independent of executable names.
+Agent Farm is the one exception, described in [Agent Farm](#agent-farm) below.
 Choose a session ID source and provide first-launch and resume templates:
 
 - **Claude:** Pane allocates a UUID and resumes it only when its transcript exists.
@@ -133,6 +136,34 @@ shortcut does not change existing panels. Session settings support changing or
 disabling the contract for that Session's next launch. No prompt is submitted just
 to resume. Old conversations whose IDs were never saved cannot be recovered
 automatically; use an explicit resume command if you know their ID.
+
+### Agent Farm
+
+Agent Farm is the one launcher Pane recognizes by name, because Agent Farm
+publishes this contract for Pane: when `PANE_PANEL_ID` is set it prints
+`PANE_AGENT_SESSION_ID=<launch id>` on the first line after each launch, and
+documents `{command} --resume <id>` as the way to reopen that conversation. Every
+other wrapper still needs an explicit config.
+
+A command counts when it is a single `agent-farm run <profile>` or
+`agent-farm agent <profile>`, optionally preceded by `VAR=value` assignments,
+with no shell operators, no `--`, and no `--resume` of its own. `npx`, `pnpm dlx`
+and aliases do not count. Such a panel with no explicit config behaves as
+**CLI reports its ID** with templates `{command}` and
+`{command} --resume {sessionId}`: Pane saves the printed ID and relaunches with
+it. The editor says so under the unticked checkbox. An explicit config always
+wins: tick **Enable custom command resume** and set your own templates.
+
+Panels created before this rule have no saved ID. On their next relaunch Pane
+makes one attempt to read the last `PANE_AGENT_SESSION_ID=` line from the
+panel's saved terminal buffer. Agent Farm older than 0.2.20 prints no ID, so
+those panels relaunch fresh, as before.
+
+To reopen an older conversation by hand, run
+`agent-farm run <profile> --resume <id>`. The ID is the launch ID (the
+`PANE_AGENT_SESSION_ID` value), shown as `resumeId` in
+`runpane panels list --json`. Agent Farm keeps launch records in
+`~/.local/state/agent-farm/launches/` for 90 days.
 
 ## Session sidebar and archive
 
