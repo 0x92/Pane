@@ -636,6 +636,10 @@ interface PanelSummary {
   createdAt?: string;
   lastActiveAt?: string;
   report?: AgentReport;
+  /** Saved agent session ID that reopens this panel. */
+  resumeId?: string;
+  /** Which rule resumes with resumeId: derived Agent Farm, the panel's configured command, or built-in agent capture. */
+  resumeSource?: 'agent-farm' | 'configured' | 'agent';
 }
 
 interface PanelListResult {
@@ -1097,6 +1101,8 @@ const panelSummarySchema: BoundarySchema<PanelSummary> = boundary.object({
   createdAt: boundary.optional(boundary.string),
   lastActiveAt: boundary.optional(boundary.string),
   report: boundary.optional(agentReportSchema),
+  resumeId: boundary.optional(boundary.string),
+  resumeSource: boundary.optional(boundary.enumeration('agent-farm', 'configured', 'agent')),
 });
 
 export const repoListResultSchema: BoundarySchema<RepoListResult> = boundary.object({
@@ -3637,7 +3643,8 @@ function printPanelListResult(result: PanelListResult): void {
     const initialized = panel.initialized === undefined ? '' : panel.initialized ? ' initialized' : ' not-initialized';
     const agent = panel.agentType ? ` ${panel.agentType}` : '';
     const detection = panel.agentDetection && panel.agentDetection !== 'command' ? ` (${panel.agentDetection})` : '';
-    console.log(`${marker} ${panel.id}\t${panel.type}\t${panel.title}${initialized}${agent}${detection}`);
+    const resume = panel.resumeId ? ` resume ${panel.resumeId}` : '';
+    console.log(`${marker} ${panel.id}\t${panel.type}\t${panel.title}${initialized}${agent}${detection}${resume}`);
   }
 }
 

@@ -65,6 +65,7 @@ import {
   terminalGraphicsProtocols,
 } from '../../../shared/constants/terminalGraphics';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
+import { customCommandResumeSchema, effectiveCustomResume, type CustomCommandResume } from '../../../shared/types/customCommandResume';
 import type {
   RunpaneAgentId,
   RunpaneAgentDoctorRequest,
@@ -109,6 +110,8 @@ import type {
   RunpanePanelActivityStatus,
   RunpanePaneAgentState,
   RunpaneAgentDetection,
+  RunpanePanelResumeSource,
+  RunpanePanelSummary,
   RunpanePanelBlockedState,
   RunpaneDelivery,
   RunpanePanelCreateRequest,
@@ -1774,6 +1777,26 @@ function optionalAgentDetection(value: PaneCommandValue): RunpaneAgentDetection 
   }
 }
 
+function optionalCustomResume(value: PaneCommandValue): CustomCommandResume | undefined {
+  try {
+    return decodeBoundary(value, customCommandResumeSchema);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The panel's saved resume ID and which rule would resume it, so an orchestrator can reopen a stopped panel. */
+function panelResumeSummary(
+  customState: Record<string, PaneCommandValue>,
+  initialCommand: string | undefined,
+): Pick<RunpanePanelSummary, 'resumeId' | 'resumeSource'> {
+  const resumeId = optionalString(customState.agentSessionId);
+  if (!resumeId) return {};
+  const source = effectiveCustomResume({ initialCommand, customResume: optionalCustomResume(customState.customResume) })?.source;
+  const resumeSource: RunpanePanelResumeSource = source === 'agent-farm' ? 'agent-farm' : source === 'explicit' ? 'configured' : 'agent';
+  return { resumeId, resumeSource };
+}
+
 function panelToSummary(panel: ToolPanel) {
   const customState = isRecord(panel.state.customState) ? panel.state.customState : {};
   const initialCommand = optionalString(customState.initialCommand);
@@ -1799,6 +1822,7 @@ function panelToSummary(panel: ToolPanel) {
     createdAt: toIsoString(panel.metadata.createdAt),
     lastActiveAt: toIsoString(panel.metadata.lastActiveAt),
     report: readPanelAgentReport(panel),
+    ...panelResumeSummary(customState, initialCommand),
   };
 }
 

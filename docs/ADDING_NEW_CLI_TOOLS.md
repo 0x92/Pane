@@ -162,8 +162,11 @@ it is known, Pane:
 `launchMode: 'wrapped'` means the command is launched exactly as given.
 `resolveCliLaunchCommand` never adds `--session-id`, resume flags or a prompt
 argument to it. On restart, Pane runs the wrapper again, and the wrapper handles
-its own resume. For the same reason, `--resume` is rejected for wrapper
-commands.
+its own resume. The exceptions are a panel with an explicit custom command resume
+config and a recognized `agent-farm run|agent` command, which relaunch through
+their resume template (see
+[Resuming custom launchers](SESSIONS.md#resuming-custom-launchers)). For the same
+reason, `--resume` is rejected for wrapper commands.
 
 Direct OpenCode launches use Pane's durable session id and readiness-gated input.
 Native selector insertion accepts literal direct commands and simple assignment or
