@@ -240,7 +240,7 @@ Commands with a contract `daemonAction` (the `panes` git, script, restore, and m
 
 `runpane docs search|read` search and read Pane docs, help, and installed Pane Chat skills offline. They ship in the npm package and the Pane app only.
 
-`runpane handoff` hands a task to a fresh agent on this or another of your machines. The sending agent writes the note from `runpane handoff --template` (goal, current state, done and verified, in progress, next steps, decisions and constraints, open questions, how to verify, git state); `runpane handoff "claude opus on parsas-macbook-pro" --note-file ~/handoff.md` checks every section is filled in, requires the branch to be pushed (or pushes it with `--push`, never forcing), writes the note to that machine's `~/.pane/handoffs/` and starts the agent in a new Pane branched from the sender's branch. The receiver reports back to the sender's panel.
+`runpane handoff` hands a task to a fresh agent on this or another of your machines. The sending agent writes the note from `runpane handoff --template` (goal, current state, done and verified, in progress, next steps, decisions and constraints, open questions, how to verify, git state); `runpane handoff "claude opus on parsas-macbook-pro" --note-file ~/handoff.md` checks every section is filled in, requires the branch to be pushed (or pushes it with `--push`, never forcing), writes the note to that machine's `~/.pane/handoffs/` and starts the agent in a new Pane branched from the sender's branch. From a Session's terminal it skips git and creates a Session with the same name, goal and agent on the other machine instead. The receiver reports back to the sender's panel.
 
 ## Command reference
 
@@ -267,7 +267,7 @@ Every command and its options, from `commands` in `contracts/runpane/contract.js
 - `workspace read`: Print a file from a machine on your tailnet; any path form works (C:\..., /mnt/c/..., /home/..., ~/...).
 - `workspace write`: Write stdin to a file on a machine on your tailnet, creating parent folders.
 - `workspace exec`: Run a command in another machine's shell and return stdout, stderr, the exit code, OS, and shell.
-- `handoff`: Hand your task to a fresh agent on this or another machine: check your handoff note, make the branch reachable, send the note, and start the agent on it.
+- `handoff`: Hand your task to a fresh agent on this or another machine: check your handoff note, make the branch reachable, send the note, and start the agent on it. From a Session's terminal, create the Session on another machine instead.
 - `watch`: Wait for workspace agent and Pane transitions using a daemon-held cursor.
 - `panes create`: 1 feature = 1 worktree = 1 branch = 1 Pane; reviews, audits, fixes and QA for it are tabs in that Pane. Create a Pane (a new worktree) only when the work's branch has no Pane yet; for review, audit, fix or QA on existing work use `panels create --pane <id>`.
 - `panes adopt`: Adopt an existing externally managed git worktree as a Pane without changing the worktree.
