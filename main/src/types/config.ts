@@ -42,6 +42,8 @@ export interface AnalyticsIdentity {
   gitUserName?: string;
 }
 
+type HtmlFileOpenMode = 'preview' | 'source';
+
 export interface AppConfig {
   verbose?: boolean;
   anthropicApiKey?: string;
@@ -138,6 +140,8 @@ export interface AppConfig {
   usePtyHost?: boolean;
   // Experimental: show Mission Control, the grid of every agent pane (off by default).
   missionControlEnabled?: boolean;
+  // What a click on an .html file in Explorer opens: the browser preview (default when absent) or its source
+  htmlFileOpenMode?: HtmlFileOpenMode;
   // PostHog analytics settings
   analytics?: {
     enabled: boolean;
@@ -236,6 +240,8 @@ export interface UpdateConfigRequest {
   usePtyHost?: boolean;
   // Experimental: show Mission Control, the grid of every agent pane (off by default).
   missionControlEnabled?: boolean;
+  // What a click on an .html file in Explorer opens: the browser preview (default when absent) or its source
+  htmlFileOpenMode?: HtmlFileOpenMode;
   // PostHog analytics settings
   analytics?: AppConfig['analytics'];
   // User-defined custom commands for the Add Tool picker

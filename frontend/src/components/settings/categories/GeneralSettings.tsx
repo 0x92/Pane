@@ -3,10 +3,12 @@ import { Download, MessageSquareText, RefreshCw } from 'lucide-react';
 import { Button } from '../../ui/Button';
 import { SettingsSection } from '../../ui/SettingsSection';
 import { SettingRow, SettingsPage } from '../SettingRow';
-import { ImmediateToggle } from '../SettingsControls';
+import { ImmediateToggle, SegmentedControl } from '../SettingsControls';
 import type { SettingsPersistence } from '../useSettingsPersistence';
 import type { VersionInfo } from '../../../types/session';
 import { API } from '../../../utils/api';
+import type { HtmlFileOpenMode } from '../../../types/config';
+import { htmlFileOpenModeOf } from '../../../stores/configStore';
 
 interface GeneralSettingsProps {
   persistence: SettingsPersistence;
@@ -39,7 +41,7 @@ export function GeneralSettings({ persistence, onUpdate, onSendFeedback }: Gener
   };
 
   return (
-    <SettingsPage title="General" description="Application startup, update, and feedback behavior.">
+    <SettingsPage title="General" description="Application startup, update, feedback, and file-opening behavior.">
       <SettingsSection title="Updates" description="Keep Pane current with release checks from GitHub.">
         <SettingRow
           settingId="automatic-updates"
@@ -118,6 +120,22 @@ export function GeneralSettings({ persistence, onUpdate, onSendFeedback }: Gener
             label="Keep computer awake while sessions are active"
             value={config.keepAwakeWhileSessionsActive !== false}
             onSave={(value) => persistence.saveConfig('keep-awake', { keepAwakeWhileSessionsActive: value })}
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title="Files" description="How Pane opens files you click in Explorer.">
+        <SettingRow
+          settingId="html-file-open-mode"
+          label="Open HTML files"
+          description="What a click on an .html file in Explorer opens. Agents' runpane panels open is unaffected."
+          saveState={persistence.saveStates['html-file-open-mode']}
+        >
+          <SegmentedControl<HtmlFileOpenMode>
+            label="Open HTML files"
+            value={htmlFileOpenModeOf(config)}
+            options={[{ id: 'preview', label: 'Preview in browser' }, { id: 'source', label: 'Edit source' }]}
+            onChange={(value) => void persistence.saveConfig('html-file-open-mode', { htmlFileOpenMode: value })}
           />
         </SettingRow>
       </SettingsSection>

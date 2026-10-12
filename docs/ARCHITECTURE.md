@@ -67,7 +67,8 @@ Agent status (working, idle, blocked) is derived in
 
 `FileEditorView.tsx` routes editor tabs from the Files inspector, terminal links,
 and `runpane panels open --file` using `shared/utils/filePreview.ts`. Supported
-formats open read-only; ordinary code and text retain the editor and auto-save.
+formats open read-only; ordinary code and text, HTML included, retain the editor
+and auto-save.
 Images, PDFs, fonts, video and audio load through `pane-media`, registered in
 `main/src/services/mediaPreview.ts`. A revocable URL grants access to one file;
 each request rechecks the existing worktree/symlink boundary through
@@ -79,10 +80,15 @@ route with the same boundary check and byte ranges. Archive and SQLite listings
 copies the file to a temporary folder on that desktop and opens the copy;
 "Reveal in folder" appears only on the host.
 
-Markdown, HTML, CSV/TSV and structured text fetch at most 1 MiB. Markdown renders
-with a source toggle. HTML displays as read-only source, so markup, links and
-resource references remain inert; use `panels open --url` for an intentional
-live browser tab.
+HTML is not a preview format. Clicking an `.html`/`.htm` file in the Explorer,
+or its Eye button, opens it rendered in a new browser tab; the "Open HTML files"
+setting (Settings → General) switches Explorer clicks to editable source. A
+browser tab showing a worktree file offers "View source", and an HTML editor tab
+offers "Preview", which opens a new browser tab. `panels open --file` always
+opens the source; `--url file://...` renders.
+
+Markdown, CSV/TSV and structured text fetch at most 1 MiB. Markdown renders
+with a source toggle.
 Tables display at most 500 data rows and 100 columns. JSON/JSONL are formatted;
 YAML/TOML retain source formatting in read-only Monaco with folding. Fonts use
 a temporary FontFace specimen. Decode failures offer system open/reveal actions.
