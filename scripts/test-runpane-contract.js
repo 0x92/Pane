@@ -1993,6 +1993,7 @@ async function checkWrapperAgentParity() {
     panels: [{
       id: 'panel-1', panelId: 'panel-1', paneId: 'session-1', type: 'terminal', title: 'Claude Code', active: true,
       initialized: true, agentType: 'claude', agentDetection: 'process', launchCommand: 'agent-farm run free-range', isCliPanel: true,
+      resumeId: 'farm-launch-1', resumeSource: 'agent-farm',
     }],
   };
   daemonClient.invokeDaemon = async (channel, args) => {
@@ -2026,7 +2027,7 @@ async function checkWrapperAgentParity() {
   assert.deepStrictEqual(wireCalls[0].request.panes[0].tool, wrappedTool);
   assert.deepStrictEqual(wireCalls[1].request.tool, wrappedTool);
   assert.deepStrictEqual(JSON.parse(stdout[2]).panels[0], panelList.panels[0]);
-  assert.ok(stdout.includes('* panel-1\tterminal\tClaude Code initialized claude (process)'), stdout.join('\n'));
+  assert.ok(stdout.includes('* panel-1\tterminal\tClaude Code initialized claude (process) resume farm-launch-1'), stdout.join('\n'));
   assert.deepStrictEqual(wireCalls[4].request.panes[0].tool, wrappedTool);
 
   const pythonOutput = runPythonSnippet(`
@@ -2063,7 +2064,7 @@ print(json.dumps({"calls": calls, "stdout": stdout.getvalue().splitlines()}))
   const python = JSON.parse(pythonOutput);
   assert.deepStrictEqual(python.calls[0].request.panes[0].tool, wrappedTool);
   assert.deepStrictEqual(python.calls[1].request.tool, wrappedTool);
-  assert.ok(python.stdout.includes('* panel-1\tterminal\tClaude Code initialized claude (process)'), python.stdout.join('\n'));
+  assert.ok(python.stdout.includes('* panel-1\tterminal\tClaude Code initialized claude (process) resume farm-launch-1'), python.stdout.join('\n'));
 }
 
 async function checkFilePointerParity() {

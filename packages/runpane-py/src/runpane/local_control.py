@@ -1808,7 +1808,8 @@ def print_panel_list_result(result: Dict[str, Any]) -> None:
         agent = f" {panel.get('agentType')}" if panel.get("agentType") else ""
         detection = panel.get("agentDetection")
         detection_label = f" ({detection})" if detection and detection != "command" else ""
-        print(f"{marker} {panel.get('id')}\t{panel.get('type')}\t{panel.get('title')}{initialized}{agent}{detection_label}")
+        resume = f" resume {panel.get('resumeId')}" if panel.get("resumeId") else ""
+        print(f"{marker} {panel.get('id')}\t{panel.get('type')}\t{panel.get('title')}{initialized}{agent}{detection_label}{resume}")
 
 
 def optional_value(key: str, value: Any) -> Dict[str, Any]:

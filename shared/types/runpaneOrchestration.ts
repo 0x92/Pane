@@ -803,7 +803,17 @@ export interface RunpanePanelSummary {
   lastActiveAt?: string;
   /** Latest `runpane report` from this panel's agent. */
   report?: TerminalAgentReport;
+  /** The agent session ID Pane saved for reopening this panel; omitted when none is saved. */
+  resumeId?: string;
+  /**
+   * Which rule resumes with `resumeId`: `agent-farm` (derived from an `agent-farm run|agent`
+   * command), `configured` (the panel's own resume command), or `agent` (built-in agent
+   * capture). Omitted with `resumeId`.
+   */
+  resumeSource?: RunpanePanelResumeSource;
 }
+
+export type RunpanePanelResumeSource = 'agent-farm' | 'configured' | 'agent';
 
 export interface RunpanePanelListRequest {
   paneId: string;

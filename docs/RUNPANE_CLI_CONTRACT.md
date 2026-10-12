@@ -188,7 +188,7 @@ For `panes create --wait-ready`, `initialInput.delivery` says where the prompt w
 
 `runpane panels open` opens a URL or a file from the Pane worktree as a tab in an existing Pane (default: the calling panel's Pane from `PANE_SESSION_ID`), in split view beside the agent unless `--tab` is passed. Files open in an editor tab with read-only previews for supported formats, including HTML source; an existing tab showing the same target is reused. It brings the tab forward for clients already showing that Pane, and never raises or focuses the Pane window or switches anyone's Pane.
 
-`runpane panels list` lists tool panels inside one Pane session.
+`runpane panels list` lists tool panels inside one Pane session. Each panel with a saved agent session ID reports it as `resumeId`, with `resumeSource` (`agent-farm`, `configured`, or `agent`) naming the rule that reopens the conversation.
 
 `runpane panels output` reads bounded recent terminal output from one panel and strips common terminal control noise for agent use.
 

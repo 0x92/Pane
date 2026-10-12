@@ -2401,6 +2401,7 @@
         "Lists tool panels in a Pane session.",
         "",
         "agentDetection says how Pane knows agentType: declared, command, process, or screen. launchCommand is the command the panel was launched with.",
+        "resumeId is the saved agent session ID that reopens the panel; resumeSource says which rule uses it: agent-farm, configured, or agent.",
         "",
         "Options:",
         "  --pane <pane-id>               Pane/session id",
@@ -3612,6 +3613,7 @@
         "Lists tool panels in a Pane session.",
         "",
         "agentDetection says how Pane knows agentType: declared, command, process, or screen. launchCommand is the command the panel was launched with.",
+        "resumeId is the saved agent session ID that reopens the panel; resumeSource says which rule uses it: agent-farm, configured, or agent.",
         "",
         "Options:",
         "  --pane <pane-id>",
@@ -4427,7 +4429,7 @@
       "`runpane panes rename` trims and updates a Pane's display name without changing its worktree, branch, panels, or focus, and returns the updated pane summary.",
       "`runpane panes focus` raises the Pane window and selects a Pane (and optionally one of its panels) exactly like clicking it in the UI. Because it steals the user's window focus, run it only on an explicit user request to open, focus, show, or switch to a Pane; never focus a Pane proactively, the same doctrine that keeps `panes create` background/no-focus for `--source agent`.",
       "`runpane panels open` opens a URL or a file from the Pane worktree as a tab in an existing Pane (default: the calling panel's Pane from `PANE_SESSION_ID`), in split view beside the agent unless `--tab` is passed. Files open in an editor tab with read-only previews for supported formats, including HTML source; an existing tab showing the same target is reused. It brings the tab forward for clients already showing that Pane, and never raises or focuses the Pane window or switches anyone's Pane.",
-      "`runpane panels list` lists tool panels inside one Pane session.",
+      "`runpane panels list` lists tool panels inside one Pane session. Each panel with a saved agent session ID reports it as `resumeId`, with `resumeSource` (`agent-farm`, `configured`, or `agent`) naming the rule that reopens the conversation.",
       "`runpane panels output` reads bounded recent terminal output from one panel and strips common terminal control noise for agent use.",
       "`runpane panels input` sends exact input bytes to one terminal panel. Prefer `--input-file` for newlines, Ctrl-C, quotes, or shell-sensitive text.",
       "`runpane panes create --prompt` is an alias for `--initial-input`; request JSON and daemon payloads should use the canonical `initialInput` field.",
@@ -7890,6 +7892,16 @@
               },
               "report": {
                 "$ref": "#/jsonSchemas/agentReport"
+              },
+              "resumeId": {
+                "type": "string"
+              },
+              "resumeSource": {
+                "enum": [
+                  "agent-farm",
+                  "configured",
+                  "agent"
+                ]
               }
             },
             "additionalProperties": false
@@ -11333,7 +11345,8 @@
         ],
         "notes": [
           "The ids returned here are stable inputs for `panels output` and `panels input`.",
-          "`agentType` is the agent Pane treats the panel as; `agentDetection` says how it knows (`declared`, `command`, `process`, or `screen`), and `launchCommand` is the command the panel was launched with."
+          "`agentType` is the agent Pane treats the panel as; `agentDetection` says how it knows (`declared`, `command`, `process`, or `screen`), and `launchCommand` is the command the panel was launched with.",
+          "`resumeId` is the agent session ID Pane saved for reopening the panel, and `resumeSource` says which rule resumes with it: `agent-farm` (an `agent-farm run` or `agent-farm agent` command), `configured` (the panel's own resume command), or `agent` (a built-in agent's captured session). Both are omitted when no ID is saved."
         ]
       },
       "panels output": {

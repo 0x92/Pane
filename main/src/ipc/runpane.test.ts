@@ -3254,6 +3254,38 @@ describe('runpane IPC handlers', () => {
     });
   });
 
+  it('lists each panel\'s saved resume ID and where its resume rule came from', async () => {
+    const panelWith = (id: string, customState: TerminalPanelState): ToolPanel => ({
+      ...terminalPanel,
+      id,
+      state: { ...terminalPanel.state, customState },
+    });
+    vi.mocked(panelManager.getPanelsForSession).mockReturnValue([
+      panelWith('farm', { initialCommand: 'agent-farm run P', agentSessionId: 'farm-launch-1' }),
+      panelWith('configured', {
+        initialCommand: 'my-agent',
+        customResume: { mode: 'reported', initialTemplate: '{command}', resumeTemplate: 'my-agent --resume {sessionId}' },
+        agentSessionId: 'custom-1',
+      }),
+      panelWith('codex', { initialCommand: 'codex --yolo', agentSessionId: 'codex-thread-1' }),
+      panelWith('unsaved', { initialCommand: 'agent-farm run P' }),
+    ]);
+    const registry = createRegistry();
+
+    const result = await registry.invoke('runpane:panels:list', [{ paneId: session.id }]);
+
+    expect(result).toMatchObject({
+      panels: [
+        { panelId: 'farm', resumeId: 'farm-launch-1', resumeSource: 'agent-farm' },
+        { panelId: 'configured', resumeId: 'custom-1', resumeSource: 'configured' },
+        { panelId: 'codex', resumeId: 'codex-thread-1', resumeSource: 'agent' },
+        { panelId: 'unsaved' },
+      ],
+    });
+    expect(result).not.toHaveProperty('panels.3.resumeId');
+    expect(result).not.toHaveProperty('panels.3.resumeSource');
+  });
+
   it('reads compact panel screen state from live alternate-screen output', async () => {
     vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue({
       initialized: true,
