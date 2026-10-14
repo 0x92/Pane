@@ -20,6 +20,11 @@ function record(channel: string, args: unknown[]) {
     calls: calls.filter(call => call.channel !== 'file:list').map(call => call.channel),
     panels: (usePanelStore.getState().panels['test-session'] ?? []).map(panel => panel.type),
     active: usePanelStore.getState().activePanels['test-session'] ?? null,
+    // The tab strip shows the layout group's active panel, not the store's.
+    shown: (() => {
+      const root = usePanelStore.getState().layouts['test-session']?.root;
+      return root?.type === 'group' ? root.activePanelId : null;
+    })(),
   });
 }
 function panel(type: string, title: string, customState: PanelCustomState): FakePanel {
@@ -58,4 +63,23 @@ Object.assign(window, {
   },
 });
 
+// A terminal tab is showing, as in a real Pane, so a preview must bring its tab forward.
+const terminal = panel('terminal', 'Terminal', {});
+usePanelStore.getState().addPanel(terminal);
+usePanelStore.getState().setActivePanel('test-session', terminal.id);
+usePanelStore.getState().setLayout('test-session', {
+  version: 1,
+  root: { type: 'group', id: 'group-1', panelIds: [terminal.id], activePanelId: terminal.id },
+  focusedGroupId: 'group-1',
+});
+
 createRoot(document.getElementById('root')!).render(<FileEditor sessionId="test-session" />);
+
+// The test switches back to the terminal tab, as a person clicking it would.
+window.addEventListener('show-terminal', () => {
+  const store = usePanelStore.getState();
+  store.setActivePanel('test-session', terminal.id);
+  const layout = store.layouts['test-session'];
+  if (layout?.root.type === 'group') store.setLayout('test-session', { ...layout, root: { ...layout.root, activePanelId: terminal.id } });
+  record('show-terminal', []);
+});

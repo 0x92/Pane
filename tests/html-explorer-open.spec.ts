@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { build } from 'esbuild';
 import path from 'node:path';
 
-interface Log { calls: string[]; panels: string[]; active: string | null }
+interface Log { calls: string[]; panels: string[]; active: string | null; shown: string | null }
 
 async function mount(page: Page) {
   const { outputFiles } = await build({
@@ -15,19 +15,22 @@ async function mount(page: Page) {
 }
 
 async function log(page: Page): Promise<Log> {
-  return JSON.parse(await page.locator('#ipc-log').textContent() || '{"calls":[],"panels":[],"active":null}');
+  return JSON.parse(await page.locator('#ipc-log').textContent() || '{"calls":[],"panels":[],"active":null,"shown":null}');
 }
 
 test('clicking an HTML file twice focuses the tab already showing it', async ({ page }) => {
   await mount(page);
   await page.getByText('index.html').click();
-  await expect.poll(async () => (await log(page)).panels).toEqual(['browser']);
+  await expect.poll(async () => (await log(page)).shown).toBe('panel-2');
+  await page.evaluate(() => window.dispatchEvent(new Event('show-terminal')));
+  await expect.poll(async () => (await log(page)).shown).toBe('panel-1');
   await page.getByText('index.html').click();
   await expect.poll(async () => (await log(page)).calls.filter(call => call === 'panels:open-html-file').length).toBe(2);
 
-  const { panels, active, calls } = await log(page);
-  expect(panels).toEqual(['browser']);
-  expect(active).toBe('panel-1');
+  const { panels, active, shown, calls } = await log(page);
+  expect(panels).toEqual(['terminal', 'browser']);
+  expect(active).toBe('panel-2');
+  expect(shown).toBe('panel-2');
   expect(calls).not.toContain('panels:create');
 });
 
@@ -38,12 +41,13 @@ test('an HTML file\'s context menu opens the preview or the editable source', as
   await expect(items).toHaveText(['Open preview in browser', 'Open as file']);
 
   await page.getByRole('button', { name: 'Open preview in browser' }).click();
-  await expect.poll(async () => (await log(page)).panels).toEqual(['browser']);
+  await expect.poll(async () => (await log(page)).panels).toEqual(['terminal', 'browser']);
+  await expect.poll(async () => (await log(page)).shown).toBe('panel-2');
   await expect(page.getByRole('button', { name: 'Open as file' })).toHaveCount(0);
 
   await page.getByText('index.html').click({ button: 'right' });
   await page.getByRole('button', { name: 'Open as file' }).click();
-  await expect.poll(async () => (await log(page)).panels).toEqual(['browser', 'editor']);
+  await expect.poll(async () => (await log(page)).panels).toEqual(['terminal', 'browser', 'editor']);
   expect((await log(page)).calls.filter(call => call === 'panels:open-html-file')).toHaveLength(1);
 });
 

@@ -3,12 +3,11 @@
  * one. It never retargets a tab showing something else.
  */
 import { panelApi } from '../../../services/panelApi';
+import { activatePanel } from '../../../services/openFileInEditor';
 import { usePanelStore } from '../../../stores/panelStore';
 
 export async function previewHtmlFileInBrowser(sessionId: string, filePath: string): Promise<void> {
   const browserPanel = await panelApi.openHtmlFile(sessionId, filePath);
-  const store = usePanelStore.getState();
-  store.addPanel(browserPanel);
-  store.setActivePanel(sessionId, browserPanel.id);
-  await panelApi.setActivePanel(sessionId, browserPanel.id);
+  usePanelStore.getState().addPanel(browserPanel);
+  await activatePanel(sessionId, browserPanel.id);
 }
