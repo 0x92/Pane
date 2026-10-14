@@ -2187,7 +2187,7 @@ function panelAgentDetection(panel: ToolPanel): string | undefined {
  * confirms or gives up. Never the message text.
  */
 function logStartingMessage(panelId: string, event: string, fields: Record<string, string | number | boolean | undefined>): void {
-  const detail = Object.entries(fields)
+  const detail = Object.entries({ ...fields, agentFarmSession: terminalPanelManager.getLaunchSessionId(panelId) })
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${key}=${value}`)
     .join(' ');
