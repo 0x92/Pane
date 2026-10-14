@@ -512,8 +512,9 @@ describe('terminal status events', () => {
 
     it('submits to a detected Codex with Ctrl+Enter', async () => {
       const fixture = attachWrapper('say hi');
-      fixture.terminal.pty.process = 'codex';
+      // Detected from its screen, which works where the foreground process name is unknown (Windows).
       fixture.data('>_ OpenAI Codex (v0.160.1)\r\n\r\n› Ask Codex to do anything\r\n\r\n  gpt-5.6 high\r\n  ? for shortcuts');
+      await pollAgentStatus();
       await pollAgentStatus();
       expect(fixture.terminal.agentType).toBe('codex');
       fixture.terminal.pty.write.mockImplementation((data: string) => { if (data === 'say hi') fixture.data('x'); });
@@ -549,7 +550,8 @@ describe('terminal status events', () => {
     });
   });
 
-  it('reports a launch command as exited once its shell owns the foreground again', async () => {
+  // Windows terminals cannot report their foreground, so Pane never claims an exit there.
+  it.skipIf(process.platform === 'win32')('reports a launch command as exited once its shell owns the foreground again', async () => {
     let foregroundGroup: number | undefined = 999;
     const exitManager = new TerminalPanelManager(undefined, undefined, async () => foregroundGroup);
     // SAFETY: This seam mirrors the private members used by these PTY fixtures, as `access` does above.

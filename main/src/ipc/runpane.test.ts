@@ -6809,7 +6809,8 @@ describe('runpane IPC handlers', () => {
       });
     });
 
-    it('keeps Cursor\'s launch prompt unknown with a no-probe message, and ok follows readiness', async () => {
+    // Cursor is not supported on Windows repos.
+    it.skipIf(process.platform === 'win32')('keeps Cursor\'s launch prompt unknown with a no-probe message, and ok follows readiness', async () => {
       vi.useFakeTimers();
       vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot('→ Plan, search, build anything', 'idle', 'cursor'));
       const pending = createRegistry().invoke('runpane:panes:create', [{
