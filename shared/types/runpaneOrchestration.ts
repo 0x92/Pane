@@ -444,6 +444,18 @@ export interface RunpanePanelBlockedState {
   suggestedCommand?: string;
 }
 
+/**
+ * Why a `ready` wait on a launched command has not matched: the command has
+ * shown no supported agent yet, the agent is up but its input box is not, or
+ * the command exited back to the shell.
+ */
+export type RunpaneReadinessReasonCode = 'no-agent-detected' | 'agent-not-ready' | 'command-exited';
+
+export interface RunpaneReadinessReason {
+  code: RunpaneReadinessReasonCode;
+  message: string;
+}
+
 export interface RunpanePaneReadiness {
   ok: boolean;
   condition: RunpanePanelWaitCondition;
@@ -452,6 +464,7 @@ export interface RunpanePaneReadiness {
   elapsedMs: number;
   state: RunpanePanelStateSummary;
   blocked?: RunpanePanelBlockedState;
+  reason?: RunpaneReadinessReason;
   nextCommand?: string;
 }
 
@@ -1086,6 +1099,7 @@ export interface RunpanePanelWaitResult {
   elapsedMs: number;
   state: RunpanePanelStateSummary;
   blocked?: RunpanePanelBlockedState;
+  reason?: RunpaneReadinessReason;
   screen: Pick<RunpanePanelScreenResult, 'source' | 'text' | 'hasMore'>;
   nextCommand?: string;
 }

@@ -64,6 +64,7 @@ vi.spyOn(terminalPanelManager, 'getGhostScreenText');
 vi.spyOn(terminalPanelManager, 'deliverPendingInitialInput');
 vi.spyOn(terminalPanelManager, 'getAgentStatus');
 vi.spyOn(terminalPanelManager, 'getForegroundProcess');
+vi.spyOn(terminalPanelManager, 'hasLaunchCommandExited');
 vi.spyOn(terminalPanelManager, 'isBracketedPasteEnabled');
 vi.spyOn(terminalPanelManager, 'launchShellReadsPromptFile');
 vi.spyOn(panelDatabase, 'getPanelBuffers');
@@ -346,6 +347,7 @@ describe('runpane IPC handlers', () => {
     vi.mocked(terminalPanelManager.deliverPendingInitialInput).mockReset();
     vi.mocked(terminalPanelManager.getAgentStatus).mockReset();
     vi.mocked(terminalPanelManager.getForegroundProcess).mockReset().mockReturnValue(undefined);
+    vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockReset().mockResolvedValue(false);
     vi.mocked(terminalPanelManager.isBracketedPasteEnabled).mockReset().mockReturnValue(false);
     vi.mocked(terminalPanelManager.launchShellReadsPromptFile).mockReset().mockReturnValue(true);
     vi.mocked(terminalPanelManager.getOutputGeneration).mockReturnValue(0);
@@ -858,6 +860,8 @@ describe('runpane IPC handlers', () => {
       vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue({
         ...terminalSnapshot(`${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n`, 'idle', 'claude'),
       });
+      // A launch argument counts only once the transcript shows Claude took it.
+      findUserTurnSince.mockResolvedValue({ state: 'taken', file: '/transcript.jsonl' });
 
       const result = await createRegistry(services).invoke('runpane:panes:adopt', [{
         repo: { id: project.id },
@@ -888,7 +892,7 @@ describe('runpane IPC handlers', () => {
           sessionId: session.id,
           panelId: claudePanel.id,
           readiness: { ok: true, condition: 'ready' },
-          initialInput: { delivered: true, submitted: true, strategy: 'argument', verifiedSubmitted: false },
+          initialInput: { delivered: true, submitted: true, strategy: 'argument', verifiedSubmitted: true, delivery: { state: 'taken' } },
           nextCommand: expect.stringContaining(`--panel ${claudePanel.id}`),
         }],
       });
@@ -2311,7 +2315,9 @@ describe('runpane IPC handlers', () => {
       paneId: session.id,
       panelId: reviewerPanel.id,
       active: false,
-      nextCommand: `runpane panels output --panel ${reviewerPanel.id} --limit 200 --json`,
+      // The create did not wait, so it points at the wait that confirms the message.
+      initialInput: { delivered: false, verifiedSubmitted: false, delivery: { state: 'unknown', evidence: 'argv' } },
+      nextCommand: `runpane panels wait --panel ${reviewerPanel.id} --for ready --timeout-ms 30000 --json`,
     });
   });
 
@@ -3556,6 +3562,59 @@ describe('runpane IPC handlers', () => {
       } });
   });
 
+  it('reports Codex\'s security setup banner even with its composer drawn below it', async () => {
+    // Captured live from Codex 0.160.1 on 2026-10-14.
+    const text = [
+      '  >_ OpenAI Codex (v0.160.1)',
+      '     ~/repo-j/worktrees/jt',
+      '  permissions: YOLO mode',
+      '',
+      '  Set up security for Daybreak mode',
+      '  Set up Advanced Account Security with a hardware security key. You can keep',
+      '  using Codex while you finish setup.',
+      '',
+      '› 1. Set up security',
+      '',
+      '  Press a number to choose · esc to dismiss · type to continue',
+      '',
+      '',
+      '› Ask Codex to do anything',
+      '',
+      '  GPT-6-Astra medium · ~/repo-j/worktrees/jt',
+      '  ? for shortcuts                                     ⚠ 2 warnings · f2 to view',
+    ].join('\n');
+    vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot(text, 'idle', 'codex'));
+    expect(await createRegistry().invoke('runpane:panels:wait', [{ panelId: terminalPanel.id, timeoutMs: 10 }]))
+      .toMatchObject({ ok: false, timedOut: false, blocked: {
+        kind: 'agent-prompt',
+        message: expect.stringContaining('Set up security for Daybreak mode'),
+        suggestedCommand: `runpane panels input --panel ${terminalPanel.id} --keys escape --yes --json`,
+      } });
+  });
+
+  it('reports Codex\'s incompatible background server prompt with the run-without-daemon choice', async () => {
+    // Captured live from Codex 0.160.1 on 2026-10-14.
+    const text = [
+      '  Background server has incompatible feature settings',
+      '  This session requires api_key_model_discovery to be disabled',
+      '  Restart will use these shared feature settings:',
+      '    api_key_model_discovery = false',
+      '  These settings persist and can disable functionality for other clients.',
+      '  Restart may interrupt active or queued work.',
+      '',
+      '  1. Run without daemon this time',
+      '  2. Restart with these settings',
+      '› 3. Cancel',
+    ].join('\n');
+    vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot(text, 'idle', 'codex'));
+    expect(await createRegistry().invoke('runpane:panels:wait', [{ panelId: terminalPanel.id, timeoutMs: 10 }]))
+      .toMatchObject({ ok: false, timedOut: false, blocked: {
+        kind: 'first-run-dialog',
+        message: expect.stringContaining('incompatible feature settings'),
+        suggestedCommand: `runpane panels input --panel ${terminalPanel.id} --keys 1,enter --yes --json`,
+      } });
+  });
+
   it('selects the affirmative Claude trust option when No is selected by default', async () => {
     const text = 'Accessing workspace:\n/tmp/new-repo\nQuick safety check: Is this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder\nEnter to confirm · Esc to cancel';
     vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot(text, 'idle', 'claude'));
@@ -3704,6 +3763,129 @@ describe('runpane IPC handlers', () => {
     }]);
 
     expect(result).toMatchObject({ ok: false, matched: false, timedOut: true });
+  });
+
+  describe('ready for a launched tool command', () => {
+    const rule = '─'.repeat(40);
+    const claudeScreen = `${rule}\n❯ \n${rule}\n  ⏵⏵ bypass permissions on\n`;
+    const wrapperPanel: ToolPanel = {
+      ...terminalPanel,
+      title: 'Terminal',
+      state: { isActive: true, customState: { initialCommand: 'agent-farm run greenfield/planner:opus', launchCommand: 'agent-farm run greenfield/planner:opus' } },
+    };
+    // `isCliPanel: false` is a wrapper launch on main; `true` with no agent is the Agent Farm resume build.
+    const wrapperSnapshot = (text: string, isCliPanel: boolean, agentType?: 'claude' | 'codex') => ({
+      ...terminalSnapshot(text, 'idle'),
+      isCliPanel: isCliPanel || Boolean(agentType),
+      isCliReady: isCliPanel || Boolean(agentType),
+      agentType,
+    });
+
+    beforeEach(() => {
+      vi.mocked(panelManager.getPanel).mockImplementation(panelId => (panelId === wrapperPanel.id ? wrapperPanel : undefined));
+    });
+
+    it.each([false, true])('is not ready while the wrapper has shown no supported agent (CLI panel: %s)', async (isCliPanel) => {
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(wrapperSnapshot('Building agent bundle...\n', isCliPanel));
+      const result = await createRegistry().invoke('runpane:panels:wait', [{
+        panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 20, intervalMs: 5,
+      }]);
+      expect(result).toMatchObject({
+        ok: false, matched: false, timedOut: true,
+        reason: { code: 'no-agent-detected', message: expect.stringContaining('no supported agent') },
+      });
+    });
+
+    it('becomes ready only once the detected agent shows its composer', async () => {
+      const frames = [
+        wrapperSnapshot('Building agent bundle...\n', false),
+        wrapperSnapshot('Building agent bundle...\n', false),
+        wrapperSnapshot(`${rule}\n`, false, 'claude'),
+        wrapperSnapshot(claudeScreen, false, 'claude'),
+      ];
+      let poll = 0;
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockImplementation(() => frames[Math.min(poll++, frames.length - 1)]);
+      const result = await createRegistry().invoke('runpane:panels:wait', [{
+        panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 1_000, intervalMs: 1,
+      }]);
+      expect(result).toMatchObject({ ok: true, matched: true, state: { agentType: 'claude' } });
+      // Two wrapper frames, one detected frame without a composer, then two composer polls to confirm.
+      expect(poll).toBeGreaterThanOrEqual(frames.length + 1);
+    });
+
+    it('says the agent is up but its composer is not when it times out after detection', async () => {
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(wrapperSnapshot('✻ Loading\n', false, 'claude'));
+      const result = await createRegistry().invoke('runpane:panels:wait', [{
+        panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 20, intervalMs: 5,
+      }]);
+      expect(result).toMatchObject({ ok: false, timedOut: true, reason: { code: 'agent-not-ready' } });
+    });
+
+    it('fails fast when the launch command exits back to the shell', async () => {
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(wrapperSnapshot('~/repo % true\n~/repo % \n', false));
+      vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockResolvedValue(true);
+      const result = await createRegistry().invoke('runpane:panels:wait', [{
+        panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 30_000, intervalMs: 5,
+      }]);
+      expect(result).toMatchObject({
+        ok: false, matched: false, timedOut: false,
+        reason: { code: 'command-exited', message: expect.stringContaining('exited') },
+      });
+    });
+
+    const agentFarmTrust = [
+      'Repository workspace: /repo/.agent-farm/workspace.yaml',
+      'Approve these connections, telemetry settings, and full instructions:',
+      '{ "name": "repo" }',
+      'Trust this repository workspace? [y/N] ',
+    ].join('\n');
+
+    it.each([undefined, 'claude'] as const)('reports Agent Farm\'s workspace trust prompt with its text (declared agent: %s)', async (agentType) => {
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue({ ...wrapperSnapshot(agentFarmTrust, Boolean(agentType)), agentType });
+      const result = await createRegistry().invoke('runpane:panels:wait', [{
+        panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 1_000, intervalMs: 5,
+      }]);
+      expect(result).toMatchObject({
+        ok: false, timedOut: false,
+        blocked: {
+          kind: 'first-run-dialog',
+          message: expect.stringContaining('Trust this repository workspace? [y/N]'),
+          // Trust is the person's decision: Pane points at the screen, never at a "y".
+          suggestedCommand: `runpane panels screen --panel ${wrapperPanel.id} --limit 80 --json`,
+        },
+      });
+      // SAFETY: panels:wait resolves to a RunpanePanelWaitResult.
+      expect((result as { blocked: { message: string } }).blocked.message).toContain('agent-farm workspace trust');
+    });
+
+    it('reports a shell-stage [y/N] prompt before a declared agent is on screen, with the prompt text', async () => {
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(
+        wrapperSnapshot('Installing hooks...\nOverwrite existing settings? [y/N] ', true, 'claude'),
+      );
+      expect(await createRegistry().invoke('runpane:panels:wait', [{
+        panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 1_000, intervalMs: 5,
+      }])).toMatchObject({
+        ok: false, timedOut: false,
+        blocked: { kind: 'agent-prompt', message: expect.stringContaining('Overwrite existing settings? [y/N]') },
+      });
+    });
+
+    it('keeps a declared agent ready when its own screen ends in a question', async () => {
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(
+        wrapperSnapshot(`Would you like me to continue?\n${claudeScreen}`, true, 'claude'),
+      );
+      expect(await createRegistry().invoke('runpane:panels:wait', [{
+        panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 1_000, intervalMs: 1,
+      }])).toMatchObject({ ok: true });
+    });
+
+    it('keeps a plain terminal without a launch command ready once it exists', async () => {
+      vi.mocked(panelManager.getPanel).mockReturnValue({ ...wrapperPanel, state: { isActive: true, customState: {} } });
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(wrapperSnapshot('~/repo % \n', false));
+      expect(await createRegistry().invoke('runpane:panels:wait', [{
+        panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 20, intervalMs: 5,
+      }])).toMatchObject({ ok: true, matched: true });
+    });
   });
 
   it('diagnoses built-in agents through the Pane project context', async () => {
@@ -4182,7 +4364,8 @@ describe('runpane IPC handlers', () => {
         active: false,
         focused: false,
         association: { sessionId: 'orchestrator-1', ok: true },
-        nextCommand: 'runpane panels output --panel panel-1 --limit 200 --json',
+        initialInput: { delivered: false, verifiedSubmitted: false, delivery: { state: 'unknown', evidence: 'argv' } },
+        nextCommand: 'runpane panels wait --panel panel-1 --for ready --timeout-ms 30000 --json',
       }],
     });
   });
@@ -4897,10 +5080,11 @@ describe('runpane IPC handlers', () => {
       }),
     }));
     expect(terminalPanelManager.writeToTerminal).not.toHaveBeenCalled();
+    // Sent as an argument but never seen taken: the create does not call that delivered.
     expect(result).toMatchObject({
-      ok: true,
+      ok: false,
       items: [{
-        ok: true,
+        ok: false,
         panelId: 'panel-1',
         initialInput: {
           delivered: true,
@@ -4921,7 +5105,7 @@ describe('runpane IPC handlers', () => {
       readyTimeoutMs: 100,
       panes: [{ name: 'issue-303', tool: { agent: 'claude', initialInput: 'Please start issue 302' } }],
     }]);
-    expect(recorded).toMatchObject({ items: [{ initialInput: { delivery: { state: 'taken', evidence: 'transcript' } } }] });
+    expect(recorded).toMatchObject({ ok: true, items: [{ ok: true, initialInput: { delivery: { state: 'taken', evidence: 'transcript' } } }] });
     expect(findUserTurnSince).toHaveBeenCalledWith(
       expect.objectContaining({ agent: 'claude', cwd: session.worktreePath }),
       Date.parse('2026-01-01T00:02:00.000Z'),
@@ -5313,7 +5497,7 @@ describe('runpane IPC handlers', () => {
         initialInput: {
           delivered: false,
           submitted: false,
-          error: { message: 'The agent is not ready yet, so initial input is queued and sent once it is.' },
+          error: { message: expect.stringContaining('the starting message was not sent') },
           nextCommand: expect.stringContaining(`runpane panels wait --panel ${createdPanel.id}`),
         },
       }],
@@ -5456,9 +5640,8 @@ describe('runpane IPC handlers', () => {
           const useArgument = toolKind === 'claude'
             || toolKind === 'cursor'
             || (toolKind === 'codex' && inputCase.name !== 'slash');
-          const premarkedComposer = waitReady && (
-            (toolKind === 'codex' && inputCase.name === 'slash') || toolKind === 'opencode'
-          );
+          // A waited create claims every typed message, declared agent or not.
+          const premarkedComposer = waitReady && !useArgument;
 
           expect(initialState?.initialInputMode, `${toolKind}/${waitReady}/${inputCase.name} mode`).toBe(
             useArgument ? 'argument' : toolKind === 'opencode' ? 'stdin' : undefined,
@@ -5469,12 +5652,18 @@ describe('runpane IPC handlers', () => {
           expect(Boolean(initialState?.initialInputSentAt), `${toolKind}/${waitReady}/${inputCase.name} premark`).toBe(
             premarkedComposer,
           );
-          expect(Boolean(result.items[0]?.initialInput), `${toolKind}/${waitReady}/${inputCase.name} result`).toBe(
-            waitReady && toolKind !== 'custom',
-          );
-          if (waitReady && toolKind !== 'custom' && inputCase.name !== 'slash') {
+          // Every create with a starting message says what happened to it.
+          expect(Boolean(result.items[0]?.initialInput), `${toolKind}/${waitReady}/${inputCase.name} result`).toBe(true);
+          if (waitReady && toolKind === 'custom') {
+            // `echo` never shows a supported agent, so nothing is typed into its shell.
             expect(result.items[0], `${toolKind}/${waitReady}/${inputCase.name} delivery result`).toMatchObject({
-              ok: true,
+              ok: false, initialInput: { delivered: false },
+            });
+          }
+          if (waitReady && toolKind !== 'custom' && inputCase.name !== 'slash') {
+            // Claude and Codex arguments count only with transcript evidence, which this matrix never shows.
+            expect(result.items[0], `${toolKind}/${waitReady}/${inputCase.name} delivery result`).toMatchObject({
+              ok: toolKind === 'cursor' || toolKind === 'opencode',
               initialInput: {
                 verifiedSubmitted: toolKind === 'opencode',
               },
@@ -5805,6 +5994,239 @@ describe('runpane IPC handlers', () => {
       expect(result).toMatchObject({
         ok: true,
         items: [{ ok: true, initialInput: { submitted: true, verifiedSubmitted: true } }],
+      });
+    });
+  });
+
+  describe('starting message for a wrapper launch', () => {
+    const rule = '─'.repeat(40);
+    const claudeComposer = (content: string) => `${rule}\n❯ ${content}\n${rule}\n`;
+    const codexScreen = (content: string) => `>_ OpenAI Codex (v0.160.1)\n\n› ${content}\n\n  gpt-5.6 high\n  ? for shortcuts`;
+    let stored: ToolPanel | undefined;
+
+    beforeEach(() => {
+      stored = undefined;
+      vi.mocked(panelManager.createPanel).mockImplementation(async (request) => {
+        stored = {
+          id: 'panel-1', sessionId: session.id, type: 'terminal', title: request.title ?? '',
+          // SAFETY: The terminal panel mock keeps the terminal customState it was created with.
+          state: { isActive: false, customState: { ...(request.initialState as TerminalPanelState) } },
+          metadata: { createdAt: '2026-01-01T00:00:00.000Z', lastActiveAt: '2026-01-01T00:01:00.000Z', position: 0 },
+        };
+        return stored;
+      });
+      vi.mocked(panelManager.getPanel).mockImplementation(() => stored);
+      vi.mocked(panelManager.updatePanel).mockImplementation(async (_panelId, updates) => {
+        if (stored && updates.state) stored = { ...stored, state: updates.state };
+      });
+    });
+
+    // SAFETY: createPanel above stores the terminal customState it was given; updatePanel keeps it a terminal state.
+    const storedState = (): TerminalPanelState => (stored?.state.customState ?? {}) as TerminalPanelState;
+    const createWrapper = (tool: { initialInput: string }, extra: { waitReady?: boolean; readyTimeoutMs?: number } = {}) =>
+      createRegistry().invoke('runpane:panes:create', [{
+        repo: { id: project.id }, ...extra,
+        panes: [{ name: 'farm', tool: { command: 'agent-farm run greenfield/planner:opus', ...tool } }],
+      }]);
+
+    /** A wrapper that prints for `wrapperPolls` screen reads, then shows `agent`; staged text and Enter drive its composer. */
+    function scriptWrapper(agent: 'claude' | 'codex', options: { keepsStagedText?: boolean } = {}) {
+      let reads = 0;
+      let staged = '';
+      let enters = 0;
+      vi.mocked(terminalPanelManager.writeToTerminal).mockImplementation((_panelId, data) => {
+        if (data === '\r' || data === '\x1b[13;5u\r') enters += 1;
+        else staged = data;
+      });
+      vi.mocked(terminalPanelManager.getOutputGeneration).mockImplementation(() => (staged ? 1 + enters : 0));
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockImplementation(() => {
+        reads += 1;
+        if (reads <= 3) return { ...terminalSnapshot('Building agent bundle...\n', 'idle'), isCliPanel: false, isCliReady: false, agentType: undefined };
+        const content = enters > 0 && !options.keepsStagedText ? '' : staged;
+        const text = agent === 'claude' ? claudeComposer(content) : codexScreen(content || 'Ask Codex to do anything');
+        return terminalSnapshot(enters > 0 && !options.keepsStagedText ? `✻ Working\n${text}` : text, 'idle', agent);
+      });
+      findUserTurnSince.mockImplementation(async () => (enters > 0 && !options.keepsStagedText
+        ? { state: 'taken' as const, file: '/transcript.jsonl' }
+        : { state: null, file: '/transcript.jsonl' }));
+      return { writes: () => vi.mocked(terminalPanelManager.writeToTerminal).mock.calls.map(call => call[1]) };
+    }
+
+    it('waits for the detected Claude, stages the pointer and submits it with its own Enter', async () => {
+      vi.useFakeTimers();
+      const wrapper = scriptWrapper('claude');
+      const pending = createWrapper({ initialInput: 'Read and follow /tmp/prompt.md' }, { waitReady: true, readyTimeoutMs: 30_000 });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const result = await pending;
+
+      // Pane claimed the message at create, so the terminal manager never types it too.
+      expect(vi.mocked(panelManager.createPanel).mock.calls[0]?.[0].initialState).toMatchObject({ initialInputSentAt: expect.any(String) });
+      expect(wrapper.writes()).toEqual(['Read and follow /tmp/prompt.md', '\r']);
+      expect(result).toMatchObject({
+        ok: true,
+        items: [{
+          ok: true,
+          readiness: { ok: true, state: { agentType: 'claude' } },
+          initialInput: { delivered: true, verifiedSubmitted: true, delivery: { state: 'taken', evidence: 'transcript' } },
+        }],
+      });
+    });
+
+    it('submits to a detected Codex with Ctrl+Enter', async () => {
+      vi.useFakeTimers();
+      const wrapper = scriptWrapper('codex');
+      const pending = createWrapper({ initialInput: 'say hi' }, { waitReady: true, readyTimeoutMs: 30_000 });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const result = await pending;
+
+      expect(wrapper.writes()).toEqual(['say hi', '\x1b[13;5u\r']);
+      expect(result).toMatchObject({ items: [{ ok: true, initialInput: { strategy: 'codex-ctrl-enter', verifiedSubmitted: true } }] });
+    });
+
+    it('fails the create when the detected agent keeps the message in its composer', async () => {
+      vi.useFakeTimers();
+      scriptWrapper('claude', { keepsStagedText: true });
+      const pending = createWrapper({ initialInput: 'say hi' }, { waitReady: true, readyTimeoutMs: 30_000 });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await pending).toMatchObject({
+        ok: false,
+        items: [{
+          ok: false,
+          initialInput: {
+            verifiedSubmitted: false,
+            blocked: { kind: 'submission_unverified' },
+            nextCommand: 'runpane panels screen --panel panel-1 --limit 80 --json',
+          },
+        }],
+      });
+    });
+
+    it('types nothing and reports it when no supported agent appears', async () => {
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue({
+        ...terminalSnapshot('Building agent bundle...\n', 'idle'), isCliPanel: false, isCliReady: false, agentType: undefined,
+      });
+      const result = await createWrapper({ initialInput: 'say hi' }, { waitReady: true, readyTimeoutMs: 30 });
+
+      expect(terminalPanelManager.writeToTerminal).not.toHaveBeenCalled();
+      expect(terminalPanelManager.deliverPendingInitialInput).not.toHaveBeenCalled();
+      expect(storedState().initialInputError).toContain('not sent');
+      expect(result).toMatchObject({
+        ok: false,
+        items: [{
+          ok: false,
+          readiness: { ok: false, reason: { code: 'no-agent-detected' } },
+          initialInput: { delivered: false, verifiedSubmitted: false, error: { message: expect.stringContaining('not sent') } },
+        }],
+      });
+    });
+
+    it('holds the message for the agent when a startup prompt blocks it', async () => {
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue({
+        ...terminalSnapshot('Trust this repository workspace? [y/N] ', 'idle'), isCliPanel: false, isCliReady: false, agentType: undefined,
+      });
+      const result = await createWrapper({ initialInput: 'say hi' }, { waitReady: true, readyTimeoutMs: 1_000 });
+
+      expect(terminalPanelManager.writeToTerminal).not.toHaveBeenCalled();
+      expect(terminalPanelManager.deliverPendingInitialInput).toHaveBeenCalledWith('panel-1');
+      expect(storedState().initialInputSentAt).toBeUndefined();
+      expect(result).toMatchObject({
+        ok: false,
+        items: [{
+          readiness: { blocked: { kind: 'first-run-dialog' } },
+          initialInput: { delivered: false, verifiedSubmitted: false },
+        }],
+      });
+    });
+
+    it('returns at once without --wait-ready and says the message was not awaited', async () => {
+      const result = await createWrapper({ initialInput: 'say hi' });
+
+      expect(terminalPanelManager.writeToTerminal).not.toHaveBeenCalled();
+      // The terminal manager delivers it once the agent is identified and ready.
+      expect(storedState().initialInputSentAt).toBeUndefined();
+      expect(result).toMatchObject({
+        ok: true,
+        items: [{
+          ok: true,
+          initialInput: {
+            delivered: false,
+            submitted: false,
+            verifiedSubmitted: false,
+            delivery: { state: 'unknown', message: expect.stringContaining('did not wait') },
+            nextCommand: 'runpane panels wait --panel panel-1 --for ready --timeout-ms 30000 --json',
+          },
+        }],
+      });
+    });
+  });
+
+  describe('starting message as a launch argument', () => {
+    let stored: ToolPanel | undefined;
+
+    beforeEach(() => {
+      vi.mocked(panelManager.createPanel).mockImplementation(async (request) => {
+        stored = {
+          id: 'panel-1', sessionId: session.id, type: 'terminal', title: request.title ?? '',
+          // SAFETY: The terminal panel mock keeps the terminal customState it was created with; the launch marks it sent.
+          state: { isActive: false, customState: { ...(request.initialState as TerminalPanelState), initialInputSentAt: '2026-01-01T00:02:00.000Z' } },
+          metadata: { createdAt: '2026-01-01T00:00:00.000Z', lastActiveAt: '2026-01-01T00:01:00.000Z', position: 0 },
+        };
+        return stored;
+      });
+      vi.mocked(panelManager.getPanel).mockImplementation(() => stored);
+    });
+
+    it('waits a bounded time for the transcript before calling a Claude launch prompt delivered', async () => {
+      vi.useFakeTimers();
+      // Just after the launch wrote the prompt argument.
+      vi.setSystemTime(new Date('2026-01-01T00:02:00.500Z'));
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot('─'.repeat(40) + '\n❯ \n' + '─'.repeat(40), 'idle', 'claude'));
+      let reads = 0;
+      findUserTurnSince.mockImplementation(async () => (++reads >= 4 ? { state: 'taken' as const, file: '/t.jsonl' } : { state: null, file: '/t.jsonl' }));
+      const pending = createRegistry().invoke('runpane:panes:create', [{
+        repo: { id: project.id }, waitReady: true, readyTimeoutMs: 1_000,
+        panes: [{ name: 'argv', tool: { agent: 'claude', initialInput: 'say hi' } }],
+      }]);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await pending).toMatchObject({
+        ok: true,
+        items: [{ ok: true, initialInput: { strategy: 'argument', verifiedSubmitted: true, delivery: { state: 'taken', evidence: 'transcript' } } }],
+      });
+    });
+
+    it('fails a Claude launch prompt the transcript never shows', async () => {
+      vi.useFakeTimers();
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot('─'.repeat(40) + '\n❯ \n' + '─'.repeat(40), 'idle', 'claude'));
+      findUserTurnSince.mockResolvedValue({ state: null, file: '/t.jsonl' });
+      const pending = createRegistry().invoke('runpane:panes:create', [{
+        repo: { id: project.id }, waitReady: true, readyTimeoutMs: 1_000,
+        panes: [{ name: 'argv', tool: { agent: 'claude', initialInput: 'say hi' } }],
+      }]);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await pending).toMatchObject({
+        ok: false,
+        items: [{ ok: false, initialInput: { strategy: 'argument', verifiedSubmitted: false, delivery: { state: 'unknown', evidence: 'argv' } } }],
+      });
+    });
+
+    it('keeps Cursor\'s launch prompt unknown with a no-probe message, and ok follows readiness', async () => {
+      vi.useFakeTimers();
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot('→ Plan, search, build anything', 'idle', 'cursor'));
+      const pending = createRegistry().invoke('runpane:panes:create', [{
+        repo: { id: project.id }, waitReady: true, readyTimeoutMs: 1_000,
+        panes: [{ name: 'argv', tool: { agent: 'cursor', initialInput: 'say hi' } }],
+      }]);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await pending).toMatchObject({
+        ok: true,
+        items: [{
+          ok: true,
+          initialInput: {
+            verifiedSubmitted: false,
+            verification: 'unverifiable',
+            delivery: { state: 'unknown', message: expect.stringContaining('cannot verify') },
+          },
+        }],
       });
     });
   });

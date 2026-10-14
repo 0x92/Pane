@@ -89,6 +89,11 @@ For a new Pane, work starts only after the association exists:
 
 - A prompt passed to \`panes create\` starts work once the Pane exists, so
   check the item's \`association.ok\` right away.
+- With \`--wait-ready\`, a create's \`ok\` is true only when the agent reached
+  its input box and Pane verified the prompt
+  (\`initialInput.verifiedSubmitted\`). When it is false, read
+  \`readiness.blocked\`, \`readiness.reason\` and \`initialInput\`, and follow
+  \`nextCommand\`; never resend the prompt blindly.
 - If \`association.ok\` is false, or the result has no \`association\` field
   (an older wrapper), capture the returned Pane ID and run the association
   command above immediately, then verify.
