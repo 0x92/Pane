@@ -112,8 +112,11 @@ Preview components never enter the editable auto-save path, even on errors.
 - `config.json` holds app settings (`main/src/services/configManager.ts`,
   types in `main/src/types/config.ts`).
 - Worktrees go in `<repo>/worktrees/` unless the project sets another folder
-  (`worktreeManager.ts`). `worktreePoolManager.ts` keeps empty reserve
-  worktrees on `_reserve/<hex>` branches so new panes open fast.
+  (`worktreeManager.ts`). A worktree on a remote-tracking base fetches that
+  branch first (`worktreeBaseRefresh.ts`: capped at about 10 s, shared by
+  concurrent creates, never fails the create). `worktreePoolManager.ts` keeps
+  empty reserve worktrees on `_reserve/<hex>` branches so new panes open fast;
+  a reserve is only claimed while its base ref still points at its commit.
 - Archive cleanup intents live in SQLite's `archive_cleanup_jobs`, atomically
   committed with the session archive flag. `ArchiveCleanupManager` resumes only
   those intents, validates physical directory/Git identity, and serializes work

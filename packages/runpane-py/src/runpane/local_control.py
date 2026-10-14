@@ -1634,6 +1634,9 @@ def print_pane_create_result(result: Dict[str, Any], dry_run: bool = False, acti
                 else:
                     print(f"  Not associated with Session {association.get('sessionId')}: {association.get('error', 'unknown error')}")
             print_prompt_notes(item, "  ")
+            base = item.get("base") or {}
+            if base.get("notice"):
+                print(f"  ! {base.get('notice')}")
             setup_queue = item.get("setupQueue")
             if setup_queue:
                 print(f"  {setup_queue.get('message')}")

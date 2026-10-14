@@ -4315,6 +4315,31 @@ describe('runpane IPC handlers', () => {
     await vi.waitFor(() => expect(panelManager.createPanel).toHaveBeenCalledWith(expect.objectContaining({ sessionId: session.id, type: 'terminal' })));
   });
 
+  it('reports the base a created Pane started from, with its stale-base notice', async () => {
+    vi.mocked(panelManager.createPanel).mockResolvedValue(terminalPanel);
+    const base = {
+      ref: 'origin/main',
+      commit: 'b08541d7',
+      refresh: 'failed' as const,
+      notice: 'Could not refresh origin/main before creating this Pane (git fetch timed out after 10s).',
+    };
+    const services = createServices({
+      // SAFETY: This queue double implements the create and setup-queue methods the create handler uses.
+      taskQueue: {
+        createSessionAndWait: vi.fn(async () => ({ sessionId: session.id, base })),
+        ...idleSetupQueue(),
+      } as never,
+    });
+
+    const result = await createRegistry(services).invoke('runpane:panes:create', [{
+      repo: { id: project.id },
+      panes: [{ name: 'worker', tool: { agent: 'codex' } }],
+    }]);
+
+    expect(result).toMatchObject({ ok: true, items: [{ ok: true, paneId: session.id, base }] });
+    expect(result.items[0]).toMatchObject({ warnings: undefined });
+  });
+
   it('creates a pinned pane without focusing it', async () => {
     vi.mocked(panelManager.createPanel).mockResolvedValue({
       ...terminalPanel,

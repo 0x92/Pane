@@ -4433,7 +4433,7 @@ export const RUNPANE_CONTRACT = {
       "`runpane panels output` reads bounded recent terminal output from one panel and strips common terminal control noise for agent use.",
       "`runpane panels input` sends exact input bytes to one terminal panel. Prefer `--input-file` for newlines, Ctrl-C, quotes, or shell-sensitive text.",
       "`runpane panes create --prompt` is an alias for `--initial-input`; request JSON and daemon payloads should use the canonical `initialInput` field.",
-      "`runpane panes create --branch <name>` creates the Pane's worktree on exactly that new branch, slashes included (for example `agents/w5a`). The name is checked with `git check-ref-format --branch`, creation fails if the branch already exists, and Pane never renames it to make it unique. `--worktree-name` still names the directory and defaults to `--name`. `--base` is an alias for `--base-branch`, and `--prompt-file` for `--initial-input-file`. `panes create --base <ref> --branch <name> --prompt-file <file>` replaces `git worktree add` plus `panes adopt`.",
+      "`runpane panes create --branch <name>` creates the Pane's worktree on exactly that new branch, slashes included (for example `agents/w5a`). The name is checked with `git check-ref-format --branch`, creation fails if the branch already exists, and Pane never renames it to make it unique. `--worktree-name` still names the directory and defaults to `--name`. `--base` is an alias for `--base-branch`, and `--prompt-file` for `--initial-input-file`. `panes create --base <ref> --branch <name> --prompt-file <file>` replaces `git worktree add` plus `panes adopt`. When the base is a remote-tracking branch (the default `origin/main`, or one named with `--base`), Pane fetches it first, waiting at most about 10 seconds, so the Pane starts at the remote's current tip. Each created item reports `base` (`ref`, `commit`, `refresh`); if the fetch fails the Pane still starts, from the local ref, and `base.notice` says so and how to catch up.",
       "`runpane panes adopt --launch` accepts `--prompt`, `--prompt-file`, `--wait-ready`, and `--ready-timeout-ms`, and reports `readiness`, `initialInput`, and `nextCommand` like `panes create`. A prompt without `--launch` is an error rather than being dropped.",
       "If composer submission cannot be verified without risking a duplicate, the create item is unsuccessful with `initialInput.staged`, `initialInput.attempts`, `initialInput.blocked.kind: submission_unverified`, and an actionable `nextCommand`. The CLI-facing `--prompt` alias maps to this canonical `initialInput` result.",
       "When running from WSL while Pane is installed on Windows, the Linux wrapper may look for a missing `/tmp/pane-daemon.../daemon.sock` or resolve to a Windows shim such as Volta. In that case invoke the Windows wrapper through PowerShell from a Windows cwd, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane repos list --json'`.",
@@ -6491,6 +6491,34 @@ export const RUNPANE_CONTRACT = {
                         "type": "number"
                       },
                       "message": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "base": {
+                    "type": "object",
+                    "required": [
+                      "ref",
+                      "refresh"
+                    ],
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      },
+                      "commit": {
+                        "type": "string"
+                      },
+                      "refresh": {
+                        "type": "string",
+                        "enum": [
+                          "fetched",
+                          "recent",
+                          "skipped",
+                          "failed"
+                        ]
+                      },
+                      "notice": {
                         "type": "string"
                       }
                     },
@@ -10875,6 +10903,7 @@ export const RUNPANE_CONTRACT = {
           "If readiness returns blocked, inspect blocked.suggestedCommand rather than guessing which prompt to answer.",
           "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen.",
           "At most 2 Panes run setup at once (worktree file sync, dependency install, build script); more wait in line. A queued `panes create` returns the Pane id right away with `setupQueue` ({ position, message }) and no `panelId`; the agent starts when setup finishes. Find its panel later with `runpane panels list --pane <id> --json`.",
+          "A Pane with its own worktree starts at the remote's current tip of a remote-tracking base (the default `origin/main`, or one named with `--base`): Pane fetches that branch first, waiting at most about 10 seconds, and creates started together share the fetch. Each item's `base` reports `{ ref, commit, refresh }`, where `refresh` is `fetched`, `recent` (reused a fetch from the last 30 seconds), `skipped` (a local branch or commit base) or `failed`. A failed refresh never fails the create; the Pane starts from the local ref and `base.notice` says what happened and how to catch up.",
           "`panes create --branch <name>` fails with code `ERR_RUNPANE_BRANCH_HAS_PANE` when another Pane already has that branch checked out. The message names the Pane and gives the next step: `runpane panels create --pane <id> --tool-command \"<cmd>\" --source agent --no-focus`."
         ]
       },
