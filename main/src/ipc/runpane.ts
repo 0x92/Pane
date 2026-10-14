@@ -2732,7 +2732,7 @@ async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest):
     if (blocked && condition !== 'text') {
       return panelWaitResult(panel, condition, false, false, startedAt, lastScreen, blocked);
     }
-    if (condition === 'ready' && launched && !lastScreen.state.agentType && terminalPanelManager.hasLaunchCommandExited(panel.id)) {
+    if (condition === 'ready' && launched && !lastScreen.state.agentType && await terminalPanelManager.hasLaunchCommandExited(panel.id)) {
       return panelWaitResult(panel, condition, false, false, startedAt, lastScreen, undefined, {
         code: 'command-exited',
         message: 'The launch command exited back to the shell without starting a supported agent, so the panel will not become ready. '

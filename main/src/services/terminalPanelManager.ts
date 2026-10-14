@@ -76,10 +76,9 @@ const INPUT_SETTLE_MAX_MS = 3000;
 const CLAUDE_INPUT_SETTLE_MIN_MS = 150;
 const CODEX_INPUT_SETTLE_MIN_MS = 500;
 const CODEX_SUBMIT_SEQUENCE = '\x1b[13;5u\r';
-// A launch command whose shell is back at its prompt this long after the
+// A launch command whose shell is back in the foreground this long after the
 // command was written has exited (or never started an agent).
 const LAUNCH_EXIT_GRACE_MS = 1500;
-const SHELL_PROMPT_LINE = /[$#%>]\s*$/;
 // Held starting message for a launch whose agent Pane has not identified:
 // given up (never typed) after this long without an agent or a blocking prompt.
 const HELD_INPUT_AGENT_WINDOW_MS = 30_000;
@@ -108,7 +107,7 @@ import {
   resolveAgentTypeFromProcessName,
 } from './agents/agentIdentity';
 import { detectAgentComposer, detectAgentFromScreen } from './agents/agentScreenSignature';
-import { readForegroundExecutablePath } from '../utils/foregroundProcess';
+import { readForegroundExecutablePath, readForegroundProcessGroup } from '../utils/foregroundProcess';
 import { buildCursorLaunchCommand, createCursorReadyDetector, extractCursorChatId } from './agents/cursorLaunch';
 import { resolveOpenCodeLaunchCommand } from './agents/opencodeLaunch';
 import {
@@ -388,6 +387,7 @@ export class TerminalPanelManager extends EventEmitter {
   constructor(
     private readonly emulatorHost: () => TerminalEmulatorHostConnection = sharedEmulatorThread,
     private readonly readForegroundExecutable: (shellPid: number) => Promise<string | undefined> = readForegroundExecutablePath,
+    private readonly readForegroundGroup: (shellPid: number) => Promise<number | undefined> = readForegroundProcessGroup,
   ) {
     super();
     this.setMaxListeners(100);
@@ -2466,18 +2466,22 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   /**
-   * The panel's launch command ran and Pane's own shell is back at its prompt
-   * with no agent identified: the command exited, or ran no agent. False
-   * where the foreground process is unknown (Windows, WSL, ptyHost).
+   * The panel's launch command ran and Pane's own shell is back in the
+   * foreground (the terminal's foreground process group is the shell's)
+   * with no agent identified: the command exited. A wrapper script, even one
+   * run by the same shell program, has a process group of its own. False
+   * where the foreground is unknown (Windows, WSL, ptyHost).
    */
-  hasLaunchCommandExited(panelId: string): boolean {
+  async hasLaunchCommandExited(panelId: string): Promise<boolean> {
     const terminal = this.terminals.get(panelId);
     if (!terminal || terminal.destroying || terminal.agentType || terminal.launchCommandWrittenAt === undefined) return false;
     if (Date.now() - terminal.launchCommandWrittenAt < LAUNCH_EXIT_GRACE_MS) return false;
-    const name = this.readForegroundProcessName(terminal);
-    if (!name || !this.isInteractiveShellProcess(terminal, name)) return false;
-    const lines = (terminal.screenEmulator?.state.screenText ?? '').split('\n').filter(line => line.trim());
-    return SHELL_PROMPT_LINE.test(lines.at(-1) ?? '');
+    if (terminal.isPtyHost || terminal.isWSL || process.platform === 'win32') return false;
+    try {
+      return await this.readForegroundGroup(terminal.pty.pid) === terminal.pty.pid;
+    } catch {
+      return false;
+    }
   }
 
   private readForegroundProcessName(terminal: TerminalProcess): string | undefined {

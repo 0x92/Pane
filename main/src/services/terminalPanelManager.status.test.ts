@@ -547,26 +547,33 @@ describe('terminal status events', () => {
     });
   });
 
-  it('reports a launch command as exited once its shell is back at the prompt', async () => {
-    const fixture = attach();
+  it('reports a launch command as exited once its shell owns the foreground again', async () => {
+    let foregroundGroup: number | undefined = 999;
+    const exitManager = new TerminalPanelManager(undefined, undefined, async () => foregroundGroup);
+    // SAFETY: This seam mirrors the private members used by these PTY fixtures, as `access` does above.
+    const exitAccess = exitManager as StatusAccess;
+    const fixture = createTerminal();
+    fixtures.push(fixture);
     fixture.terminal.agentType = undefined;
-    Object.assign(fixture.terminal, { shellProcessName: 'zsh', launchCommandWrittenAt: Date.now() });
-    fixture.terminal.pty.process = 'zsh';
-    fixture.data('~/repo % true\r\n~/repo % ');
-    await pollAgentStatus();
+    Object.assign(fixture.terminal, { launchCommandWrittenAt: Date.now(), isPtyHost: false });
+    exitAccess.terminals.set('p', fixture.terminal);
+    const shellPid = fixture.terminal.pty.pid;
+
     // Too soon after the command was written: the shell may not have started it yet.
-    expect(manager.hasLaunchCommandExited('p')).toBe(false);
+    foregroundGroup = shellPid;
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(false);
 
     vi.setSystemTime(Date.now() + 2_000);
-    expect(manager.hasLaunchCommandExited('p')).toBe(true);
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(true);
 
-    // A wrapper still running in the foreground, or one printing at its own prompt, has not exited.
-    fixture.terminal.pty.process = 'node';
-    expect(manager.hasLaunchCommandExited('p')).toBe(false);
-    fixture.terminal.pty.process = 'zsh';
-    fixture.data('\r\nTrust this repository workspace? [y/N] ');
-    await pollAgentStatus();
-    expect(manager.hasLaunchCommandExited('p')).toBe(false);
+    // A wrapper, even a script run by the same shell program, runs in a process group of its own.
+    foregroundGroup = shellPid + 1;
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(false);
+
+    // Once an agent is identified, the launch did not exit.
+    foregroundGroup = shellPid;
+    fixture.terminal.agentType = 'claude';
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(false);
   });
 
   it('detects a wrapper agent from its screen and then reports it to agents-only watchers', async () => {

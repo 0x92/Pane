@@ -347,7 +347,7 @@ describe('runpane IPC handlers', () => {
     vi.mocked(terminalPanelManager.deliverPendingInitialInput).mockReset();
     vi.mocked(terminalPanelManager.getAgentStatus).mockReset();
     vi.mocked(terminalPanelManager.getForegroundProcess).mockReset().mockReturnValue(undefined);
-    vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockReset().mockReturnValue(false);
+    vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockReset().mockResolvedValue(false);
     vi.mocked(terminalPanelManager.isBracketedPasteEnabled).mockReset().mockReturnValue(false);
     vi.mocked(terminalPanelManager.launchShellReadsPromptFile).mockReset().mockReturnValue(true);
     vi.mocked(terminalPanelManager.getOutputGeneration).mockReturnValue(0);
@@ -3791,7 +3791,7 @@ describe('runpane IPC handlers', () => {
 
     it('fails fast when the launch command exits back to the shell', async () => {
       vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(wrapperSnapshot('~/repo % true\n~/repo % \n', false));
-      vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockReturnValue(true);
+      vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockResolvedValue(true);
       const result = await createRegistry().invoke('runpane:panels:wait', [{
         panelId: wrapperPanel.id, condition: 'ready', timeoutMs: 30_000, intervalMs: 5,
       }]);
