@@ -21,3 +21,31 @@ describe('orchestration-sessions:create', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'New chat', nameFromFirstMessage: true, isPinned: true }));
   });
 });
+
+describe('orchestration-sessions:update', () => {
+  it('names every problem in an update payload at once and leaves the Session alone', async () => {
+    const update = vi.fn(async () => ({}));
+    const registry = new PaneCommandRegistry();
+    registerOrchestrationSessionHandlers(
+      // SAFETY: The handlers only call ipcMain.handle, and this test invokes the registry directly.
+      { handle: () => undefined } as IpcMain,
+      // SAFETY: The update channel reads only orchestrationSessionManager.update.
+      { orchestrationSessionManager: { update } } as AppServices,
+      registry,
+    );
+
+    const result = await registry.invokeRemote('orchestration-sessions:update', [
+      { sessionId: 'coordinator' },
+      { outputs: [{}], evidence: [{ label: 'x', url: 'ftp://x', addedAt: 'now' }], decisions: [1] },
+    ]);
+
+    for (const part of [
+      'The Session update payload has 6 problems: decisions[0]: expected string;',
+      'outputs[0].label: missing; outputs[0].url: missing; outputs[0].addedAt: missing. Nothing was changed.',
+      'Next: Fix every field listed',
+    ]) {
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining(part) });
+    }
+    expect(update).not.toHaveBeenCalled();
+  });
+});
