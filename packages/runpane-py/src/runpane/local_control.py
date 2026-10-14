@@ -355,7 +355,49 @@ def has_cadence_value_flag(parsed: Any) -> bool:
     return any(value is not None for value in (parsed.settle_ms, parsed.blocked_settle_ms, parsed.min_interval_ms))
 
 
+class WatchReaderClosed(Exception):
+    """Stdout's reader went away (`| head -1`); the watch has nobody left to tell."""
+
+
+class _ReaderClosedGuard:
+    """Wraps stdout so a failed write raises WatchReaderClosed, never a daemon-looking OSError.
+
+    A closed pipe surfaces as EPIPE, ENOTCONN (a socket pair on macOS) or EINVAL (Windows).
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        try:
+            return self._stream.write(text)
+        except OSError as error:
+            raise WatchReaderClosed() from error
+
+    def flush(self) -> None:
+        try:
+            self._stream.flush()
+        except OSError as error:
+            raise WatchReaderClosed() from error
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
 def run_watch(parsed: Any) -> int:
+    stdout = sys.stdout
+    sys.stdout = _ReaderClosedGuard(stdout)
+    try:
+        return watch_until_done(parsed)
+    except WatchReaderClosed:
+        # End quietly, and keep the interpreter's final flush from reporting the closed pipe.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), stdout.fileno())
+        return 0
+    finally:
+        sys.stdout = stdout
+
+
+def watch_until_done(parsed: Any) -> int:
     if parsed.watch_as and parsed.watch_since is not None:
         raise ValueError("runpane watch accepts either --as or --since, not both.")
 
@@ -532,11 +574,6 @@ def run_watch(parsed: Any) -> int:
             if not keeps_waiting:
                 break
     except KeyboardInterrupt:
-        return 0
-    except BrokenPipeError:
-        # A reader that exits early (`| head -1`) closed stdout; end quietly, and keep the
-        # interpreter's final flush from reporting the closed pipe.
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return 0
 
     return 0

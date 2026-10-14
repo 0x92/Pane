@@ -751,6 +751,11 @@ async function checkWatchStreamParity() {
   }
 }
 
+/** Python prints CRLF on Windows; exact-output checks compare lines. */
+function lf(text) {
+  return text.replace(/\r\n/g, '\n');
+}
+
 function reportEntry(gen, panelId, extra = {}) {
   return {
     gen, at: '2026-10-14T20:00:00.000Z', kind: 'agent.report', paneId: 'pane-1', paneName: 'Worker', panelId, source: 'agent',
@@ -778,7 +783,7 @@ async function checkWatchUntilEvent() {
         { result: { ...watchResult(6), timedOut: false, entries: [entry] }, delayMs: 200 },
       ], requests), () => runCliOnce(runtime, quietJson, paneDir));
       assert.strictEqual(run.code, 0, `${runtime} --until-event must exit 0 on its event. stdout=${run.stdout} stderr=${run.stderr}`);
-      assert.strictEqual(run.stdout, `${JSON.stringify(entry)}\n`, `${runtime} --until-event --quiet --json prints exactly the event`);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} --until-event --quiet --json prints exactly the event`);
       assert.strictEqual(requests.length, 1);
       assert.strictEqual(requests[0].as, 'orch');
       assert.deepStrictEqual(requests[0].kinds, ['agent.report']);
@@ -789,7 +794,7 @@ async function checkWatchUntilEvent() {
         { result: { ...watchResult(6), timedOut: false, entries: [entry] } },
       ], requests), () => runCliOnce(runtime, ['watch', '--as', 'orch', '--until-event', '--quiet', '--kinds', 'agent.report'], paneDir));
       assert.strictEqual(run.code, 0);
-      assert.strictEqual(run.stdout, 'REPORT Worker pane pane-1 panel panel-2 blocked: q\n', `${runtime} lines mode prints the REPORT line`);
+      assert.strictEqual(lf(run.stdout), 'REPORT Worker pane pane-1 panel panel-2 blocked: q\n', `${runtime} lines mode prints the REPORT line`);
 
       // A new cursor's RESET does not end the wait, and --quiet does not print it.
       requests = [];
@@ -798,7 +803,7 @@ async function checkWatchUntilEvent() {
         { result: { ...watchResult(6), timedOut: false, entries: [entry] }, delayMs: 100 },
       ], requests), () => runCliOnce(runtime, quietJson, paneDir));
       assert.strictEqual(run.code, 0);
-      assert.strictEqual(run.stdout, `${JSON.stringify(entry)}\n`, `${runtime} must keep waiting past RESET`);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} must keep waiting past RESET`);
       assert.deepStrictEqual(requests.map(request => request.as), ['orch', 'orch'], `${runtime} re-arms the same named cursor`);
 
       // Waits past the per-call cap: empty, timed-out calls re-arm with no overall limit.
@@ -820,7 +825,7 @@ async function checkWatchUntilEvent() {
         { result: { ...watchResult(6), timedOut: false, entries: [entry] } },
       ], requests), () => runCliOnce(runtime, ['watch', '--until-event', '--quiet', '--json', '--kinds', 'agent.report'], paneDir, 20_000, { PANE_PANEL_ID: 'panel-own' }));
       assert.strictEqual(run.code, 0);
-      assert.strictEqual(run.stdout, `${JSON.stringify(entry)}\n`, `${runtime} must drop its own panel's entries`);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} must drop its own panel's entries`);
       assert.strictEqual(requests.length, 2);
       // Without --as, a Pane terminal gets a stable cursor apart from its --follow cursor (the panel id).
       assert.strictEqual(requests[0].as, 'until-panel-own', `${runtime} derives a stable --until-event cursor`);
@@ -872,6 +877,40 @@ async function checkWatchUntilEvent() {
   }
 }
 
+/** A reader closed under a socket pair (macOS) fails the write with ENOTCONN, not EPIPE; Python must exit 0 for both. */
+function checkPythonWatchReaderClosedErrnos() {
+  const result = runPythonSnippet(`
+import errno, json, os, sys, tempfile
+import runpane.local_control as local_control
+from runpane.cli import parse_args
+
+entry = {"gen": 6, "at": "T", "kind": "agent.report", "paneId": "pane-1", "paneName": "Worker", "panelId": "panel-2", "source": "agent"}
+local_control.invoke_daemon = lambda *args, **kwargs: {"ok": True, "epoch": "e", "generation": 6, "entries": [entry], "timedOut": False}
+
+class ClosedReader:
+    def __init__(self, code):
+        self.code = code
+        self.spare = tempfile.TemporaryFile()
+    def write(self, text):
+        raise OSError(self.code, os.strerror(self.code))
+    def flush(self):
+        pass
+    def fileno(self):
+        return self.spare.fileno()
+
+codes = {}
+real = sys.stdout
+for code in (errno.EPIPE, errno.ENOTCONN, errno.EINVAL):
+    sys.stdout = ClosedReader(code)
+    try:
+        codes[errno.errorcode[code]] = local_control.run_watch(parse_args(["watch", "--until-event", "--json"]))
+    finally:
+        sys.stdout = real
+print(json.dumps(codes))
+`);
+  assert.deepStrictEqual(JSON.parse(result), { EPIPE: 0, ENOTCONN: 0, EINVAL: 0 }, 'Python watch must exit 0 when its reader is gone');
+}
+
 async function checkReportDeliveryLine() {
   const report = { state: 'blocked', reportedAt: '2026-10-14T20:00:00.000Z' };
   const base = { ok: true, paneId: 'pane-1', panelId: 'panel-1', report, sessionIds: [] };
@@ -894,7 +933,7 @@ async function checkReportDeliveryLine() {
         const run = await withFakeDaemon(paneDir, () => ({ result }),
           () => runCliOnce(runtime, ['report', '--state', result.report.state, '--question', 'q', '--panel', 'panel-1'], paneDir));
         assert.strictEqual(run.code, 0, `${runtime} report exits 0. stderr=${run.stderr}`);
-        assert.strictEqual(run.stdout, expected, `${runtime} report line for ${JSON.stringify(result)}`);
+        assert.strictEqual(lf(run.stdout), expected, `${runtime} report line for ${JSON.stringify(result)}`);
       }
       const json = await withFakeDaemon(paneDir, () => ({ result: { ...base, liveWatchers: 3 } }),
         () => runCliOnce(runtime, ['report', '--state', 'blocked', '--question', 'q', '--panel', 'panel-1', '--json'], paneDir));
@@ -4198,6 +4237,7 @@ async function runChecks() {
   checkWatchFormatterGoldens();
   await checkWatchStreamParity();
   await checkWatchUntilEvent();
+  checkPythonWatchReaderClosedErrnos();
   compareLegacyRemoteDaemonHealthParity();
   compareDaemonRepairJsonParity();
   await checkLinuxPackageCompatibilityAlias();

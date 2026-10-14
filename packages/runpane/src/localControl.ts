@@ -2283,10 +2283,13 @@ function emitWatchLine(line: string): void {
   output.write(`${line}\n`);
 }
 
+/** Codes a stdout write fails with once its reader is gone: a pipe, a socket pair (macOS), or Windows. */
+const CLOSED_READER_CODES = new Set(['EPIPE', 'ENOTCONN', 'ECONNRESET', 'EOF']);
+
 /** A reader that exits early (`| head -1`) closes stdout; the next write then ends the watch cleanly. */
 function exitWhenReaderCloses(): void {
   output.on('error', (error: NodeJS.ErrnoException) => {
-    if (error.code !== 'EPIPE') throw error;
+    if (!CLOSED_READER_CODES.has(error.code ?? '')) throw error;
     process.exit(0);
   });
 }
