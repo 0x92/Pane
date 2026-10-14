@@ -29,6 +29,7 @@ import { getWSLShellSpawn, buildWSLENV, WSLContext } from '../utils/wslUtils';
 import { getGitAttributionEnv } from '../utils/attribution';
 import { interactiveTerminalEnv } from '../utils/inheritedProcessEnv';
 import { createShellStartupPromptWatcher } from './shellStartupPrompts';
+import { PaneError } from '../../../shared/paneError';
 import { isProcessAlive, listDescendantPids, terminateProcessTrees, waitForProcessesToExit } from '../utils/processTree';
 import {
   type FlowControlRecord,
@@ -1394,12 +1395,20 @@ export class TerminalPanelManager extends EventEmitter {
     }
     panel = authoritativePanel;
     if (this.sessionTerminations.has(panel.sessionId)) {
-      throw new Error(`Panel ${panel.id} is still stopping; its session teardown is in progress. Retry resume after it finishes.`);
+      throw new PaneError(
+        'ERR_PANEL_STILL_STOPPING',
+        `Panel ${panel.id} is still stopping: its Pane's processes are being shut down. It was not restarted.`,
+        `Wait a few seconds, then run \`runpane panels resume --panel ${panel.id} --yes\` again.`,
+      );
     }
     const stopping = (this.stoppingProcesses.get(panel.id) ?? []).filter(isProcessAlive);
     if (stopping.length > 0) {
       this.stoppingProcesses.set(panel.id, stopping);
-      throw new Error(`Panel ${panel.id} is still stopping; its previous processes have not exited. Retry resume after they exit.`);
+      throw new PaneError(
+        'ERR_PANEL_STILL_STOPPING',
+        `Panel ${panel.id} is still stopping: its previous processes (${stopping.join(', ')}) have not exited. It was not restarted.`,
+        `Wait for them to exit, then run \`runpane panels resume --panel ${panel.id} --yes\` again.`,
+      );
     }
     this.stoppingProcesses.delete(panel.id);
 

@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { browserFileContext } from '../services/browserFileContext';
-import { PaneError, reasonOf } from '../../../shared/paneError';
+import { PaneError, paneErrorText, reasonOf } from '../../../shared/paneError';
 import { isOrchestrationInternalSessionId } from '../../../shared/types/orchestrationSession';
 import type { IpcMain } from 'electron';
 import type { AppServices } from './types';
@@ -1252,7 +1252,11 @@ export function registerRunpaneHandlers(
       if (normalized.sessionId !== undefined) {
         const record = await requireOrchestrationSessionManager(services).get({ sessionId: normalized.sessionId });
         if (record.archived) {
-          throw new Error(`Session ${record.name} is archived; restore it before resuming its panels`);
+          throw new PaneError(
+            'ERR_RUNPANE_SESSION_ARCHIVED',
+            `Session ${record.name} is archived, so its panels were not resumed. Nothing was changed.`,
+            `Restore the Session in Pane, then run \`runpane panels resume --session ${record.id} --yes\`.`,
+          );
         }
         const membership = services.orchestrationSessionManager?.workspaceMembership(record.id);
         scope = { kind: 'session', sessionId: record.id, sessionName: record.name };
@@ -1281,7 +1285,7 @@ export function registerRunpaneHandlers(
           const result = await resumeTerminalPanel(services, resolveTerminalPanel(candidate.panelId), { waitReady: false });
           return { ...base, ok: result.ok, action: result.action, message: result.message, agentSessionId: result.agentSessionId };
         } catch (error) {
-          return { ...base, ok: false, error: error instanceof Error ? error.message : String(error) };
+          return { ...base, ok: false, error: error instanceof PaneError ? paneErrorText(error) : error instanceof Error ? error.message : String(error) };
         }
       });
       const items = normalized.waitReady
@@ -2610,7 +2614,11 @@ async function resumeTerminalPanel(
   // Archive marks the Pane before bounded process teardown and worktree removal.
   // Cleanup may still be running or have failed; neither makes it resumable.
   if (pane?.archived) {
-    throw new Error(`Pane ${pane.id} is archived; its panels cannot be resumed`);
+    throw new PaneError(
+      'ERR_RUNPANE_PANE_ARCHIVED',
+      `Pane ${pane.id} is archived, so panel ${panel.id} was not resumed. Nothing was changed.`,
+      'Restore the Pane from the Archived list in Pane before resuming its panels.',
+    );
   }
   const waitIfAsked = async (target: ToolPanel) => options.waitReady
     ? toPaneReadiness(await waitForPanel(target, {
