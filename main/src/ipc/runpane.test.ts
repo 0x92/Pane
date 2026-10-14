@@ -3706,7 +3706,7 @@ describe('runpane IPC handlers', () => {
         if (!running.has(id)) return null;
         return id === 'panel-other'
           ? terminalSnapshot('Update available! 0.136.0 -> 0.141.0\n2. Skip\nPress enter to continue\n', 'idle', 'codex')
-          : terminalSnapshot('› Ask Codex to do anything\n  gpt-5.6 high\n', 'idle', 'codex');
+          : terminalSnapshot('› Ask Codex to do anything\n\n  gpt-5.6 high\n  ? for shortcuts\n', 'idle', 'codex');
       });
       const registry = createRegistry(bulkServices());
 
@@ -3807,7 +3807,7 @@ describe('runpane IPC handlers', () => {
     it('still waits for readiness when asked and the panel is already running', async () => {
       vi.mocked(terminalPanelManager.isTerminalInitialized).mockReturnValue(true);
       vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(
-        terminalSnapshot('› Ask Codex to do anything\n  gpt-5.6 high\n', 'idle'),
+        terminalSnapshot('› Ask Codex to do anything\n\n  gpt-5.6 high\n  ? for shortcuts\n', 'idle'),
       );
       const registry = createRegistry();
 
@@ -3837,7 +3837,7 @@ describe('runpane IPC handlers', () => {
       vi.mocked(terminalPanelManager.initializeTerminal).mockImplementation(async () => {
         vi.mocked(terminalPanelManager.isTerminalInitialized).mockReturnValue(true);
         vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(
-          terminalSnapshot('› Ask Codex to do anything\n  gpt-5.6 high\n', 'idle'),
+          terminalSnapshot('› Ask Codex to do anything\n\n  gpt-5.6 high\n  ? for shortcuts\n', 'idle'),
         );
       });
       const registry = createRegistry();
