@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import type { PaneEventArgument, PaneEventSink } from '../core/eventSink';
 import type { AgentState } from '../../../shared/types/agentStatus';
 import { boundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
-import { extractWorkspaceHeldInput } from './workspaceHeldInput';
+import { extractWorkspaceHeldInput, type WorkspaceHeldInputScreen } from './workspaceHeldInput';
 import type {
   RunpaneWorkspaceEntry,
   RunpaneWorkspaceEntryKind,
@@ -23,8 +23,8 @@ interface WorkspacePanelMetadata {
   agentType?: string;
   panelTitle?: string;
   lastActivityAt?: string;
-  /** Latest terminal screen text; held input is derived from it, ignoring composer placeholders. */
-  screenText?: string;
+  /** The live viewport and its typed layer; held input is read from the typed layer only. */
+  screen?: WorkspaceHeldInputScreen;
 }
 
 export interface WorkspaceJournalFilter {
@@ -364,7 +364,7 @@ export class WorkspaceJournal implements PaneEventSink {
     const settledMs = kind === 'agent.ready' && Number.isFinite(lastActivityMs)
       ? Math.max(0, now - lastActivityMs)
       : undefined;
-    const heldInput = kind === 'agent.ready' && panel?.screenText ? extractWorkspaceHeldInput(panel.screenText) : undefined;
+    const heldInput = kind === 'agent.ready' ? extractWorkspaceHeldInput(panel.agentType, panel.screen) : undefined;
     const entry: Omit<RunpaneWorkspaceEntry, 'gen' | 'at'> = {
       ...pane,
       kind,

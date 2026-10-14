@@ -62,7 +62,6 @@ import { NamedLockService } from '../services/namedLockService';
 import { NamedLockStore } from '../services/namedLockStore';
 import { WorkspaceStateReader } from '../services/workspaceStateReader';
 import { WorkspaceCursorStore } from '../services/workspaceCursorStore';
-import { extractWorkspaceHeldInput } from '../services/workspaceHeldInput';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 
 interface PaneDaemonHostOptions {
@@ -292,7 +291,8 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
         agentType: snapshot?.agentType ?? customState.agentType,
         panelTitle: panel.title,
         lastActivityAt: snapshot?.lastActivityTime,
-        heldInput: snapshot?.screenText ? extractWorkspaceHeldInput(snapshot.screenText) : undefined,
+        // Typed cells only, so a dim or grey prompt suggestion is not held input.
+        screen: { screenText: snapshot?.screenText, typedText: terminalPanelManager.getInputScreenText(panelId) },
       };
     },
     resolveSessionMembership: sessionId => orchestrationSessionManager.workspaceMembership(sessionId),
