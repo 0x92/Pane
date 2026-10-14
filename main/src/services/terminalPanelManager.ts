@@ -28,6 +28,7 @@ import type { AnalyticsManager } from './analyticsManager';
 import { getWSLShellSpawn, buildWSLENV, WSLContext } from '../utils/wslUtils';
 import { getGitAttributionEnv } from '../utils/attribution';
 import { interactiveTerminalEnv } from '../utils/inheritedProcessEnv';
+import { createShellStartupPromptWatcher } from './shellStartupPrompts';
 import { isProcessAlive, listDescendantPids, terminateProcessTrees, waitForProcessesToExit } from '../utils/processTree';
 import {
   type FlowControlRecord,
@@ -70,7 +71,6 @@ const SHELL_PROMPT_SETTLE_MS = 300;
 const SHELL_PROMPT_FALLBACK_MS = 5000;
 /** A launcher's `PANE_AGENT_SESSION_ID=<id>` line, on a line of its own. */
 const REPORTED_SESSION_ID_LINE = /(?:^|[\r\n])PANE_AGENT_SESSION_ID=([A-Za-z0-9][A-Za-z0-9._:-]{0,255})(?=[\r\n])/g;
-const OH_MY_ZSH_UPDATE_PROMPT = /\[oh-my-zsh\] Would you like to update\?\s*\[Y\/n\]/i;
 // Held initial input for an agent is staged, then submitted with its own
 // Enter once the agent has echoed it and gone quiet for a moment.
 const INPUT_SETTLE_POLL_MS = 50;
@@ -844,25 +844,19 @@ export class TerminalPanelManager extends EventEmitter {
       callback();
     };
 
-    // oh-my-zsh can ask to update before the first prompt. Typing the launch command into
-    // that question lets it swallow the first character, so decline it and keep waiting.
-    // "n" is oh-my-zsh's own "no": it also postpones the question for its update period.
-    let recentOutput = '';
-    let declinedUpdatePrompt = false;
+    // A shell can ask a question (an oh-my-zsh update) before its first prompt. Answer it
+    // instead of typing the launch command into it, and keep waiting for the prompt.
+    const watchStartupPrompts = createShellStartupPromptWatcher();
     let fallback: ReturnType<typeof setTimeout> | undefined;
 
     const onPromptReady = ptyProcess.onData((data: string) => {
       if (callbackInvoked) return;
-      if (!declinedUpdatePrompt) {
-        // oxlint-disable-next-line eslint/no-control-regex
-        recentOutput = `${recentOutput}${data}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').slice(-200);
-        if (OH_MY_ZSH_UPDATE_PROMPT.test(recentOutput)) {
-          declinedUpdatePrompt = true;
-          ptyProcess.write('n');
-          clearTimeout(fallback);
-          fallback = setTimeout(invokeOnce, SHELL_PROMPT_FALLBACK_MS);
-          return;
-        }
+      const startupPrompt = watchStartupPrompts(data);
+      if (startupPrompt) {
+        ptyProcess.write(startupPrompt.answer);
+        clearTimeout(fallback);
+        fallback = setTimeout(invokeOnce, SHELL_PROMPT_FALLBACK_MS);
+        return;
       }
       // Strip OSC too: Git Bash ends its prompt with a window-title sequence.
       const cleanLine = this.stripAnsiSequences(data).split(/\r?\n/).filter(line => line.length > 0).pop() || '';
