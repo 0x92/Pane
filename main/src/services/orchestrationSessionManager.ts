@@ -171,7 +171,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         const runtimeError = await validateWSLAvailable(input.wslDistribution);
         if (runtimeError) throw new Error(runtimeError);
         if (sourcePanelId) throw new Error('Moving a chat cannot change its runtime');
-      } else if (input.wslDistribution) throw new Error('Windows Session cannot specify a WSL distribution');
+      } else if (input.wslDistribution) throw new Error('A native Session cannot specify a WSL distribution');
       const data = this.store.read();
       const name = input.name.trim();
       if (data.sessions.some(session => normalizeSessionName(session.name) === normalizeSessionName(name))) {
@@ -219,7 +219,8 @@ export class OrchestrationSessionManager extends EventEmitter {
         ?? normalizePaneChatAgent(config.defaultOrchestratorAgent);
       this.assertAgentSupported(agent, input.runtime);
       const record: OrchestrationSessionRecord = {
-        runtime: input.runtime ?? 'windows',
+        // Omitted runtime is the native host; 'windows' is a legacy name for it.
+        runtime: input.runtime === 'wsl' ? 'wsl' : undefined,
         wslDistribution: input.wslDistribution,
         id,
         name,

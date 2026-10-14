@@ -73,7 +73,7 @@ export interface OrchestrationActivity {
 }
 
 export interface OrchestrationSessionRecord {
-  /** Omitted in older stores; migrated to the host runtime on read. */
+  /** Omitted means the native host. 'windows' is a legacy alias for native and is dropped on read. */
   runtime?: 'windows' | 'wsl';
   wslDistribution?: string;
   /** Durable recovery anchor for an in-place conversation transfer. */
@@ -181,6 +181,7 @@ export interface OrchestrationSessionOverview {
 }
 
 export interface OrchestrationSessionCreateInput {
+  /** Omit for the native host. 'windows' is accepted as a legacy alias for native. */
   runtime?: 'windows' | 'wsl';
   wslDistribution?: string;
   name: string;
