@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { ChevronRight, ChevronDown, File, Folder, RefreshCw, Plus, Trash2, FolderPlus, Search, X, Eye, Copy, FolderOpen, Pencil, Clipboard, ClipboardPaste, CopyPlus } from 'lucide-react';
+import { ChevronRight, ChevronDown, File, FileCode, Folder, RefreshCw, Plus, Trash2, FolderPlus, Search, X, Eye, Copy, FolderOpen, Pencil, Clipboard, ClipboardPaste, CopyPlus } from 'lucide-react';
 import { useTree } from '@headless-tree/react';
 import { asyncDataLoaderFeature, selectionFeature, hotkeysCoreFeature, expandAllFeature } from '@headless-tree/core';
 import type { ItemInstance } from '@headless-tree/core';
@@ -43,6 +43,8 @@ interface HeadlessFileTreeProps {
   initialShowSearch?: boolean;
   onTreeStateChange?: (state: { expandedDirs: string[]; searchQuery: string; showSearch: boolean }) => void;
   onHtmlPreview: (filePath: string) => void;
+  /** The context menu's "Open as file": the HTML file's editable source, whatever the setting. */
+  onHtmlOpenAsFile: (file: FileItem) => void;
   /** Window-level shortcuts (⌘F, rename, delete, clipboard) only while the tree is the visible panel. */
   shortcutsActive?: boolean;
 }
@@ -58,6 +60,7 @@ function HeadlessFileTree({
   initialShowSearch,
   onTreeStateChange,
   onHtmlPreview,
+  onHtmlOpenAsFile,
   shortcutsActive = true,
 }: HeadlessFileTreeProps) {
   // Cache stores loaded directory contents. Key = dirPath, Value = FileItem[].
@@ -1121,6 +1124,23 @@ function HeadlessFileTree({
         y={contextMenu?.y ?? 0}
         onClose={() => setContextMenu(null)}
       >
+        {contextMenu?.file && !contextMenu.file.isDirectory && isHtmlFile(contextMenu.file.path) && (
+          <>
+            <PopoverButton onClick={() => { if (contextMenu.file) { onHtmlPreview(contextMenu.file.path); setContextMenu(null); } }}>
+              <span className="flex items-center gap-2">
+                <Eye className="w-4 h-4" />
+                Open preview in browser
+              </span>
+            </PopoverButton>
+            <PopoverButton onClick={() => { if (contextMenu.file) { onHtmlOpenAsFile(contextMenu.file); setContextMenu(null); } }}>
+              <span className="flex items-center gap-2">
+                <FileCode className="w-4 h-4" />
+                Open as file
+              </span>
+            </PopoverButton>
+            <div className="my-1 border-t border-border-primary" />
+          </>
+        )}
         <PopoverButton onClick={() => openCreateDialog('file', contextMenu?.file ?? null)}>
           <span className="flex items-center gap-2">
             <Plus className="w-4 h-4" />
@@ -1272,6 +1292,7 @@ export function FileEditor({ sessionId, initialState, onStateChange, shortcutsAc
   const handleFileOpen = useCallback((file: FileItem) => {
     openFromExplorer(file, { clickCount: 2, doubleClick: true });
   }, [openFromExplorer]);
+  const openHtmlAsFile = useCallback((file: FileItem) => { void openFile(file, true); }, [openFile]);
 
   const handleTreeStateChange = useCallback((treeState: { expandedDirs: string[]; searchQuery: string; showSearch: boolean }) => {
     onStateChange?.(treeState);
@@ -1298,6 +1319,7 @@ export function FileEditor({ sessionId, initialState, onStateChange, shortcutsAc
           initialShowSearch={initialState?.showSearch}
           onTreeStateChange={handleTreeStateChange}
           onHtmlPreview={previewHtmlFile}
+          onHtmlOpenAsFile={openHtmlAsFile}
           shortcutsActive={shortcutsActive}
         />
       </div>

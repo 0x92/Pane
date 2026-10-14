@@ -81,10 +81,12 @@ copies the file to a temporary folder on that desktop and opens the copy;
 "Reveal in folder" appears only on the host.
 
 HTML is not a preview format. Clicking an `.html`/`.htm` file in the Explorer,
-or its Eye button, opens it rendered in a new browser tab; the "Open HTML files"
-setting (Settings → General) switches Explorer clicks to editable source. A
-browser tab showing a worktree file offers "View source", and an HTML editor tab
-offers "Preview", which opens a new browser tab. `panels open --file` always
+or its Eye button, opens it rendered in a browser tab: the tab already showing
+that file, or else a new one (a tab showing anything else is never retargeted).
+The "Open HTML files" setting (Settings → General) switches Explorer clicks to
+editable source, and an HTML file's right-click menu offers both "Open preview
+in browser" and "Open as file". A browser tab showing a worktree file offers
+"View source", and an HTML editor tab offers "Preview", which works like a click. `panels open --file` always
 opens the source; `--url file://...` renders.
 
 Markdown, CSV/TSV and structured text fetch at most 1 MiB. Markdown renders
