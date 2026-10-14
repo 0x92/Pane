@@ -122,19 +122,26 @@ export class WorkspaceStateReader {
         const isAgentPanel = (snapshot?.isCliPanel ?? customState.isCliPanel) === true
           || isAgentFarmLaunchCommand(customState.initialCommand);
         if (!isAgentPanel) continue;
+        const agentType = snapshot?.agentType ?? customState.agentType;
         result.push({
           panelId: panel.id,
           paneId: session.id,
           paneName: session.name,
           panelTitle: panel.title,
-          agentType: snapshot?.agentType ?? customState.agentType,
+          agentType,
           repoId: project?.id,
           repoName: project?.name,
           worktreePath: session.worktreePath,
           agentState: resolveAgentState(panel.id),
           running: terminalPanelManager.isTerminalInitialized(panel.id),
           lastActivityTime: snapshot?.lastActivityTime,
-          heldInputPresent: snapshot?.screenText ? extractWorkspaceHeldInput(snapshot.screenText) !== undefined : undefined,
+          // Typed cells only, so a dim or grey prompt suggestion is not held input.
+          heldInputPresent: snapshot
+            ? extractWorkspaceHeldInput(agentType, {
+              screenText: snapshot.screenText,
+              typedText: terminalPanelManager.getInputScreenText(panel.id),
+            }) !== undefined
+            : undefined,
         });
       }
     }

@@ -420,7 +420,7 @@ function runWatchCli(runtime, args, paneDir, until, timeoutMs = 8_000, extraEnv 
   });
 }
 
-function runCliOnce(runtime, args, paneDir, timeoutMs = 20_000) {
+function runCliOnce(runtime, args, paneDir, timeoutMs = 20_000, extraEnv = {}) {
   const command = runtime === 'npm' ? process.execPath : findPython();
   const commandArgs = runtime === 'npm' ? [npmCli, ...args] : ['-m', 'runpane', ...args];
   const env = {
@@ -431,6 +431,7 @@ function runCliOnce(runtime, args, paneDir, timeoutMs = 20_000) {
     RUNPANE_TELEMETRY_DISABLED: '1',
   };
   delete env.PANE_PANEL_ID;
+  Object.assign(env, extraEnv);
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(command, commandArgs, { cwd: rootDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -483,6 +484,37 @@ async function checkPanesAdoptCliParity() {
   }
   assert.strictEqual(frames.npm.channel, 'runpane:panes:adopt');
   assert.deepStrictEqual(frames.pip, frames.npm, 'Python and Node panes adopt sent different daemon requests');
+}
+
+async function checkPanesCreateBaseNotice() {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-create-base-'));
+  const notice = 'Could not refresh origin/main before creating this Pane (git fetch timed out after 10s). '
+    + 'It starts from the local origin/main at b08541d, which may be behind the remote. '
+    + 'Check the network or credentials, then run `git pull --rebase origin main` in the Pane if it needs newer commits.';
+  const item = {
+    ok: true, index: 0, name: 'worker', pinned: false, sessionId: 'session-1', paneId: 'session-1',
+    base: { ref: 'origin/main', commit: 'b08541d7', refresh: 'failed', notice },
+  };
+  const daemonResult = { ok: true, repo: { id: 1, name: 'Pane', path: '/repo', active: true, sessionCount: 1 }, items: [item] };
+  // A field this CLI doesn't know yet is dropped, not rejected: that is how an
+  // older CLI reads `base`.
+  const futureResult = { ...daemonResult, items: [{ ...item, fromAFutureDaemon: { anything: true } }] };
+  try {
+    for (const runtime of ['npm', 'pip']) {
+      const run = (args) => withFakeDaemon(paneDir, () => ({ result: futureResult }), () => runCliOnce(runtime, args, paneDir));
+      const human = await run(['panes', 'create', '--repo', 'active', '--name', 'worker', '--agent', 'claude', '--yes']);
+      assert.strictEqual(human.code, 0, `${runtime} panes create exited ${human.code}. stdout=${human.stdout} stderr=${human.stderr}`);
+      assertIncludes(human.stdout.replace(/\r\n/g, '\n'), `\n  ! ${notice}\n`);
+      const json = await run(['panes', 'create', '--repo', 'active', '--name', 'worker', '--agent', 'claude', '--yes', '--json']);
+      assert.strictEqual(json.code, 0, `${runtime} panes create --json exited ${json.code}. stderr=${json.stderr}`);
+      assert.deepStrictEqual(JSON.parse(json.stdout).items[0].base, item.base, `${runtime} panes create --json lost base`);
+      if (runtime === 'npm') {
+        assert.deepStrictEqual(JSON.parse(json.stdout), daemonResult, 'npm panes create --json kept an unknown field');
+      }
+    }
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
 }
 
 async function checkWatchStreamParity() {
@@ -737,12 +769,209 @@ async function checkWatchStreamParity() {
         ['watch', '--follow', '--since', '42', '--settle', '180000'],
         ['watch', '--follow', '--session', 'my-session', '--pane', 'pane-1'],
         ['watch', '--follow', '--session', 'my-session', '--all-managed'],
+        ['watch', '--until-event', '--follow'],
+        ['watch', '--until-event', '--self-test'],
+        ['watch', '--until-event', '--timeout-ms', '0'],
       ]) {
         const badWatch = spawnWatchCli(runtime, badWatchArgs);
         assert.strictEqual(badWatch.status, 2, `${badWatchArgs.join(' ')} must fail`);
         assertIncludes(badWatch.stdout, 'WATCH ERROR');
         assertIncludes(badWatch.stderr, 'WATCH ERROR');
       }
+    } finally {
+      fs.rmSync(paneDir, { recursive: true, force: true });
+    }
+  }
+}
+
+/** Python prints CRLF on Windows; exact-output checks compare lines. */
+function lf(text) {
+  return text.replace(/\r\n/g, '\n');
+}
+
+function reportEntry(gen, panelId, extra = {}) {
+  return {
+    gen, at: '2026-10-14T20:00:00.000Z', kind: 'agent.report', paneId: 'pane-1', paneName: 'Worker', panelId, source: 'agent',
+    report: { state: 'blocked', question: 'q', reportedAt: '2026-10-14T20:00:00.000Z' }, ...extra,
+  };
+}
+
+/** A fake daemon that answers the n-th watch request with `responses[n]` (the last one repeats). */
+function scriptedWatch(responses, requests) {
+  return (frame) => {
+    requests.push(frame.args[0]);
+    return responses[Math.min(requests.length, responses.length) - 1];
+  };
+}
+
+async function checkWatchUntilEvent() {
+  const quietJson = ['watch', '--as', 'orch', '--until-event', '--quiet', '--json', '--kinds', 'agent.report'];
+  for (const runtime of ['npm', 'pip']) {
+    const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), `runpane-until-${runtime}-`));
+    try {
+      // Exit-to-wake: the first event is printed alone and the process exits 0 by itself.
+      const entry = reportEntry(6, 'panel-2');
+      let requests = [];
+      let run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: { ...watchResult(6), timedOut: false, entries: [entry] }, delayMs: 200 },
+      ], requests), () => runCliOnce(runtime, quietJson, paneDir));
+      assert.strictEqual(run.code, 0, `${runtime} --until-event must exit 0 on its event. stdout=${run.stdout} stderr=${run.stderr}`);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} --until-event --quiet --json prints exactly the event`);
+      assert.strictEqual(requests.length, 1);
+      assert.strictEqual(requests[0].as, 'orch');
+      assert.deepStrictEqual(requests[0].kinds, ['agent.report']);
+      assert.strictEqual(requests[0].agentsOnly, true, `${runtime} --until-event keeps the --follow agents-only default`);
+
+      requests = [];
+      run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: { ...watchResult(6), timedOut: false, entries: [entry] } },
+      ], requests), () => runCliOnce(runtime, ['watch', '--as', 'orch', '--until-event', '--quiet', '--kinds', 'agent.report'], paneDir));
+      assert.strictEqual(run.code, 0);
+      assert.strictEqual(lf(run.stdout), 'REPORT Worker pane pane-1 panel panel-2 blocked: q\n', `${runtime} lines mode prints the REPORT line`);
+
+      // A new cursor's RESET does not end the wait, and --quiet does not print it.
+      requests = [];
+      run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: { ...watchResult(5), timedOut: false, reset: { reason: 'first-use' } } },
+        { result: { ...watchResult(6), timedOut: false, entries: [entry] }, delayMs: 100 },
+      ], requests), () => runCliOnce(runtime, quietJson, paneDir));
+      assert.strictEqual(run.code, 0);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} must keep waiting past RESET`);
+      assert.deepStrictEqual(requests.map(request => request.as), ['orch', 'orch'], `${runtime} re-arms the same named cursor`);
+
+      // Waits past the per-call cap: empty, timed-out calls re-arm with no overall limit.
+      requests = [];
+      run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: watchResult(5) },
+        { result: watchResult(5) },
+        { result: { ...watchResult(6), timedOut: false, entries: [entry] } },
+      ], requests), () => runCliOnce(runtime, quietJson, paneDir));
+      assert.strictEqual(run.code, 0);
+      assert.strictEqual(requests.length, 3, `${runtime} must re-arm after an empty call`);
+      assert.ok(requests.every(request => request.timeoutMs > 0 && request.timeoutMs <= 120_000), `${runtime} per-call wait stays capped`);
+
+      // The caller's own panel never ends the wait; another panel's entry does.
+      requests = [];
+      const ownEntry = reportEntry(5, 'panel-own');
+      run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: { ...watchResult(5), timedOut: false, entries: [ownEntry] } },
+        { result: { ...watchResult(6), timedOut: false, entries: [entry] } },
+      ], requests), () => runCliOnce(runtime, ['watch', '--until-event', '--quiet', '--json', '--kinds', 'agent.report'], paneDir, 20_000, { PANE_PANEL_ID: 'panel-own' }));
+      assert.strictEqual(run.code, 0);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} must drop its own panel's entries`);
+      assert.strictEqual(requests.length, 2);
+      // Without --as, a Pane terminal gets a stable cursor apart from its --follow cursor (the panel id).
+      assert.strictEqual(requests[0].as, 'until-panel-own', `${runtime} derives a stable --until-event cursor`);
+      assert.strictEqual(requests[1].as, 'until-panel-own');
+
+      // --timeout-ms is a total deadline: exit 124 with a timeout control line.
+      for (const [format, expected] of [['lines', 'WATCH TIMEOUT'], ['json', '"kind":"_timeout"']]) {
+        requests = [];
+        const startedAt = Date.now();
+        run = await withFakeDaemon(paneDir, (frame) => {
+          requests.push(frame.args[0]);
+          return { result: watchResult(5), delayMs: Math.min(700, frame.args[0].timeoutMs) };
+        }, () => runCliOnce(runtime, ['watch', '--until-event', '--format', format, '--timeout-ms', '2000'], paneDir));
+        const elapsed = Date.now() - startedAt;
+        assert.strictEqual(run.code, 124, `${runtime} --until-event deadline must exit 124. stdout=${run.stdout} stderr=${run.stderr}`);
+        assertIncludes(run.stdout, expected);
+        assert.ok(elapsed >= 1_900 && elapsed < 6_000, `${runtime} deadline took ${elapsed}ms`);
+        assert.ok(requests.every(request => request.timeoutMs <= 2_000), `${runtime} never waits past the deadline`);
+      }
+      run = await withFakeDaemon(paneDir, () => ({ result: watchResult(5), delayMs: 100 }),
+        () => runCliOnce(runtime, ['watch', '--until-event', '--quiet', '--timeout-ms', '500'], paneDir));
+      assert.strictEqual(run.code, 124);
+      assert.strictEqual(run.stdout, '', `${runtime} --quiet drops the timeout line`);
+
+      // A closed reader ends a --follow watch at its next write, with exit 0 and no stack trace.
+      let served = 0;
+      const closed = await withFakeDaemon(paneDir, () => {
+        served += 1;
+        return { result: { ...watchResult(10 + served), timedOut: false, entries: [reportEntry(10 + served, 'panel-2')] }, delayMs: 50 };
+      }, () => new Promise((resolve, reject) => {
+        const command = runtime === 'npm' ? process.execPath : findPython();
+        const commandArgs = runtime === 'npm' ? [npmCli] : ['-m', 'runpane'];
+        const child = childProcess.spawn(command, [...commandArgs, 'watch', '--follow', '--json', '--kinds', 'agent.report'], {
+          cwd: rootDir,
+          env: { ...process.env, PANE_DIR: paneDir, PYTHONDONTWRITEBYTECODE: '1', PYTHONPATH: pythonSource, RUNPANE_TELEMETRY_DISABLED: '1' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stderr = '';
+        const timer = setTimeout(() => { child.kill(); reject(new Error(`${runtime} watch kept running after its reader closed`)); }, 10_000);
+        child.stdout.once('data', () => child.stdout.destroy());
+        child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+        child.once('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stderr }); });
+      }));
+      assert.strictEqual(closed.code, 0, `${runtime} closed reader must exit 0 (${closed.signal}). stderr=${closed.stderr}`);
+      assert.strictEqual(closed.stderr, '', `${runtime} closed reader must not print a stack trace`);
+    } finally {
+      fs.rmSync(paneDir, { recursive: true, force: true });
+    }
+  }
+}
+
+/** A reader closed under a socket pair (macOS) fails the write with ENOTCONN, not EPIPE; Python must exit 0 for both. */
+function checkPythonWatchReaderClosedErrnos() {
+  const result = runPythonSnippet(`
+import errno, json, os, sys, tempfile
+import runpane.local_control as local_control
+from runpane.cli import parse_args
+
+entry = {"gen": 6, "at": "T", "kind": "agent.report", "paneId": "pane-1", "paneName": "Worker", "panelId": "panel-2", "source": "agent"}
+local_control.invoke_daemon = lambda *args, **kwargs: {"ok": True, "epoch": "e", "generation": 6, "entries": [entry], "timedOut": False}
+
+class ClosedReader:
+    def __init__(self, code):
+        self.code = code
+        self.spare = tempfile.TemporaryFile()
+    def write(self, text):
+        raise OSError(self.code, os.strerror(self.code))
+    def flush(self):
+        pass
+    def fileno(self):
+        return self.spare.fileno()
+
+codes = {}
+real = sys.stdout
+# errno.errorcode names ENOTCONN WSAENOTCONN on Windows, so name the codes here.
+for name, code in (("EPIPE", errno.EPIPE), ("ENOTCONN", errno.ENOTCONN), ("EINVAL", errno.EINVAL)):
+    sys.stdout = ClosedReader(code)
+    try:
+        codes[name] = local_control.run_watch(parse_args(["watch", "--until-event", "--json"]))
+    finally:
+        sys.stdout = real
+print(json.dumps(codes))
+`);
+  assert.deepStrictEqual(JSON.parse(result), { EPIPE: 0, ENOTCONN: 0, EINVAL: 0 }, `Python watch must exit 0 when its reader is gone: ${result}`);
+}
+
+async function checkReportDeliveryLine() {
+  const report = { state: 'blocked', reportedAt: '2026-10-14T20:00:00.000Z' };
+  const base = { ok: true, paneId: 'pane-1', panelId: 'panel-1', report, sessionIds: [] };
+  const hint = 'No Session recorded this report and no watcher was waiting for it. It is stored on the panel '
+    + '(runpane agents status --panel panel-1), and a watch with a named cursor '
+    + '(runpane watch --as <name> --kinds agent.report) still receives it when it next waits.';
+  const cases = [
+    [{ ...base, liveWatchers: 1 }, 'Reported blocked for panel panel-1. Delivered to 1 waiting watcher.\n'],
+    [{ ...base, report: { ...report, state: 'done' }, sessionIds: ['s-1', 's-2'], liveWatchers: 2 },
+      'Reported done for panel panel-1. Recorded on Session s-1, s-2. Delivered to 2 waiting watchers.\n'],
+    [{ ...base, liveWatchers: 0 }, `Reported blocked for panel panel-1.\n${hint}\n`],
+    [{ ...base, sessionIds: ['s-1'], liveWatchers: 0 }, 'Reported blocked for panel panel-1. Recorded on Session s-1.\n'],
+    [base, 'Reported blocked for panel panel-1.\nNo Session recorded this report. It is stored on the panel '
+      + '(runpane agents status --panel panel-1), and only watchers that list agent.report receive it.\n'],
+  ];
+  for (const runtime of ['npm', 'pip']) {
+    const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), `runpane-report-line-${runtime}-`));
+    try {
+      for (const [result, expected] of cases) {
+        const run = await withFakeDaemon(paneDir, () => ({ result }),
+          () => runCliOnce(runtime, ['report', '--state', result.report.state, '--question', 'q', '--panel', 'panel-1'], paneDir));
+        assert.strictEqual(run.code, 0, `${runtime} report exits 0. stderr=${run.stderr}`);
+        assert.strictEqual(lf(run.stdout), expected, `${runtime} report line for ${JSON.stringify(result)}`);
+      }
+      const json = await withFakeDaemon(paneDir, () => ({ result: { ...base, liveWatchers: 3 } }),
+        () => runCliOnce(runtime, ['report', '--state', 'blocked', '--question', 'q', '--panel', 'panel-1', '--json'], paneDir));
+      assert.strictEqual(JSON.parse(json.stdout).liveWatchers, 3, `${runtime} --json passes liveWatchers through`);
     } finally {
       fs.rmSync(paneDir, { recursive: true, force: true });
     }
@@ -764,7 +993,7 @@ function spawnWatchCli(runtime, args) {
 // undefined both mean an unset optional value; all populated fields are compared.
 const PARSER_DEFAULT_DIFFERENCES = {
   waitReady: false, noFocus: false, focus: false, pinned: false, noPinned: false,
-  force: false, follow: false, agentsOnly: false, ackNow: false,
+  force: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
   includeHeldInput: false, idleBackoff: false, allManaged: false, allStopped: false,
   includeShells: false, noHeldInput: false, selfTest: false, report: false,
   watchKinds: [], watchPaneIds: [], watchExcludePaneIds: [],
@@ -3899,6 +4128,91 @@ async function checkSessionRuntime() {
   }
 }
 
+/** Collecting mode of the CLI decoder copy: every problem at once, "missing" for absent fields. */
+function checkBoundaryDecoderCollectsEveryIssue() {
+  const { boundary, decodeBoundary, decodeBoundaryAll, BoundaryDecodeIssues } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'boundaryDecoder.js'));
+  const schema = boundary.object({
+    items: boundary.array(boundary.object({
+      label: boundary.nonEmptyString,
+      url: boundary.refine(boundary.nonEmptyString, (url) => url.startsWith('https://'), 'expected an https URL'),
+    })),
+    tags: boundary.optional(boundary.array(boundary.string)),
+    choice: boundary.optional(boundary.union(boundary.literal('a'), boundary.object({ label: boundary.string }))),
+  });
+  assert.throws(() => decodeBoundaryAll({ items: [{}, { label: 'x', url: 'ftp://x' }], tags: [1], choice: {} }, schema), (error) => {
+    assert.ok(error instanceof BoundaryDecodeIssues);
+    assert.deepStrictEqual(error.issues.map((issue) => `${issue.where}: ${issue.message}`), [
+      'items[0].label: missing',
+      'items[0].url: missing',
+      'items[1].url: expected an https URL',
+      'tags[0]: expected string',
+      'choice: did not match any allowed shape',
+    ]);
+    return true;
+  });
+  assert.throws(() => decodeBoundaryAll('x', schema), /^BoundaryDecodeIssues: input: expected object$/);
+  const valid = { items: [{ label: 'x', url: 'https://x' }], tags: ['t'], choice: 'a' };
+  assert.deepStrictEqual(decodeBoundaryAll(valid, schema), decodeBoundary(valid, schema));
+  assert.throws(() => decodeBoundary({ items: [{}] }, schema), /input\.items\.0\.label: expected string/);
+}
+
+/** `sessions update --from-json` names every payload problem in one error before reaching the daemon. */
+async function checkSessionPayloadErrors() {
+  const daemonClient = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'daemonClient.js'));
+  const { parseRunpaneArgs } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'commands.js'));
+  const { runSessionsUpdate, runSessionsCreate } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'localControl.js'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-session-payload-'));
+  const file = path.join(directory, 'update.json');
+  const originalInvoke = daemonClient.invokeDaemon;
+  const originalLog = console.log;
+  const calls = [];
+  daemonClient.invokeDaemon = async (channel, args) => {
+    calls.push({ channel, args });
+    return { ok: true, session: { id: 'coordinator', name: 'Coordinator', associations: [] } };
+  };
+  console.log = () => {};
+  try {
+    fs.writeFileSync(file, JSON.stringify({
+      outputs: [{}],
+      evidence: [{ label: 'x', url: 'ftp://x', addedAt: 'now' }],
+      decisions: [1],
+    }));
+    await assert.rejects(runSessionsUpdate(parseRunpaneArgs(['sessions', 'update', '--session', 'coordinator', '--from-json', file])), (error) => {
+      assert.strictEqual(error.code, 'ERR_SESSION_PAYLOAD_INVALID');
+      assert.strictEqual(error.message, 'The Session update payload has 6 problems: decisions[0]: expected string; '
+        + 'evidence[0].url: expected a URL starting with https://, http://, file:// or grain://; '
+        + 'evidence[0].addedAt: expected an ISO 8601 date such as 2026-10-14T09:30:00Z; '
+        + 'outputs[0].label: missing; outputs[0].url: missing; outputs[0].addedAt: missing. Nothing was changed.');
+      assertIncludes(error.next, 'outputs and evidence items are {"label": string, "url": https/http/file/grain URL, "addedAt": ISO 8601 date');
+      assertIncludes(error.next, 'runpane agent-context --command "sessions update"');
+      return true;
+    });
+    assert.strictEqual(calls.length, 0, 'an invalid payload must not reach the daemon');
+
+    fs.writeFileSync(file, JSON.stringify({ name: 'Bad', outputs: 'x' }));
+    await assert.rejects(runSessionsCreate(parseRunpaneArgs(['sessions', 'create', '--from-json', file])), /The Session create payload has 1 problem: outputs: expected array\./);
+
+    const valid = {
+      decisions: ['Ship'],
+      blockers: [],
+      outputs: [{ label: 'PR', url: 'https://github.com/o/r/pull/1', addedAt: '2026-10-14T09:30:00Z', kind: 'pull-request' }],
+      evidence: [{ label: 'Log', url: 'file:///tmp/log.txt', addedAt: '2026-10-14', provenance: 'qa' }],
+      report: {
+        summary: 'Done', status: 'verified', reportedAt: '2026-10-14T09:31:00Z', provenance: 'qa agent',
+        evidence: [{ label: 'Page', url: 'grain://page', addedAt: '2026-10-14T09:30:00Z' }],
+      },
+      expectedRevision: 3,
+    };
+    fs.writeFileSync(file, JSON.stringify(valid));
+    assert.strictEqual(await runSessionsUpdate(parseRunpaneArgs(['sessions', 'update', '--session', 'coordinator', '--from-json', file, '--json'])), 0);
+    assert.deepStrictEqual(calls[0].args[0], { selector: { sessionId: 'coordinator' }, input: valid });
+  } finally {
+    daemonClient.invokeDaemon = originalInvoke;
+    console.log = originalLog;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function runControlProcess(runtime, args, paneDir) {
   return new Promise((resolve, reject) => {
     childProcess.execFile(runtime === 'npm' ? process.execPath : findPython(),
@@ -4042,6 +4356,8 @@ async function runChecks() {
   compareParserParity();
   checkWatchFormatterGoldens();
   await checkWatchStreamParity();
+  await checkWatchUntilEvent();
+  checkPythonWatchReaderClosedErrnos();
   compareLegacyRemoteDaemonHealthParity();
   compareDaemonRepairJsonParity();
   await checkLinuxPackageCompatibilityAlias();
@@ -4068,6 +4384,7 @@ async function runChecks() {
   await checkFilePointerParity();
   await checkDeliveryParity();
   await checkReportParity();
+  await checkReportDeliveryLine();
   await checkPaneCreateBlockedReadiness();
   await checkSessionChildPinDefaults();
   await checkPanesCostParity();
@@ -4075,8 +4392,11 @@ async function runChecks() {
   await checkLockParity();
   await checkOverviewReportsAndLocks();
   await checkSessionRuntime();
+  checkBoundaryDecoderCollectsEveryIssue();
+  await checkSessionPayloadErrors();
   await checkSessionPinCommands();
   await checkPanesAdoptCliParity();
+  await checkPanesCreateBaseNotice();
   checkContractDocListsEveryCommand();
   await checkAgentTemplateParity();
   checkHelpOutput();

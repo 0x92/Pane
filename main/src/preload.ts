@@ -412,6 +412,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     create: (input: OrchestrationSessionCreateInput): Promise<IPCResponse> => invokeIpc('orchestration-sessions:create', input),
     get: (selector: OrchestrationSessionSelector): Promise<IPCResponse> => invokeIpc('orchestration-sessions:get', selector),
     update: (selector: OrchestrationSessionSelector, input: OrchestrationSessionUpdateInput): Promise<IPCResponse> => invokeIpc('orchestration-sessions:update', selector, input),
+    reorder: (sessionIds: string[]): Promise<IPCResponse> => invokeIpc('orchestration-sessions:reorder', { sessionIds }),
     setAgent: (selector: OrchestrationSessionSelector, agent: 'claude' | 'codex' | 'cursor'): Promise<IPCResponse> => invokeIpc('orchestration-sessions:set-agent', selector, agent),
     associate: (selector: OrchestrationSessionSelector, association: OrchestrationAssociationInput): Promise<IPCResponse> => invokeIpc('orchestration-sessions:associate', selector, association),
     detach: (selector: OrchestrationSessionSelector, paneId?: string): Promise<IPCResponse> => invokeIpc('orchestration-sessions:detach', selector, paneId),
@@ -734,7 +735,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveExpandedFolders: (folderIds: string[]): Promise<IPCResponse> => invokeIpc('ui-state:save-expanded-folders', folderIds),
     saveSessionSortAscending: (ascending: boolean): Promise<IPCResponse> => invokeIpc('ui-state:save-session-sort-ascending', ascending),
     saveSidebarSectionExpanded: (section: 'pinned' | 'repositories' | 'sshHosts' | 'sessions' | 'archived', expanded: boolean): Promise<IPCResponse> => invokeIpc('ui-state:save-sidebar-section-expanded', section, expanded),
-    saveCollapsedSessions: (sessionIds: string[]): Promise<IPCResponse> => invokeIpc('ui-state:save-collapsed-sessions', sessionIds),
+    saveExpandedSessions: (sessionIds: string[]): Promise<IPCResponse> => invokeIpc('ui-state:save-expanded-sessions', sessionIds),
     saveExpandedArchivedProjects: (projectIds: number[]): Promise<IPCResponse> => invokeIpc('ui-state:save-expanded-archived-projects', projectIds),
     // Per-host navigation memory. The caller names the host because the renderer
     // can still be showing the outgoing host while main has switched runtimes.

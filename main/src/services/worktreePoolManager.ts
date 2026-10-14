@@ -5,6 +5,7 @@ import type { CommandRunner } from '../utils/commandRunner';
 import { forceRemoveWorktree } from './gitPerformanceConfig';
 import { withArchiveRepositoryLock } from './archiveRepositoryLock';
 import { archivePathKey } from './archiveCleanupFilesystem';
+import { refreshWorktreeBase } from './worktreeBaseRefresh';
 
 interface ReserveWorktree {
   reserveName: string;
@@ -12,14 +13,17 @@ interface ReserveWorktree {
   branchName: string;
   projectPath: string;
   baseRef: string;
-  baseCommit: string; // resolved commit hash at creation time — used to detect if base has advanced
+  baseCommit: string; // the commit the reserve is checked out at — a claim compares the base ref against it
   createdAt: number;
 }
 
 /**
  * WorktreePoolManager pre-creates reserve worktrees per project so session
- * creation is near-instant. It is a singleton service — operations are
- * fire-and-forget optimisations and MUST NOT block or fail session creation.
+ * creation is near-instant. It is a singleton service. A reserve is made from
+ * a freshly fetched base (refreshWorktreeBase) and is only handed out while
+ * the base ref still points at the commit it was made from. The pool never
+ * fails a create: the create path's capped base refresh is its only wait, and
+ * a missing or outdated reserve means a normal `git worktree add` instead.
  */
 class WorktreePoolManager {
   /** Map key: "<projectPath>::<baseRef>" */
@@ -53,6 +57,8 @@ class WorktreePoolManager {
   /**
    * Create a single pre-warmed worktree in the background.
    * Errors are caught and logged; callers should fire-and-forget.
+   * The base is refreshed before the repository lock is taken, so a slow
+   * fetch never blocks other repository work.
    */
   async createReserve(
     projectPath: string,
@@ -61,6 +67,10 @@ class WorktreePoolManager {
     pathResolver: PathResolver,
     commandRunner: CommandRunner
   ): Promise<void> {
+    if (this.reserves.has(this.reserveKey(projectPath, baseRef))) {
+      return;
+    }
+    await refreshWorktreeBase(projectPath, baseRef, commandRunner);
     return withArchiveRepositoryLock(projectPath, commandRunner, () =>
       this.createReserveUnderLock(projectPath, baseRef, worktreeFolder, pathResolver, commandRunner));
   }
@@ -84,31 +94,24 @@ class WorktreePoolManager {
     const baseDir = this.resolveBaseDir(projectPath, worktreeFolder, pathResolver);
     const reservePath = pathResolver.join(baseDir, reserveName);
 
-    // Non-blocking fetch — ignore errors (user may be offline)
-    commandRunner.execFile('git', ['fetch'], projectPath, { timeout: 15000 }).catch(() => {});
-
+    // Resolve the base once and add the worktree at that commit, so the
+    // recorded commit is the reserve's own HEAD even if the ref moves meanwhile.
+    let baseCommit: string;
     try {
+      const { stdout } = await commandRunner.execFile(
+        'git', ['rev-parse', '--verify', '--end-of-options', `${baseRef}^{commit}`],
+        projectPath,
+        { timeout: 10000 }
+      );
+      baseCommit = stdout.trim();
       await commandRunner.execFile(
-        'git', ['worktree', 'add', '-b', branchName, '--no-track', '--', reservePath, baseRef],
+        'git', ['worktree', 'add', '-b', branchName, '--no-track', '--', reservePath, baseCommit],
         projectPath,
         { timeout: 60000 }
       );
     } catch (error) {
       console.warn('[WorktreePool] Failed to create reserve worktree:', error);
       return;
-    }
-
-    // Capture the resolved commit hash so we can detect if base advances later
-    let baseCommit = '';
-    try {
-      const { stdout } = await commandRunner.execFile(
-        'git', ['rev-parse', '--verify', '--end-of-options', baseRef],
-        projectPath,
-        { timeout: 10000 }
-      );
-      baseCommit = stdout.trim();
-    } catch {
-      // If we can't resolve, store empty — claim will skip the freshness check
     }
 
     const reserve: ReserveWorktree = {
@@ -155,11 +158,11 @@ class WorktreePoolManager {
     // Check that the base ref hasn't advanced since the reserve was created
     try {
       const { stdout: currentHead } = await commandRunner.execFile(
-        'git', ['rev-parse', '--verify', '--end-of-options', baseRef],
+        'git', ['rev-parse', '--verify', '--end-of-options', `${baseRef}^{commit}`],
         projectPath,
         { timeout: 10000 }
       );
-      if (reserve.baseCommit && currentHead.trim() !== reserve.baseCommit) {
+      if (currentHead.trim() !== reserve.baseCommit) {
         console.log(`[WorktreePool] Reserve ${reserve.reserveName} base has advanced — discarding`);
         this.reserves.delete(key);
         await this.removeReserve(reserve, projectPath, commandRunner);

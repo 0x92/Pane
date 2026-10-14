@@ -221,6 +221,7 @@ test('the server lists daemon and diagnostic commands but not installer commands
   assert.equal(tools.find((tool) => tool.name === 'repos_add').annotations.readOnlyHint, false);
   const watch = tools.find((tool) => tool.name === 'watch');
   assert.ok(!('follow' in watch.inputSchema.properties), 'watch must not offer --follow over MCP');
+  assert.ok(!('untilEvent' in watch.inputSchema.properties), 'watch must not offer --until-event over MCP');
 });
 
 test('a tool call returns the CLI JSON from the daemon', async () => {
@@ -613,7 +614,7 @@ test('agent tasks start, check on, and message an agent in one call each', async
         items: [{
           ok: true, index: 0, name: 'fix-login', pinned: true, sessionId: 'pane-7', panelId: 'panel-8', worktreePath: '/work/app-fix-login',
           readiness: { ok: true, condition: 'ready', matched: true, timedOut: false, elapsedMs: 900, state: { initialized: true } },
-          initialInput: { delivered: true, submitted: true, inputBytes: 17 },
+          initialInput: { delivered: true, submitted: true, inputBytes: 17, verifiedSubmitted: true, delivery: { state: 'taken', evidence: 'transcript' } },
         }],
       },
       'runpane:panels:list': { ok: true, paneId: 'pane-7', panels: [

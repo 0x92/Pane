@@ -371,7 +371,7 @@
     },
     {
       "name": "handoff",
-      "summary": "Hand your task to a fresh agent on this or another machine: check your handoff note, make the branch reachable, send the note, and start the agent on it.",
+      "summary": "Hand your task to a fresh agent on this or another machine: check your handoff note, make the branch reachable, send the note, and start the agent on it. From a Session's terminal, create the Session on another machine instead.",
       "usage": [
         "runpane handoff --template",
         "runpane handoff \"<destination>\" --note-file <path|-> [--machine <name>] [--agent <codex|claude|cursor>] [--model <model>] [--effort <level>] [--repo <selector>] [--push] [--dry-run] [--json]"
@@ -386,7 +386,7 @@
       "name": "watch",
       "summary": "Wait for workspace agent and Pane transitions using a daemon-held cursor.",
       "usage": [
-        "runpane watch [--as <name>|--since <generation>] [--follow] [--format <lines|json>] [--heartbeat <seconds>] [--idle-after <ms>] [--settle <ms>] [--blocked-settle <ms>] [--min-interval <ms>] [--idle-backoff] [--all-managed|--pane <id>|--session <id|name>] [--include-shells] [--self-test] [--quiet] [--kinds <kind,...>] [--repo <selector>] [--name-contains <text>] [--timeout-ms <ms>] [--from <now|earliest>] [--json] [--pane-dir <path>]"
+        "runpane watch [--as <name>|--since <generation>] [--follow|--until-event] [--format <lines|json>] [--heartbeat <seconds>] [--idle-after <ms>] [--settle <ms>] [--blocked-settle <ms>] [--min-interval <ms>] [--idle-backoff] [--all-managed|--pane <id>|--session <id|name>] [--include-shells] [--self-test] [--quiet] [--kinds <kind,...>] [--repo <selector>] [--name-contains <text>] [--timeout-ms <ms>] [--from <now|earliest>] [--json] [--pane-dir <path>]"
       ],
       "toolsets": [
         "agents"
@@ -1572,7 +1572,7 @@
       {
         "name": "--file",
         "value": "<path>",
-        "description": "File inside the Pane worktree to open; supported formats have read-only previews, including HTML source."
+        "description": "File inside the Pane worktree to open; supported formats have read-only previews, and HTML opens as editable source."
       },
       {
         "name": "--initial-input",
@@ -1823,7 +1823,7 @@
       },
       {
         "name": "--wait-ready",
-        "description": "Wait for created terminal panels to be ready before returning."
+        "description": "Wait until each created panel's agent is at its input box, then deliver and verify any starting message, before returning."
       },
       {
         "name": "--no-focus",
@@ -1878,6 +1878,10 @@
         "description": "Continue waiting for workspace events until interrupted."
       },
       {
+        "name": "--until-event",
+        "description": "Watch only: wait across daemon calls for the first matching event, print it, and exit 0. --timeout-ms becomes the total deadline (exit 124). For harnesses that wake an agent when a process exits."
+      },
+      {
         "name": "--ack-now",
         "description": "Advance a named cursor immediately for at-most-once delivery."
       },
@@ -1930,7 +1934,7 @@
       },
       {
         "name": "--template",
-        "description": "Print the handoff note template, with this checkout's origin and git state filled in."
+        "description": "Print the handoff note template, with this checkout's (or Session's) origin and git state filled in."
       },
       {
         "name": "--push",
@@ -1978,6 +1982,7 @@
         "  runpane workspace list [--json]",
         "  runpane workspace <machine> read|write|exec|<command>",
         "  runpane watch --follow",
+        "  runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [--source user|agent] [--focus|--no-focus] [--wait-ready]",
         "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--remove-worktree] [--dry-run] --yes",
         "  runpane panes archive --session <id|name> --merged [--remove-worktree] [--dry-run] --yes",
@@ -2183,7 +2188,7 @@
         "",
         "Lists Pane sessions. Pass --repo to limit results to one saved repository.",
         "",
-        "status is running while any terminal panel is live. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
+        "status is running while a tool or agent terminal is live; the dock shell does not count. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
         "",
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
@@ -2227,7 +2232,7 @@
       ],
       "watch": [
         "Usage:",
-        "  runpane watch [--as <name>|--since <generation>] [--follow] [options]",
+        "  runpane watch [--as <name>|--since <generation>] [--follow|--until-event] [options]",
         "",
         "Waits for agent state, Pane lifecycle, and panel exit transitions without polling.",
         "",
@@ -2236,6 +2241,7 @@
         "  --since <generation>           Use an explicit cursor instead",
         "  --from <now|earliest>          Starting point for a new named cursor",
         "  --follow                       Continue waiting until interrupted",
+        "  --until-event                  Exit 0 after the first event; --timeout-ms is the total deadline (exit 124)",
         "  --format <lines|json>          Output format; lines is the follow default",
         "  --heartbeat <seconds>          Healthy-silence bound; defaults to 60 under --follow",
         "  --idle-after <ms>              Re-firing READY idle interval; defaults to 600000 under --follow",
@@ -2255,7 +2261,7 @@
         "  --session <id|name>            Follow every Pane in a named Session; associate/detach apply live",
         "  --repo <selector>              Limit to a saved repository",
         "  --name-contains <text>         Limit by Pane name substring",
-        "  --timeout-ms <ms>              Wait timeout; 0 polls once",
+        "  --timeout-ms <ms>              Wait timeout; 0 polls once; the total deadline with --until-event",
         "  --limit <count>                Maximum entries per response",
         "  --ack-now                      Use at-most-once named-cursor delivery",
         "  --include-held-input           Include unsubmitted composer text in JSON",
@@ -2265,6 +2271,9 @@
         "",
         "Defaults are responsive: no settle, no batching, all kinds, IDLE every --idle-after. BUSY carries no action; drop it with --kinds.",
         "agent.report (a worker ran `runpane report`) is opt-in: list it in --kinds. REPORT lines skip the --min-interval batch.",
+        "--follow and --until-event imply --agents-only, except for agent.report: a report from any panel, a shell tab included, still arrives.",
+        "Exit-to-wake (Claude Code background Bash, Codex, any harness that wakes when a process exits): runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone",
+        "  Run it as a background task; when it exits, act on its line, then run it again. Never pipe --follow into grep -m1 or head to wait.",
         "Unattended (Pane Chat default): --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
         "User present: the same kinds with --settle 60000 --blocked-settle 15000 --min-interval 120000 and no --idle-backoff",
         "Session orchestrator: runpane watch --session <id|name> --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
@@ -2298,7 +2307,7 @@
         "  --prompt-file <path|->         Alias for --initial-input-file",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
-        "  --wait-ready                   Wait for terminal readiness before returning",
+        "  --wait-ready                   Wait for the agent's input box, then deliver and verify the prompt",
         "  --ready-timeout-ms <ms>        Readiness wait timeout; defaults to 30000",
         "  --concurrency <count>          Accepted; creation is currently serialized",
         "  --source <user|agent>          Mark mutation source; agent implies background creation",
@@ -2323,7 +2332,7 @@
         "",
         "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --prompt <text> or --prompt-file <path|-> and --wait-ready require --launch; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
         "",
-        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
+        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it."
       ],
       "panes archive": [
         "Usage:",
@@ -2572,7 +2581,7 @@
         "  --no-focus                    Create the panel in the background.",
         "  --focus                       Explicitly focus the created panel.",
         "  --source <user|agent>         Mark the mutation source; agent implies background creation.",
-        "  --wait-ready                  Wait until the terminal tool is ready.",
+        "  --wait-ready                  Wait for the agent's input box, then deliver and verify the prompt.",
         "  --ready-timeout-ms <ms>       Readiness wait timeout.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
@@ -2583,7 +2592,7 @@
         "Usage:",
         "  runpane panels open [--pane <pane-id>] (--url <url>|--file <path>) [--title <title>] [--split|--tab] [--focus|--no-focus] [--source user|agent] --yes [--json]",
         "",
-        "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats, including HTML source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
+        "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats; HTML opens as editable source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
         "",
         "Options:",
         "  --pane <pane-id>              Pane to open the tab in; defaults to PANE_SESSION_ID.",
@@ -3004,6 +3013,8 @@
         "Hands back a worker's structured report for its panel: the orchestrator receives it as an",
         "agent.report watch event and reads it in `agents status` and `sessions overview`.",
         "Inside a Pane terminal the panel comes from PANE_SESSION_ID and PANE_PANEL_ID.",
+        "It prints how many watches were waiting and received it (\"Delivered to 1 waiting watcher.\"). With no Session and",
+        "nobody waiting, the report is still stored: a named-cursor watch receives it when it next waits.",
         "",
         "Options:",
         "  --state <state>                ready, blocked, failed, or done",
@@ -3186,10 +3197,12 @@
         "",
         "Hand your task to a fresh agent. You write the note (runpane handoff --template); the CLI checks it,",
         "makes sure your branch is pushed, sends the note to the destination, and starts the agent there.",
+        "From a Session's terminal it skips git and creates the Session on the other machine, with the note as",
+        "its next action; the new Session waits for your first message. The sender Session stays.",
         "",
         "Options:",
         "  <destination>                   Freeform: agent, model, effort, and machine, such as \"codex gpt-5 high on parsas-macbook-pro\".",
-        "  --template                      Print the note template, with this checkout's origin and git state filled in.",
+        "  --template                      Print the note template, with this checkout's (or Session's) origin and git state filled in.",
         "  --note-file <path|->            The note to check and send; every template section must be filled in.",
         "  --machine <name>                Destination machine (Tailscale name or unique prefix); overrides the text.",
         "  --agent <codex|claude|cursor>   Receiving agent; overrides the text.",
@@ -3197,7 +3210,7 @@
         "  --effort <level>                minimal, low, medium, high, xhigh, or max; supported for Claude and Codex only; overrides the text. Cursor effort is rejected.",
         "  --repo <selector>               Saved repository on the destination; defaults to the one with the same remote.",
         "  --push                          Commit uncommitted work (not the note) as WIP and push the branch first (never forces).",
-        "  --dry-run                       Check destination reachability, saved repo and OS; print note and git state; send nothing.",
+        "  --dry-run                       Check destination reachability, saved repo and OS; print note and git state; send nothing. From a Session: the name it would get.",
         "  --json                          Print machine-readable output.",
         "",
         "Examples:",
@@ -3238,6 +3251,7 @@
         "  runpane panes cost [--repo <selector>] [--pane <pane-id>] [--json]",
         "  runpane workspace state [--repo <selector>] [--json]",
         "  runpane watch --follow",
+        "  runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone",
         "  runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--base-branch <branch>] [--source user|agent] [--focus|--no-focus] [--wait-ready]",
         "  runpane panes archive --pane <pane-id> [--source user|agent] [--force] [--remove-worktree] [--dry-run] --yes",
         "  runpane panes archive --session <id|name> --merged [--remove-worktree] [--dry-run] --yes",
@@ -3435,7 +3449,7 @@
         "",
         "Lists Pane sessions. Pass --repo to limit results to one saved repository.",
         "",
-        "status is running while any terminal panel is live. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
+        "status is running while a tool or agent terminal is live; the dock shell does not count. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
         "",
         "Options:",
         "  --repo <selector>",
@@ -3471,7 +3485,7 @@
       ],
       "watch": [
         "Usage:",
-        "  runpane watch [--as <name>|--since <generation>] [--follow] [options]",
+        "  runpane watch [--as <name>|--since <generation>] [--follow|--until-event] [options]",
         "",
         "Waits for workspace transitions without polling.",
         "",
@@ -3480,6 +3494,7 @@
         "  --since <generation>",
         "  --from <now|earliest>",
         "  --follow",
+        "  --until-event                  Exit 0 after the first event; --timeout-ms is the total deadline (exit 124)",
         "  --format <lines|json>",
         "  --heartbeat <seconds>",
         "  --idle-after <ms>",
@@ -3499,7 +3514,7 @@
         "  --session <id|name>            Follow a named Session's Panes; no re-arm",
         "  --repo <selector>",
         "  --name-contains <text>",
-        "  --timeout-ms <ms>              0 polls once",
+        "  --timeout-ms <ms>              0 polls once; the total deadline with --until-event",
         "  --limit <count>",
         "  --ack-now",
         "  --include-held-input",
@@ -3509,6 +3524,9 @@
         "",
         "Defaults are responsive: no settle, no batching, all kinds, IDLE every --idle-after. BUSY carries no action; drop it with --kinds.",
         "agent.report (a worker ran `runpane report`) is opt-in: list it in --kinds. REPORT lines skip the --min-interval batch.",
+        "--follow and --until-event imply --agents-only, except for agent.report: a report from any panel, a shell tab included, still arrives.",
+        "Exit-to-wake (Claude Code background Bash, Codex, any harness that wakes when a process exits): runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone",
+        "  Run it as a background task; when it exits, act on its line, then run it again. Never pipe --follow into grep -m1 or head to wait.",
         "Unattended (Pane Chat default): --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
         "User present: the same kinds with --settle 60000 --blocked-settle 15000 --min-interval 120000 and no --idle-backoff",
         "Session orchestrator: runpane watch --session <id|name> --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
@@ -3542,7 +3560,7 @@
         "  --prompt-file <path|->         Alias for --initial-input-file",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
-        "  --wait-ready                   Wait for terminal readiness before returning",
+        "  --wait-ready                   Wait for the agent's input box, then deliver and verify the prompt",
         "  --ready-timeout-ms <ms>        Readiness wait timeout; defaults to 30000",
         "  --concurrency <count>          Accepted; creation is currently serialized",
         "  --source <user|agent>          Mark mutation source; agent implies background creation",
@@ -3567,7 +3585,7 @@
         "",
         "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --prompt <text> or --prompt-file <path|-> and --wait-ready require --launch; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
         "",
-        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
+        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it."
       ],
       "panes archive": [
         "Usage:",
@@ -3808,7 +3826,7 @@
         "  --no-focus                    Create the panel in the background.",
         "  --focus                       Explicitly focus the created panel.",
         "  --source <user|agent>         Mark the mutation source; agent implies background creation.",
-        "  --wait-ready                  Wait until the terminal tool is ready.",
+        "  --wait-ready                  Wait for the agent's input box, then deliver and verify the prompt.",
         "  --ready-timeout-ms <ms>       Readiness wait timeout.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
@@ -3819,7 +3837,7 @@
         "Usage:",
         "  python -m runpane panels open [--pane <pane-id>] (--url <url>|--file <path>) [--title <title>] [--split|--tab] [--focus|--no-focus] [--source user|agent] --yes [--json]",
         "",
-        "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats, including HTML source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
+        "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats; HTML opens as editable source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
         "",
         "Options:",
         "  --pane <pane-id>              Pane to open the tab in; defaults to PANE_SESSION_ID.",
@@ -4209,6 +4227,8 @@
         "Hands back a worker's structured report for its panel: the orchestrator receives it as an",
         "agent.report watch event and reads it in `agents status` and `sessions overview`.",
         "Inside a Pane terminal the panel comes from PANE_SESSION_ID and PANE_PANEL_ID.",
+        "It prints how many watches were waiting and received it (\"Delivered to 1 waiting watcher.\"). With no Session and",
+        "nobody waiting, the report is still stored: a named-cursor watch receives it when it next waits.",
         "",
         "Options:",
         "  --state <state>                ready, blocked, failed, or done",
@@ -4466,6 +4486,7 @@
       "printf 'Continue\\n' | runpane panels input --panel <panel-id> --input-file - --yes --json",
       "runpane watch --self-test",
       "runpane watch --follow",
+      "runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone",
       "runpane watch --follow --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
       "runpane watch --session <id|name> --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
       "runpane sessions list [--json] [--pane-dir <path>]",
@@ -4513,20 +4534,20 @@
       "`runpane panes list` lists Pane sessions, optionally scoped to one saved repository.",
       "`runpane panes cost` reports estimated token costs per Pane for the last 30 days, including per-model breakdowns and cache efficiency; unscoped output includes an Unattributed bucket that reconciles against workspace totals.",
       "`runpane panes create` connects to the running local Pane daemon, resolves the requested saved base repository, creates user-visible Pane sessions backed by Pane-managed worktrees/branches, opens terminal-backed tool tabs, and optionally sends initial input to the started tool. Built-in agent panes and `--source agent` default to background/no-focus unless `--focus` is passed. New Panes are pinned into the UI's favorite/pin set by default, except when the CLI runs inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID`), where child worktrees default to unpinned. Explicit `--pinned` / `--no-pinned` override creation defaults. First Session association clears an existing pin, including an explicit creation pin; use `panes pin` after association to pin a child. This avoids duplicating Session children in the global pinned list. Manual pins applied afterward are preserved. Panes created interactively in the Pane UI are unaffected. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.",
-      "For `panes create --wait-ready`, `initialInput.delivery` says where the prompt went: `taken` or `queued` (from the agent's transcript or its screen), `in-composer`, or `unknown` (`argv` means a prompt was routed at launch but acceptance is not yet observed). `initialInput.verifiedSubmitted` is true exactly when it is `taken` or `queued`. Routing input does not by itself verify submission. CLI readiness is confirmed on consecutive polls. Codex also requires a recognized configured model or context footer below its live composer; its provisional startup composer is not ready. Hidden or unrecognized Codex status lines conservatively time out rather than prove readiness. Cursor launch prompts currently remain unknown because no acceptance probe is available. First-run trust and daemon dialogs return blocked.kind=first-run-dialog with the dialog in blocked.message and a suggestedCommand; while readiness is blocked or times out, launch-argument delivery remains unknown and unverified.",
+      "For `panes create --wait-ready` (and `panels create`, `panes adopt --launch`), ready means an identified agent at its own input box: declared with `--agent`, or detected from the command, its foreground process or its screen. A `--tool-command` that never shows a supported agent is not ready: `readiness.ok` is false with `readiness.reason.code` `no-agent-detected` after the timeout, or `command-exited` as soon as the command exits back to the shell, and nothing is typed into it. `agent-not-ready` means the agent was detected but its input box was not ready in time. CLI readiness is confirmed on consecutive polls. Codex also requires a recognized configured model or context footer below its live composer; its provisional startup composer is not ready. Hidden or unrecognized Codex status lines conservatively time out rather than prove readiness. Startup prompts return blocked with the prompt's own text in blocked.message and a suggestedCommand, and Pane never answers them: first-run trust and daemon dialogs and Agent Farm's `Trust this repository workspace? [y/N]` as blocked.kind=first-run-dialog; Codex's security setup banner and any other prompt, including a wrapper's or shell's `[y/N]` before the agent appears, as agent-prompt. A starting message blocked this way is held and sent once the prompt is answered and the agent's input box is ready. Every create with a starting message returns `initialInput`. Pane stages the text in the composer, presses the agent's submit key separately (Ctrl+Enter for Codex, declared or detected), and checks where it went: `initialInput.delivery` is `taken` or `queued` (from the agent's transcript or its screen), `in-composer`, or `unknown` (`argv` means a prompt was routed at launch; Pane gives the transcript up to 10 seconds before settling on unknown). `initialInput.verifiedSubmitted` is true exactly when it is `taken` or `queued`, and the create's `ok` is false unless a Claude or Codex starting message is verified. Cursor and OpenCode have no acceptance probe: their delivery stays `unknown` with a delivery.message saying so, `verification: unverifiable`, and `ok` follows readiness. Without `--wait-ready` the create returns at once with `initialInput.verifiedSubmitted: false`, a delivery.message saying the call did not wait, and a `panels wait` nextCommand; Pane still sends the message once the agent is identified and at its input box, and gives up without typing it if no supported agent appears within 30 seconds.",
       "`runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. A branch whose upstream is gone counts as pushed when a merged GitHub pull request has HEAD as its head (`safetyCheck.mergedViaPr`). Add `--dry-run` to inspect the same evidence without archiving. `--remove-worktree` applies the same check and removal to an adopted worktree; local branches are always kept. Successful archives report `worktreeCleanup: completed` once the worktree is gone from its path and from git; `trashDeletion: pending` means its files are still being deleted in the background. `runpane panes archive --session <id|name> --merged` archives every Session Pane that is clean and pushed or merged, and reports a reason for each skipped Pane.",
       "`runpane panes rename` trims and updates a Pane's display name without changing its worktree, branch, panels, or focus, and returns the updated pane summary.",
       "`runpane panes focus` raises the Pane window and selects a Pane (and optionally one of its panels) exactly like clicking it in the UI. Because it steals the user's window focus, run it only on an explicit user request to open, focus, show, or switch to a Pane; never focus a Pane proactively, the same doctrine that keeps `panes create` background/no-focus for `--source agent`.",
-      "`runpane panels open` opens a URL or a file from the Pane worktree as a tab in an existing Pane (default: the calling panel's Pane from `PANE_SESSION_ID`), in split view beside the agent unless `--tab` is passed. Files open in an editor tab with read-only previews for supported formats, including HTML source; an existing tab showing the same target is reused. It brings the tab forward for clients already showing that Pane, and never raises or focuses the Pane window or switches anyone's Pane.",
+      "`runpane panels open` opens a URL or a file from the Pane worktree as a tab in an existing Pane (default: the calling panel's Pane from `PANE_SESSION_ID`), in split view beside the agent unless `--tab` is passed. Files open in an editor tab with read-only previews for supported formats, and HTML opens as editable source; an existing tab showing the same target is reused. It brings the tab forward for clients already showing that Pane, and never raises or focuses the Pane window or switches anyone's Pane.",
       "`runpane panels list` lists tool panels inside one Pane session. Each panel with a saved agent session ID reports it as `resumeId`, with `resumeSource` (`agent-farm`, `configured`, or `agent`) naming the rule that reopens the conversation.",
       "`runpane panels output` reads bounded recent terminal output from one panel and strips common terminal control noise for agent use.",
       "`runpane panels input` sends exact input bytes to one terminal panel. Prefer `--input-file` for newlines, Ctrl-C, quotes, or shell-sensitive text.",
       "`runpane panes create --prompt` is an alias for `--initial-input`; request JSON and daemon payloads should use the canonical `initialInput` field.",
-      "`runpane panes create --branch <name>` creates the Pane's worktree on exactly that new branch, slashes included (for example `agents/w5a`). The name is checked with `git check-ref-format --branch`, creation fails if the branch already exists, and Pane never renames it to make it unique. `--worktree-name` still names the directory and defaults to `--name`. `--base` is an alias for `--base-branch`, and `--prompt-file` for `--initial-input-file`. `panes create --base <ref> --branch <name> --prompt-file <file>` replaces `git worktree add` plus `panes adopt`.",
+      "`runpane panes create --branch <name>` creates the Pane's worktree on exactly that new branch, slashes included (for example `agents/w5a`). The name is checked with `git check-ref-format --branch`, creation fails if the branch already exists, and Pane never renames it to make it unique. `--worktree-name` still names the directory and defaults to `--name`. `--base` is an alias for `--base-branch`, and `--prompt-file` for `--initial-input-file`. `panes create --base <ref> --branch <name> --prompt-file <file>` replaces `git worktree add` plus `panes adopt`. When the base is a remote-tracking branch (the default `origin/main`, or one named with `--base`), Pane fetches it first, waiting at most about 10 seconds, so the Pane starts at the remote's current tip. Each created item reports `base` (`ref`, `commit`, `refresh`); if the fetch fails the Pane still starts, from the local ref, and `base.notice` says so and how to catch up.",
       "`runpane panes adopt --launch` accepts `--prompt`, `--prompt-file`, `--wait-ready`, and `--ready-timeout-ms`, and reports `readiness`, `initialInput`, and `nextCommand` like `panes create`. A prompt without `--launch` is an error rather than being dropped.",
       "If composer submission cannot be verified without risking a duplicate, the create item is unsuccessful with `initialInput.staged`, `initialInput.attempts`, `initialInput.blocked.kind: submission_unverified`, and an actionable `nextCommand`. The CLI-facing `--prompt` alias maps to this canonical `initialInput` result.",
       "When running from WSL while Pane is installed on Windows, the Linux wrapper may look for a missing `/tmp/pane-daemon.../daemon.sock` or resolve to a Windows shim such as Volta. In that case invoke the Windows wrapper through PowerShell from a Windows cwd, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane repos list --json'`.",
-      "`runpane watch` waits for workspace transitions from the daemon journal without polling. `--follow` keeps waiting and prints one line per event: READY, BLOCKED, IDLE, STUCK, NEW, GONE, EXIT, plus HEARTBEAT every 60 seconds as proof of life. Defaults are responsive: no settle, no batching, all kinds, IDLE every `--idle-after`. Expensive consumers opt into `--kinds` (drop `agent.busy`; BUSY carries no action), `--settle <ms>` (READY only after a quiet window; a BUSY inside it cancels the line), `--blocked-settle <ms>`, `--min-interval <ms>` (batch non-urgent lines; BLOCKED bypasses it), and `--idle-backoff` (10m, 30m, 1h, 3h, then daily). Two profiles cover orchestrators. Unattended: `runpane watch --follow --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff`, which budgets about 6 wake-ups per active pane per hour worst case, usually 1-3, and can deliver READY up to about 13 minutes late. User present: the same kinds with `--settle 60000 --blocked-settle 15000 --min-interval 120000` and no `--idle-backoff`, so READY arrives within about 3 minutes. Pane Chat arms it automatically through its skill; only your own scripts need the flags. STUCK means real unsubmitted composer text, never an agent prompt suggestion. `--quiet` (alias `--no-control-lines`) drops the WATCH OK, HEARTBEAT, and WATCH RECONNECTED control lines (`_ok`, `_heartbeat`, `_reconnected` in JSON); WATCH ERROR, RESET, and DROPPED (`_error`, `_reset`, `_dropped`) always print. Judge a dead watch by a non-zero exit or a WATCH ERROR line, not by silence. `--session <id|name>` follows every Pane associated with a named Session and re-reads membership on every read, so associate and detach need no re-arm; JOINED and LEFT (`pane.associated`, `pane.detached`) report membership changes. For Session members with an open PR, the daemon polls GitHub about every 3 minutes and reports `pr.conflicted` (`PR <pane-name> pane <pane-id> #<number> CONFLICTED`), `pr.checks` (`... CHECKS PASSED` or `... CHECKS FAILED <names>`), and `pr.merged` (`... MERGED`) on transitions only; list them in `--kinds`. In JSON, an entry with `replay: true` restates current state after a reset and is never READY.",
+      "`runpane watch` waits for workspace transitions from the daemon journal without polling. `--follow` keeps waiting and prints one line per event: READY, BLOCKED, IDLE, STUCK, NEW, GONE, EXIT, plus HEARTBEAT every 60 seconds as proof of life. Defaults are responsive: no settle, no batching, all kinds, IDLE every `--idle-after`. Expensive consumers opt into `--kinds` (drop `agent.busy`; BUSY carries no action), `--settle <ms>` (READY only after a quiet window; a BUSY inside it cancels the line), `--blocked-settle <ms>`, `--min-interval <ms>` (batch non-urgent lines; BLOCKED bypasses it), and `--idle-backoff` (10m, 30m, 1h, 3h, then daily). Two profiles cover orchestrators. Unattended: `runpane watch --follow --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff`, which budgets about 6 wake-ups per active pane per hour worst case, usually 1-3, and can deliver READY up to about 13 minutes late. User present: the same kinds with `--settle 60000 --blocked-settle 15000 --min-interval 120000` and no `--idle-backoff`, so READY arrives within about 3 minutes. Pane Chat arms it automatically through its skill; only your own scripts need the flags. STUCK means real unsubmitted composer text, never an agent prompt suggestion. `--quiet` (alias `--no-control-lines`) drops the WATCH OK, HEARTBEAT, and WATCH RECONNECTED control lines (`_ok`, `_heartbeat`, `_reconnected` in JSON); WATCH ERROR, RESET, and DROPPED (`_error`, `_reset`, `_dropped`) always print. Judge a dead watch by a non-zero exit or a WATCH ERROR line, not by silence. `--session <id|name>` follows every Pane associated with a named Session and re-reads membership on every read, so associate and detach need no re-arm; JOINED and LEFT (`pane.associated`, `pane.detached`) report membership changes. For Session members with an open PR, the daemon polls GitHub about every 3 minutes and reports `pr.conflicted` (`PR <pane-name> pane <pane-id> #<number> CONFLICTED`), `pr.checks` (`... CHECKS PASSED` or `... CHECKS FAILED <names>`), and `pr.merged` (`... MERGED`) on transitions only; list them in `--kinds`. In JSON, an entry with `replay: true` restates current state after a reset and is never READY. `--until-event` waits across daemon calls for the first matching event, prints it, and exits 0, so a harness that wakes an agent when a process exits (Claude Code background Bash, Codex) can wait with `runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone` and run it again after each event; the caller's own panel and a RESET never end the wait, and `--timeout-ms` becomes the total deadline (exit 124, `WATCH TIMEOUT`). Never pipe `--follow` into `grep -m1` or `head` to wait: `--follow` never exits on its own. `--follow` and `--until-event` imply `--agents-only`, except for `agent.report`, which arrives from any panel.",
       "A watch releases its pending slot when its client socket or named pipe disconnects. Re-arming the same named cursor takes over the previous request; the superseded watcher exits with a WATCH ERROR instead of competing for the cursor. Anonymous concurrent watchers retain the eight-wait limit. Each request also has a 125-second lease (slightly longer than the maximum 120-second long poll), so an abandoned request is reclaimed even if no disconnect arrives.",
       "`sessions list` list durable named orchestration Sessions.",
       "`sessions create` create a durable named orchestration Session and its hidden terminal owner.",
@@ -4539,13 +4560,13 @@
       "`sessions overview` read a live status, activity, git, and pull request overview for a named Session.",
       "`runpane lock acquire|release|list` coordinate a resource shared between agents, such as one test account. The caller's Pane and panel own the lock; it is scoped to the owner's Session (or global outside one), renews for the same owner, and is released on TTL expiry, owner panel exit, or owner Pane archive. `--wait` blocks in the daemon until the lock comes free.",
       "`runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task (a new tab in the work's Pane with `--pane <id>`, or a new Pane for new work), check on it, and send it a follow-up.",
-      "`runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (`panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`.",
+      "`runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (`panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`. It prints how many watches were waiting for the report and received it (`Delivered to 1 waiting watcher.`, `liveWatchers` in JSON). Zero means nobody was waiting right now, not that the report is lost: it stays on the panel, and a named-cursor watch receives it when it next waits.",
       "`runpane panels resume --panel <panel-id>` restarts a stopped terminal panel in place, keeping its panel id: an agent panel relaunches with its resume command (Claude `--resume <session>`, `codex resume <session>`, Agent Farm `agent-farm run <profile> --resume <id>` with the ID Agent Farm printed; the result's `agentSessionId` names it), the same restart the app runs when it shows the panel, without taking focus. A running panel is left alone (`action: \"already-running\"`). `--session <id|name>` or `--all-stopped` resumes every stopped agent panel in that scope, `--concurrency` at a time (default 3), then, with `--wait-ready`, waits on the resumed panels together, and returns `{ resumed, alreadyRunning, failed, notReady, items[] }` with each panel's own result, readiness, and blocker or error. After a Pane restart, stopped panels report `running: false` in `panels list`, `panels screen`, and `panels wait` (which returns `stopped: true` instead of timing out), and `nextCommand` points at `panels resume`. `runpane watch` reports them as `panel.stopped` (`STOPPED ...`) when `--kinds` lists that kind; other consumers and `workspace state` see `agent.unknown` with `running: false`, never `agent.ready`.",
       "`runpane panels last-message --panel <panel-id>` reads a Claude or Codex agent's last reply from its transcript (up to `--limit` characters, default 20,000, keeping the end and reporting `truncated`). It never scrapes the screen: without a transcript it prints `{ ok: false, reason: \"transcript-unavailable\" }` and exits 1.",
       "Commands with a contract `daemonAction` (the `panes` git, script, restore, and move commands, `folders list|create`, and `links open`) call the same Pane daemon channel as the matching button in the app and print `{ ok, data, error }`. Destructive ones add a pane:// `link` to review the Pane.",
       "`runpane links create` builds `pane://open?...` links; opening one in Pane selects what it names and never changes Pane state.",
       "`runpane docs search|read` search and read Pane docs, help, and installed Pane Chat skills offline. They ship in the npm package and the Pane app only.",
-      "`runpane handoff` hands a task to a fresh agent on this or another of your machines. The sending agent writes the note from `runpane handoff --template` (goal, current state, done and verified, in progress, next steps, decisions and constraints, open questions, how to verify, git state); `runpane handoff \"claude opus on parsas-macbook-pro\" --note-file ~/handoff.md` checks every section is filled in, requires the branch to be pushed (or pushes it with `--push`, never forcing), writes the note to that machine's `~/.pane/handoffs/` and starts the agent in a new Pane branched from the sender's branch. The receiver reports back to the sender's panel."
+      "`runpane handoff` hands a task to a fresh agent on this or another of your machines. The sending agent writes the note from `runpane handoff --template` (goal, current state, done and verified, in progress, next steps, decisions and constraints, open questions, how to verify, git state); `runpane handoff \"claude opus on parsas-macbook-pro\" --note-file ~/handoff.md` checks every section is filled in, requires the branch to be pushed (or pushes it with `--push`, never forcing), writes the note to that machine's `~/.pane/handoffs/` and starts the agent in a new Pane branched from the sender's branch. From a Session's terminal it skips git and creates a Session with the same name, goal and agent on the other machine instead. The receiver reports back to the sender's panel."
     ],
     "wrapperFlagNote": "The top-level `runpane --version` form prints the wrapper version. The install subcommand form `runpane install --version vX.Y.Z` selects a Pane release.",
     "localControlFlagNote": "`runpane doctor --json`, `runpane repos list`, `runpane panes ...`, and `runpane panels ...` commands use or describe the local framed daemon socket/pipe for a running Pane app. `--pane-dir` points the wrapper at a non-default Pane data directory, such as `PANE_DIR=~/.pane_test` in development. `runpane agent-context` is local/offline and can be used before Pane is running. `agent-context` and `version` accept and ignore `--pane-dir`, so one `--pane-dir` can be passed to every runpane command. In a Pane repository checkout, if `runpane` is not on PATH, build the local wrapper with `pnpm --filter runpane build` and run it with Node 22 or newer, for example `node packages/runpane/dist/cli.js doctor --json`. From WSL, if the user runs Windows Pane, call the Windows wrapper through `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane ...'` so the command can reach the Windows named-pipe daemon and avoid UNC cwd issues.",
@@ -5420,6 +5441,18 @@
         "--interrupt",
         "--yes",
         "--json"
+      ],
+      [
+        "watch",
+        "--as",
+        "orch",
+        "--until-event",
+        "--quiet",
+        "--json",
+        "--kinds",
+        "agent.report,agent.blocked,panel.exited,pane.gone",
+        "--timeout-ms",
+        "600000"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -6464,6 +6497,26 @@
                         },
                         "additionalProperties": false
                       },
+                      "reason": {
+                        "type": "object",
+                        "required": [
+                          "code",
+                          "message"
+                        ],
+                        "properties": {
+                          "code": {
+                            "enum": [
+                              "no-agent-detected",
+                              "agent-not-ready",
+                              "command-exited"
+                            ]
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
                       "nextCommand": {
                         "type": "string"
                       }
@@ -6606,6 +6659,34 @@
                         "type": "number"
                       },
                       "message": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "base": {
+                    "type": "object",
+                    "required": [
+                      "ref",
+                      "refresh"
+                    ],
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      },
+                      "commit": {
+                        "type": "string"
+                      },
+                      "refresh": {
+                        "type": "string",
+                        "enum": [
+                          "fetched",
+                          "recent",
+                          "skipped",
+                          "failed"
+                        ]
+                      },
+                      "notice": {
                         "type": "string"
                       }
                     },
@@ -8005,6 +8086,10 @@
               "isCliPanel": {
                 "type": "boolean"
               },
+              "dock": {
+                "type": "boolean",
+                "description": "True on the Pane's terminal dock (its plain shell); omitted on every other panel."
+              },
               "position": {
                 "type": "number"
               },
@@ -8644,6 +8729,26 @@
               "type": "string"
             },
             "suggestedCommand": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "reason": {
+          "type": "object",
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "no-agent-detected",
+                "agent-not-ready",
+                "command-exited"
+              ]
+            },
+            "message": {
               "type": "string"
             }
           },
@@ -9458,6 +9563,26 @@
                   "type": "string"
                 },
                 "suggestedCommand": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "reason": {
+              "type": "object",
+              "required": [
+                "code",
+                "message"
+              ],
+              "properties": {
+                "code": {
+                  "enum": [
+                    "no-agent-detected",
+                    "agent-not-ready",
+                    "command-exited"
+                  ]
+                },
+                "message": {
                   "type": "string"
                 }
               },
@@ -10340,6 +10465,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "liveWatchers": {
+          "type": "number",
+          "description": "Watches that were waiting for this report when it was journaled and received it. A snapshot: a named-cursor watch that waits later still receives it. Absent from older daemons."
         }
       },
       "additionalProperties": false
@@ -10527,11 +10656,11 @@
         "If WSL cannot reach Pane or `runpane` resolves to a broken Windows shim, the user may be running Windows Pane; try `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane doctor --json'`.",
         "If the repository exists on disk but is not saved in Pane, use `runpane repos add --path <repo> --yes --json` before creating panes.",
         "Use `runpane agents doctor --agent <codex|claude|cursor> --repo <selector> --json` when agent availability differs across host, Windows, WSL, or repo environments.",
-        "Use `runpane panes create --wait-ready` to create Panes and validate initial terminal readiness in one call.",
-        "Use `runpane panels screen` for compact current state, including Claude and Codex composer state. Use `panels wait` for create-time readiness or text checks. Use `runpane watch --follow` to block on workspace transitions (READY, BLOCKED, IDLE, STUCK, EXIT) without polling. Use `panels submit` to send and submit a new turn. Use `panels submit-composer --strategy auto` only for a composer that was filled separately.",
+        "Use `runpane panes create --wait-ready` to create Panes, wait for each agent's input box, and verify its starting message in one call.",
+        "Use `runpane panels screen` for compact current state, including Claude and Codex composer state. Use `panels wait` for create-time readiness or text checks. Use `runpane watch --follow` to block on workspace transitions (READY, BLOCKED, IDLE, STUCK, EXIT) without polling, or `runpane watch --until-event` to exit on the first one. Use `panels submit` to send and submit a new turn. Use `panels submit-composer --strategy auto` only for a composer that was filled separately.",
         "Use `runpane panels input` only when exact bytes are required, such as Ctrl-C or handcrafted terminal input.",
         "Pane terminals draw inline images: sixel, iTerm2 inline images, and the kitty graphics protocol. Tools that need kitty graphics, such as terminal-browser and terminal-doom, run inside a Pane panel; `runpane doctor --json` reports the exact list under `terminal.graphicsProtocols`.",
-        "After creating Panes or sending terminal input, validate with `panels wait` or bounded `panels screen` before reporting success. For ongoing supervision, `runpane watch --follow` is the canonical monitor.",
+        "After creating Panes or sending terminal input, validate with `panels wait` or bounded `panels screen` before reporting success. For ongoing supervision, `runpane watch --follow` is the canonical monitor for a streaming reader. A harness that wakes only when a process exits (Claude Code background Bash, Codex) waits with `runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone` instead and runs it again after each event; never pipe `--follow` into `grep -m1` or `head`.",
         "When several agents share one resource, such as a test account, name a lock in their prompts: each worker runs `runpane lock acquire --name <name> --ttl 30m --wait 1800000 --json` before using it and `runpane lock release --name <name>` after."
       ],
       "detailCommand": "runpane agent-context --command <command> [--json]",
@@ -10809,6 +10938,7 @@
           "summary": "Wait for workspace transitions (READY, BLOCKED, IDLE, STUCK, NEW, GONE, EXIT, STOPPED, JOINED, LEFT, PR) from the daemon journal without polling; responsive by default, with opt-in cadence flags for expensive consumers.",
           "arguments": [
             "--follow",
+            "--until-event",
             "--session <id|name>",
             "--self-test",
             "--kinds <kind,...>",
@@ -11248,7 +11378,7 @@
         ],
         "notes": [
           "Without --repo, this lists sessions across saved Pane repositories.",
-          "`status` is `running` while any terminal panel is live, otherwise the stored lifecycle value. `agentState` is the most urgent state of the live agent panels: `blocked`, `working`, `ready`, or `none`. `agentStatus` (`active`/`idle`) is kept for older clients."
+          "`status` is `running` while a tool or agent terminal is live, otherwise the stored lifecycle value (`error` and `initializing` always show as stored). The Pane's dock shell (`dock: true` in `panels list`) does not count, so a Pane whose only live terminal is the dock reads its stored value, usually `stopped`. `agentState` is the most urgent state of the live agent panels: `blocked`, `working`, `ready`, or `none`. `agentStatus` (`active`/`idle`) is kept for older clients."
         ]
       },
       "panes cost": {
@@ -11428,7 +11558,7 @@
           {
             "name": "--wait-ready",
             "required": false,
-            "description": "Wait for each created terminal panel to be ready before returning."
+            "description": "Wait until each created panel's agent is at its input box, then deliver and verify any starting message, before returning."
           },
           {
             "name": "--ready-timeout-ms",
@@ -11470,17 +11600,18 @@
           "Use --initial-input-file for multi-line prompts or shell-sensitive initial input. A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
           "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts.",
           "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
-          "With --wait-ready, `initialInput.delivery` reports `taken`, `queued`, `in-composer` or `unknown` with its evidence (`transcript`, `screen`, or `argv` for a prompt passed at launch); verifiedSubmitted is true for `taken` or `queued`. Routing initial input alone does not imply verified submission.",
+          "With --wait-ready, `initialInput.delivery` reports `taken`, `queued`, `in-composer` or `unknown` with its evidence (`transcript`, `screen`, or `argv` for a prompt passed at launch); verifiedSubmitted is true for `taken` or `queued`. Routing initial input alone does not imply verified submission, and the create's `ok` is false unless a Claude or Codex starting message is verified.",
           "If initialInput.blocked.kind is submission_unverified, do not submit again automatically. Inspect initialInput.staged and attempts, then run nextCommand to resolve the ambiguous composer state.",
           "When the JSON result includes nextCommand, run it to validate that the terminal produced output before reporting success.",
           "Multi-pane requests are created sequentially today. The --concurrency flag is accepted for compatibility, but agents should not rely on parallel creation.",
           "For POSIX or WSL command chaining, use a custom terminal command like `bash -lc 'cmd1 && cmd2 && cmd3'`.",
           "For Windows PowerShell command chaining, use a custom terminal command like `powershell -NoProfile -Command \"cmd1; if ($LASTEXITCODE) { exit $LASTEXITCODE }; cmd2\"`.",
           "From WSL with Windows Pane, invoke through PowerShell and select the saved WSL repo by name or id, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane panes create --repo \"WSL Pane\" --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json'`.",
-          "Use --wait-ready when an agent needs to verify that an agent terminal started instead of only creating a pane.",
+          "Use --wait-ready when an agent needs the started agent at its input box, and its starting message verified, instead of only creating a pane.",
           "If readiness returns blocked, inspect blocked.suggestedCommand rather than guessing which prompt to answer.",
-          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it.",
           "At most 2 Panes run setup at once (worktree file sync, dependency install, build script); more wait in line. A queued `panes create` returns the Pane id right away with `setupQueue` ({ position, message }) and no `panelId`; the agent starts when setup finishes. Find its panel later with `runpane panels list --pane <id> --json`.",
+          "A Pane with its own worktree starts at the remote's current tip of a remote-tracking base (the default `origin/main`, or one named with `--base`): Pane fetches that branch first, waiting at most about 10 seconds, and creates started together share the fetch. Each item's `base` reports `{ ref, commit, refresh }`, where `refresh` is `fetched`, `recent` (reused a fetch from the last 30 seconds), `skipped` (a local branch or commit base) or `failed`. A failed refresh never fails the create; the Pane starts from the local ref and `base.notice` says what happened and how to catch up.",
           "`panes create --branch <name>` fails with code `ERR_RUNPANE_BRANCH_HAS_PANE` when another Pane already has that branch checked out. The message names the Pane and gives the next step: `runpane panels create --pane <id> --tool-command \"<cmd>\" --source agent --no-focus`."
         ]
       },
@@ -11605,9 +11736,9 @@
           "The resume command is staged without Enter unless --launch is passed.",
           "Archiving never deletes an adopted worktree unless `runpane panes archive --remove-worktree` is used.",
           "One of --agent or --tool-command is required.",
-          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it.",
           "--resume needs a built-in agent command; a wrapper command resumes its own way.",
-          "The adopted Pane reports `status: running` in `panes list` while its terminal is live.",
+          "The adopted Pane reports `status: running` in `panes list` while its tool terminal is live.",
           "A prompt (--prompt, --initial-input, --prompt-file, --initial-input-file) or --wait-ready needs --launch; without it adopt fails instead of dropping the prompt.",
           "With --launch the result carries the same readiness, initialInput, and nextCommand fields as panes create. With --resume the prompt goes to the resumed conversation's composer once the agent is ready.",
           "To start new work on a named branch, prefer `panes create --base <ref> --branch <name>` over `git worktree add` plus adopt."
@@ -11942,7 +12073,8 @@
         "notes": [
           "The ids returned here are stable inputs for `panels output` and `panels input`.",
           "`agentType` is the agent Pane treats the panel as; `agentDetection` says how it knows (`declared`, `command`, `process`, or `screen`), and `launchCommand` is the command the panel was launched with.",
-          "`resumeId` is the agent session ID Pane saved for reopening the panel, and `resumeSource` says which rule resumes with it: `agent-farm` (an `agent-farm run` or `agent-farm agent` command), `configured` (the panel's own resume command), or `agent` (a built-in agent's captured session). Both are omitted when no ID is saved."
+          "`resumeId` is the agent session ID Pane saved for reopening the panel, and `resumeSource` says which rule resumes with it: `agent-farm` (an `agent-farm run` or `agent-farm agent` command), `configured` (the panel's own resume command), or `agent` (a built-in agent's captured session). Both are omitted when no ID is saved.",
+          "Every Pane has one plain shell titled `Terminal`, its terminal dock: `dock: true` marks it, and the field is omitted on every other panel. Setup progress notices appear there; it is not a tool or agent tab and does not count toward the Pane's `status`. A `--tool-command` tab without `--title` or `--agent` is titled from its command (whole words up to 40 characters)."
         ]
       },
       "panels output": {
@@ -12496,13 +12628,13 @@
           "Panels share the existing Pane's worktree and branch.",
           "`panels create` is for visible helper/reviewer tabs, not the agent's default private delegation mechanism.",
           "For agent-created panels, prefer --source agent or --no-focus to avoid stealing focus from the user or implementation tab.",
-          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it."
         ]
       },
       "panels open": {
         "name": "panels open",
         "summary": "Open a URL or file as a browser/editor tab in a Pane, in split view beside the agent by default.",
-        "details": "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats, including HTML source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
+        "details": "Opens a tab inside a Pane (default: the Pane of the calling panel, from PANE_SESSION_ID). Use it to show the user an HTML page, plan, report, local dev server, or file beside the conversation. --url opens a browser tab (http, https, or file). --file opens a file inside the Pane worktree: files open in an editor tab with read-only previews for supported formats; HTML opens as editable source. Tabs open in split view beside the agent by default; --tab keeps them in the current group. An existing tab showing the same URL or file is reused. Never raises or focuses the Pane window.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -12522,7 +12654,7 @@
             "name": "--file",
             "value": "<path>",
             "required": false,
-            "description": "File inside the Pane worktree, relative or absolute. WSL panes accept Linux, Windows drive, and WSL UNC paths without manual conversion. Files open in an editor tab; supported formats have read-only previews, including HTML source."
+            "description": "File inside the Pane worktree, relative or absolute. WSL panes accept Linux, Windows drive, and WSL UNC paths without manual conversion. Files open in an editor tab; supported formats have read-only previews, and HTML opens as editable source."
           },
           {
             "name": "--title",
@@ -12578,7 +12710,7 @@
         ],
         "notes": [
           "Prefer this over opening the system browser when showing the user a page, plan, report, or dev server.",
-          "Write plans and reports as self-contained HTML files. Use --url with a file URL to render a page in a live browser, or --file to inspect its read-only source; reopening the same target reuses its tab.",
+          "Write plans and reports as self-contained HTML files. Use --url with a file URL to render a page in a live browser, or --file to open its editable source; reopening the same target reuses its tab.",
           "Opening a tab does not steal window focus; use `panes focus` only on explicit user request."
         ]
       },
@@ -12668,7 +12800,7 @@
       "watch": {
         "name": "watch",
         "summary": "Wait for workspace transitions using the daemon journal.",
-        "details": "`runpane watch --follow` is the responsive monitor: lines, 60-second heartbeats, IDLE every 10 minutes, managed-agent scope, redacted STUCK detection, no settle, no batching, all kinds. Expensive consumers (one wake-up per line) opt into the cadence flags. Pane Chat arms them automatically through its pane-orchestrator skill; only your own scripts need to pass them. Named cursors persist in the Pane data directory.",
+        "details": "`runpane watch --follow` is the responsive monitor: lines, 60-second heartbeats, IDLE every 10 minutes, managed-agent scope, redacted STUCK detection, no settle, no batching, all kinds. Expensive consumers (one wake-up per line) opt into the cadence flags. Pane Chat arms them automatically through its pane-orchestrator skill; only your own scripts need to pass them. Named cursors persist in the Pane data directory. Harnesses that wake an agent when a process exits (Claude Code background Bash, Codex) use `--until-event` instead: `runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone` exits 0 on the first event, and the agent runs it again after acting on it.",
         "requiresPaneDaemon": true,
         "mutates": false,
         "arguments": [
@@ -12694,6 +12826,11 @@
             "name": "--follow",
             "required": false,
             "description": "Continue waiting until interrupted. Required by every cadence flag."
+          },
+          {
+            "name": "--until-event",
+            "required": false,
+            "description": "Wait across daemon calls (each capped at 120 s) for the first matching event, print it, and exit 0. Same scope defaults as --follow. A RESET and entries from the caller's own panel (PANE_PANEL_ID) never end the wait. Without --as inside a Pane terminal the cursor is until-<panel id>, apart from the panel's --follow cursor. --timeout-ms is the total deadline: exit 124 with WATCH TIMEOUT (_timeout). Cannot be combined with --follow, --self-test, or the cadence flags."
           },
           {
             "name": "--format",
@@ -12791,7 +12928,7 @@
             "name": "--timeout-ms",
             "required": false,
             "value": "<milliseconds>",
-            "description": "Wait timeout per request; 0 polls once. Default 60000, capped at 120000 (the follow loop re-issues requests)."
+            "description": "Wait timeout per request; 0 polls once. Default 60000, capped at 120000 (the follow loop re-issues requests). With --until-event it is the deadline for the whole wait instead."
           },
           {
             "name": "--limit",
@@ -12807,7 +12944,7 @@
           {
             "name": "--include-held-input",
             "required": false,
-            "description": "Include up to 120 characters of unsubmitted composer text in JSON entries. Default off: under --follow, JSON entries carry only heldInputPresent: true."
+            "description": "Include up to 120 characters of unsubmitted composer text (typed text only; prompt suggestions and placeholders excluded) in JSON entries. Default off: under --follow, JSON entries carry only heldInputPresent: true."
           },
           {
             "name": "--no-held-input",
@@ -12846,6 +12983,7 @@
           "runpane watch --self-test",
           "runpane watch --follow",
           "runpane watch --as monitor --follow --quiet --json",
+          "runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone",
           "runpane watch --follow --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
           "runpane watch --follow --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 60000 --blocked-settle 15000 --min-interval 120000",
           "runpane watch --session <id|name> --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff",
@@ -12861,14 +12999,15 @@
           "Cadence state is held per named consumer; an anonymous --follow with a cadence flag names itself follow-<pid>. Held lines survive a reconnect of the same consumer; a changed filter re-delivers them under the new filter.",
           "Journal loss is surfaced through reset and dropped metadata.",
           "The daemon treats omitted idleAfterMs as disabled so older clients never receive agent.idle unexpectedly.",
-          "Control lines are not journal entries. JSON kinds and their lines-format text: _ok (WATCH OK, once when armed), _heartbeat (HEARTBEAT, every --heartbeat seconds), _reconnected (WATCH RECONNECTED, after a retried daemon error), _error (WATCH ERROR, a daemon error; the process exits 2 unless --follow retries it), _reset (RESET, the journal restarted or the cursor fell behind; a fresh baseline follows), and _dropped (DROPPED, entries lost to journal truncation). --quiet drops _ok, _heartbeat, and _reconnected; _error, _reset, and _dropped always print.",
-          "Under --follow, JSON entries for panels holding unsubmitted composer text carry heldInputPresent: true, the JSON equivalent of the STUCK line. --no-held-input turns this off.",
+          "Control lines are not journal entries. JSON kinds and their lines-format text: _ok (WATCH OK, once when armed), _heartbeat (HEARTBEAT, every --heartbeat seconds), _reconnected (WATCH RECONNECTED, after a retried daemon error), _error (WATCH ERROR, a daemon error; the process exits 2 unless --follow or --until-event retries it), _reset (RESET, the journal restarted or the cursor fell behind; a fresh baseline follows), _dropped (DROPPED, entries lost to journal truncation), and _timeout (WATCH TIMEOUT after <ms>ms, the --until-event deadline passed; the process exits 124). --quiet drops _ok, _heartbeat, _reconnected, and _timeout; _error, _reset, and _dropped always print, except under --until-event, where --quiet drops _reset and _dropped too.",
+          "Under --follow, JSON entries for panels holding unsubmitted composer text carry heldInputPresent: true, the JSON equivalent of the STUCK line. Only typed composer text counts, the same reading as panels screen composer.hasUndeliveredText; an agent's dim or grey prompt suggestion or placeholder does not. --no-held-input turns this off.",
           "--session <id|name> scopes the watch to a named Session. The daemon resolves the Session once per request and its associated Panes on every read, so sessions associate and sessions detach take effect without a re-arm; archived and detached Panes drop out, and the Session's own orchestrator panels are excluded. Cadence state is keyed by the Session, not its current Panes, so membership changes keep held lines. A detached Pane's held lines are dropped.",
           "Under --session, pane.associated (JOINED <pane-name> pane <pane-id> session <session-id>) and pane.detached (LEFT ...) report membership changes; list them in --kinds next to the agent kinds. Other consumers receive them only when --kinds lists them, so older clients never see an unknown kind.",
           "PR events (decision D7): about every 3 minutes (jittered) the daemon visits each Pane associated with a live Session (none: no gh at all), finds its PR by branch when no open PR is known yet (gh pr list --head, so unwatched workers' new and reopened PRs are found), runs gh pr view on an open PR, and appends pr.conflicted (PR <pane-name> pane <pane-id> #<number> CONFLICTED: the PR now conflicts with its base), pr.checks (... CHECKS PASSED, or CHECKS FAILED <up to five names>: every check on the head commit finished), and pr.merged (... MERGED). Entries carry pr: {number, url, headOid}, plus checks and failingChecks for pr.checks. They fire on transitions only: the first poll of a PR after the daemon starts only records its state, so re-check conflicts after a restart with gh pr view. pr.conflicted and failed pr.checks bypass --min-interval like BLOCKED. Like JOINED/LEFT, they reach a consumer only under --session or when --kinds lists them. Without gh, or while it is signed out or rate limited, polling backs off (up to an hour) and no PR entries arrive.",
           "A daemon that predates --session returns no session field; runpane then fails with WATCH ERROR instead of watching every Pane.",
           "Replay: after a reset (RESET/_reset), the baseline restates current state. In JSON, those entries carry replay: true (and changedWhileAway: true after an epoch change). A replayed agent.ready is never READY: re-read runpane sessions overview instead of acting on it. Lines mode prints only CHANGED for them.",
-          "agent.report (REPORT <pane-name> pane <pane-id> panel <panel-id> <state> [pr#<n>] [<head>][: <question>]) is a worker's `runpane report`. It is opt-in: only a consumer that lists it in --kinds receives it. It bypasses --min-interval, and orchestrators treat it as the completion signal; a READY without a report means look, and maybe nudge."
+          "agent.report (REPORT <pane-name> pane <pane-id> panel <panel-id> <state> [pr#<n>] [<head>][: <question>]) is a worker's `runpane report`. It is opt-in: only a consumer that lists it in --kinds (or watches a Session) receives it. It passes --agents-only, which --follow and --until-event imply, whatever panel sent it: a shell tab or a wrapper launch whose agent is not yet detected included. It bypasses --min-interval, and orchestrators treat it as the completion signal; a READY without a report means look, and maybe nudge.",
+          "Exit-to-wake vs streaming: a harness that wakes an agent when a process exits (Claude Code background Bash, Codex) waits with runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone, run as a background task; when it exits, act on the printed line and run it again. The named cursor means nothing is missed between runs and nothing repeats. Streaming monitors (Pane Chat's Session watch, a Monitor tool) keep --follow. Never pipe --follow into grep -m1, head, or any other exit-on-match reader: --follow does not exit when its reader does until its next write."
         ]
       },
       "panes git-status": {
@@ -13886,7 +14025,7 @@
       "report": {
         "name": "report",
         "summary": "Hand back a worker's structured report: state, PR, head commit, summary, and the question when blocked.",
-        "details": "Run this as a delegated worker when you finish, fail, or get blocked, as the last step of your task. The orchestrator receives it as an agent.report watch event and treats it as the completion signal.",
+        "details": "Run this as a delegated worker when you finish, fail, or get blocked, as the last step of your task. The orchestrator receives it as an agent.report watch event and treats it as the completion signal. It prints whether anyone was waiting for it.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -13960,7 +14099,8 @@
         "notes": [
           "Inside a Pane terminal the report is for the current panel (PANE_SESSION_ID and PANE_PANEL_ID). Explicit --panel (with an optional --pane) wins; with neither, the command fails with a clear error.",
           "Each report replaces the panel's previous one and survives a Pane restart.",
-          "Watchers receive agent.report only when they list it in --kinds. REPORT lines skip the --min-interval batch."
+          "Watchers receive agent.report only when they list it in --kinds or watch a Session; it passes --agents-only from any panel, a shell tab included. REPORT lines skip the --min-interval batch.",
+          "The output says who received it: \"Delivered to N waiting watcher(s).\" counts watches waiting at that moment (liveWatchers in JSON). With no Session and nobody waiting it adds that the report is stored on the panel (runpane agents status --panel <id>) and that a named-cursor watch (runpane watch --as <name> --kinds agent.report) still receives it when it next waits. Zero is not a failure; the exit code is 0 either way."
         ]
       },
       "sessions list": {
@@ -14008,7 +14148,13 @@
         "notes": [
           "Structured input accepts launchCommand (full command including arguments; empty uses the selected agent default) and profile (Session behavior instructions). Creating/opening a Session submits no automatic prompt. Changes apply on next terminal launch.",
           "JSON isPinned: true/false sets the UI pin star. Creation defaults to false; update preserves the pin when omitted.",
-          "Create-time isPinned requires an updated Pane app. Older apps may ignore the field; use sessions pin after creation and read back the result."
+          "Create-time isPinned requires an updated Pane app. Older apps may ignore the field; use sessions pin after creation and read back the result.",
+          "runtime appears only on WSL Sessions (\"wsl\", with wslDistribution, Windows only). A Session on the native host has no runtime field on any OS; \"windows\" is accepted on input as a legacy name for the native host and is not stored.",
+          "Payload fields (all optional on update; name required on create): name, goal, context, nextAction, launchCommand, profile (strings); isPinned and, on update, archived (booleans); agent (codex|claude|cursor); decisions and blockers (arrays of strings); evidence and outputs (arrays of links); create also takes runtime (windows|wsl) and wslDistribution; update also takes report, expectedRevision (the revision you read; the update is refused if the Session has moved on) and source (user|agent).",
+          "A link is {\"label\": non-empty string, \"url\": an https://, http://, file:// or grain:// URL, \"addedAt\": ISO 8601 date such as 2026-10-14T09:30:00Z, \"kind\"?: evidence|output|ticket|pull-request|other, \"provenance\"?: string}.",
+          "Arrays replace the stored value: send the whole list, not only new items. Limits: at most 100 items per array and 16000 characters per text.",
+          "Every problem in the payload is reported at once in one ERR_SESSION_PAYLOAD_INVALID error (paths such as outputs[0].addedAt, \"missing\" for an absent required field), and nothing is changed.",
+          "Example: {\"name\": \"Release QA\", \"goal\": \"Ship 2.5\", \"decisions\": [\"Cut from main\"], \"blockers\": [], \"outputs\": [{\"label\": \"Release PR\", \"url\": \"https://github.com/greenfield-inc/Pane/pull/1\", \"addedAt\": \"2026-10-14T09:30:00Z\", \"kind\": \"pull-request\"}]}"
         ]
       },
       "sessions get": {
@@ -14055,7 +14201,13 @@
         ],
         "notes": [
           "Structured input accepts launchCommand (full command including arguments; empty uses the selected agent default) and profile (Session behavior instructions). Creating/opening a Session submits no automatic prompt. Changes apply on next terminal launch.",
-          "JSON isPinned: true/false sets the UI pin star. Creation defaults to false; update preserves the pin when omitted."
+          "JSON isPinned: true/false sets the UI pin star. Creation defaults to false; update preserves the pin when omitted.",
+          "Payload fields (all optional on update; name required on create): name, goal, context, nextAction, launchCommand, profile (strings); isPinned and, on update, archived (booleans); agent (codex|claude|cursor); decisions and blockers (arrays of strings); evidence and outputs (arrays of links); create also takes runtime (windows|wsl) and wslDistribution; update also takes report, expectedRevision (the revision you read; the update is refused if the Session has moved on) and source (user|agent).",
+          "A link is {\"label\": non-empty string, \"url\": an https://, http://, file:// or grain:// URL, \"addedAt\": ISO 8601 date such as 2026-10-14T09:30:00Z, \"kind\"?: evidence|output|ticket|pull-request|other, \"provenance\"?: string}.",
+          "Arrays replace the stored value: send the whole list, not only new items. Limits: at most 100 items per array and 16000 characters per text.",
+          "Every problem in the payload is reported at once in one ERR_SESSION_PAYLOAD_INVALID error (paths such as outputs[0].addedAt, \"missing\" for an absent required field), and nothing is changed.",
+          "update only: report is {\"summary\": non-empty string, \"status\": reported|verified, \"evidence\": [at least one link], \"reportedAt\": ISO 8601 date, \"provenance\": non-empty string}; report null clears it.",
+          "Example: {\"expectedRevision\": 4, \"nextAction\": \"Merge after CI\", \"decisions\": [\"Cut from main\", \"Skip beta\"], \"evidence\": [{\"label\": \"QA log\", \"url\": \"file:///tmp/qa.log\", \"addedAt\": \"2026-10-14T09:30:00Z\", \"kind\": \"evidence\", \"provenance\": \"qa agent\"}], \"report\": {\"summary\": \"QA passed\", \"status\": \"verified\", \"evidence\": [{\"label\": \"QA log\", \"url\": \"file:///tmp/qa.log\", \"addedAt\": \"2026-10-14T09:30:00Z\"}], \"reportedAt\": \"2026-10-14T09:31:00Z\", \"provenance\": \"qa agent\"}}"
         ]
       },
       "sessions set-agent": {
@@ -14482,8 +14634,8 @@
       },
       "handoff": {
         "name": "handoff",
-        "summary": "Hand your task to a fresh agent on this or another machine: check your handoff note, make the branch reachable, send the note, and start the agent on it.",
-        "details": "Two steps. The agent writes the note, because only it has the context: run `runpane handoff --template > ~/handoff.md` (outside the checkout) and fill in every section (goal, current state, done and verified, in progress, next steps, decisions and constraints, open questions, how to verify, git state), writing \"None\" where one does not apply. Then `runpane handoff \"<destination>\" --note-file ~/handoff.md` moves it: it rejects a note with a missing or empty section, refuses an unpushed branch unless --push, finds the destination's saved repository with the same remote, fetches the branch there, writes the note to `~/.pane/handoffs/` on that machine with its origin in the front matter and receiver instructions appended, and starts the agent in a new Pane branched from your branch. The receiver verifies the head commit, continues from Next steps, pushes to your branch, and reports back to your panel with `runpane workspace <your machine> panels submit`.",
+        "summary": "Hand your task to a fresh agent on this or another machine: check your handoff note, make the branch reachable, send the note, and start the agent on it. From a Session's terminal, create the Session on another machine instead.",
+        "details": "Two steps. The agent writes the note, because only it has the context: run `runpane handoff --template > ~/handoff.md` (outside the checkout) and fill in every section (goal, current state, done and verified, in progress, next steps, decisions and constraints, open questions, how to verify, git state), writing \"None\" where one does not apply. Then `runpane handoff \"<destination>\" --note-file ~/handoff.md` moves it: it rejects a note with a missing or empty section, refuses an unpushed branch unless --push, finds the destination's saved repository with the same remote, fetches the branch there, writes the note to `~/.pane/handoffs/` on that machine with its origin in the front matter and receiver instructions appended, and starts the agent in a new Pane branched from your branch. The receiver verifies the head commit, continues from Next steps, pushes to your branch, and reports back to your panel with `runpane workspace <your machine> panels submit`. Run from a Session's terminal (its folder is outside git), handoff moves the Session instead: it skips git, writes the note to the other machine the same way, and creates a Session there with the same name, goal and agent (numbered \"<name> 2\" if the name is taken), whose context and next action point at the note. The sender Session stays as it is; the new one waits for your first message. A Session cannot be handed off to the machine it is on.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -14495,7 +14647,7 @@
           {
             "name": "--template",
             "required": false,
-            "description": "Print the note template, with this checkout's origin and git state in its front matter, and exit."
+            "description": "Print the note template, with this checkout's (or Session's) origin and git state in its front matter, and exit."
           },
           {
             "name": "--note-file",
@@ -14559,6 +14711,7 @@
           "Another machine is reached through runpane workspace (Tailscale); it needs Pane running there with workspaces enabled and the repository saved. Repository listing and Pane creation call the reached daemon directly; no global destination CLI installation is required.",
           "Destination preflight runs before sender commit/push. Inside WSL, an absent or refused local Linux daemon can fall back to its Windows host through reachable Windows Tailscale and enabled workspaces; explicit Pane directory selection keeps its instance. Select a native Windows saved repository; WSL saved repositories are rejected before sending.",
           "A successful handoff requires initialInput.verifiedSubmitted and delivery taken or queued without blocked/error evidence. Unverified delivery exits nonzero with the created Pane, panel and a panels screen inspection command; inspect before retrying.",
+          "From a Session's terminal (PANE_ORCHESTRATION_SESSION_ID set, folder outside git) the receiver is a Session, not a Pane: it needs only runpane:sessions:create and runpane:machine:write on the destination, pushes nothing, and refuses this machine before sending. JSON output then has receiver.route \"session\", session {id, name, machine} and no git field; a dry run reports the name the Session would get.",
           "Write the note for a reader with no context: quote errors and commands exactly, and record approaches that failed so they are not retried. Leave the front matter to the CLI.",
           "Model and effort become agent flags: claude --model/--effort, codex -m and -c model_reasoning_effort, cursor-agent --model. Cursor effort is not supported and is rejected before side effects.",
           "Run it from the checkout being handed off. On another machine the receiver works in a new Pane; on this machine, from the Pane that owns this checkout, it works in a new tab of that Pane (the result's receiver.route and receiver.reason say which). Either way it pushes back to your branch, so stop changing that branch yourself."

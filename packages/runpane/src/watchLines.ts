@@ -129,7 +129,7 @@ export function formatWaitResult(result: WatchResult, format: WatchFormat): stri
 }
 
 export function formatNonEntry(
-  kind: '_ok' | '_heartbeat' | '_error' | '_reconnected',
+  kind: '_ok' | '_heartbeat' | '_error' | '_reconnected' | '_timeout',
   fields: Record<string, string | number | undefined>,
   format: WatchFormat,
 ): string {
@@ -137,5 +137,6 @@ export function formatNonEntry(
   if (kind === '_ok') return `WATCH OK gen ${fields.generation} epoch ${sanitizeName(String(fields.epoch))}`;
   if (kind === '_heartbeat') return `HEARTBEAT gen ${fields.generation} at ${fields.at}`;
   if (kind === '_reconnected') return `WATCH RECONNECTED gen ${fields.generation}`;
+  if (kind === '_timeout') return `WATCH TIMEOUT after ${fields.timeoutMs}ms`;
   return `WATCH ERROR ${sanitizeName(String(fields.code))}: ${sanitizeName(String(fields.message))}`;
 }

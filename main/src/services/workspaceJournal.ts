@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import type { PaneEventArgument, PaneEventSink } from '../core/eventSink';
 import type { AgentState } from '../../../shared/types/agentStatus';
 import { boundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
-import { extractWorkspaceHeldInput } from './workspaceHeldInput';
+import { extractWorkspaceHeldInput, type WorkspaceHeldInputScreen } from './workspaceHeldInput';
 import type {
   RunpaneWorkspaceEntry,
   RunpaneWorkspaceEntryKind,
@@ -23,8 +23,8 @@ interface WorkspacePanelMetadata {
   agentType?: string;
   panelTitle?: string;
   lastActivityAt?: string;
-  /** Latest terminal screen text; held input is derived from it, ignoring composer placeholders. */
-  screenText?: string;
+  /** The live viewport and its typed layer; held input is read from the typed layer only. */
+  screen?: WorkspaceHeldInputScreen;
 }
 
 export interface WorkspaceJournalFilter {
@@ -44,6 +44,12 @@ export interface WorkspaceJournalReadResult {
   entries: RunpaneWorkspaceEntry[];
   generation: number;
   dropped?: number;
+}
+
+export interface WorkspaceJournalDelivery {
+  entry: RunpaneWorkspaceEntry;
+  /** Watches that were waiting when the entry was appended and received it. */
+  liveWatchers: number;
 }
 
 interface WorkspaceWaiter {
@@ -105,8 +111,11 @@ const OPT_IN_KINDS: readonly RunpaneWorkspaceEntryKind[] = [
   'pr.checks',
   'pr.merged',
 ];
-/** Pane-level kinds that carry no agent type and still pass `agentsOnly`. */
-const PANE_LEVEL_KINDS: readonly RunpaneWorkspaceEntryKind[] = ['pane.created', 'pane.gone', ...OPT_IN_KINDS];
+/**
+ * Kinds that still pass `agentsOnly` without an agent type: Pane-level kinds, and `agent.report`,
+ * which a panel only raises on purpose (a shell tab, or a wrapper launch not yet detected).
+ */
+const AGENTS_ONLY_EXEMPT_KINDS: readonly RunpaneWorkspaceEntryKind[] = ['pane.created', 'pane.gone', 'agent.report', ...OPT_IN_KINDS];
 const panelExitEventSchema = boundary.object({
   type: boundary.string,
   source: boundary.object({
@@ -159,15 +168,7 @@ export class WorkspaceJournal implements PaneEventSink {
   }
 
   append(entry: Omit<RunpaneWorkspaceEntry, 'gen' | 'at'>): RunpaneWorkspaceEntry {
-    const full: RunpaneWorkspaceEntry = {
-      ...entry,
-      gen: ++this.nextGeneration,
-      at: new Date(this.now()).toISOString(),
-    };
-    this.ring.push(full);
-    if (this.ring.length > this.capacity) this.ring.shift();
-    this.resolveWaiters();
-    return full;
+    return this.deliver(entry).entry;
   }
 
   /**
@@ -178,8 +179,19 @@ export class WorkspaceJournal implements PaneEventSink {
     paneId: string,
     entry: Omit<RunpaneWorkspaceEntry, 'gen' | 'at' | keyof WorkspacePaneMetadata>,
   ): RunpaneWorkspaceEntry {
+    return this.deliverPaneEntry(paneId, entry).entry;
+  }
+
+  /**
+   * Like `appendPaneEntry`, and also says how many watches were waiting for this entry right now
+   * and received it. A snapshot: a named cursor that re-arms later still reads the entry.
+   */
+  deliverPaneEntry(
+    paneId: string,
+    entry: Omit<RunpaneWorkspaceEntry, 'gen' | 'at' | keyof WorkspacePaneMetadata>,
+  ): WorkspaceJournalDelivery {
     const pane = this.lookupPane(paneId) ?? { paneId, paneName: paneId };
-    return this.append({ ...pane, ...entry });
+    return this.deliver({ ...pane, ...entry });
   }
 
   readAfter(cursor: number, filter: WorkspaceJournalFilter = {}, limit = 256): WorkspaceJournalReadResult {
@@ -365,7 +377,7 @@ export class WorkspaceJournal implements PaneEventSink {
     const settledMs = kind === 'agent.ready' && Number.isFinite(lastActivityMs)
       ? Math.max(0, now - lastActivityMs)
       : undefined;
-    const heldInput = kind === 'agent.ready' && panel?.screenText ? extractWorkspaceHeldInput(panel.screenText) : undefined;
+    const heldInput = kind === 'agent.ready' ? extractWorkspaceHeldInput(panel.agentType, panel.screen) : undefined;
     const entry: Omit<RunpaneWorkspaceEntry, 'gen' | 'at'> = {
       ...pane,
       kind,
@@ -390,14 +402,29 @@ export class WorkspaceJournal implements PaneEventSink {
     return resolved;
   }
 
-  private resolveWaiters(): void {
+  private deliver(entry: Omit<RunpaneWorkspaceEntry, 'gen' | 'at'>): WorkspaceJournalDelivery {
+    const full: RunpaneWorkspaceEntry = {
+      ...entry,
+      gen: ++this.nextGeneration,
+      at: new Date(this.now()).toISOString(),
+    };
+    this.ring.push(full);
+    if (this.ring.length > this.capacity) this.ring.shift();
+    return { entry: full, liveWatchers: this.resolveWaiters(full.gen) };
+  }
+
+  /** Resolves every waiter with something to read; returns how many of them received entry `gen`. */
+  private resolveWaiters(gen: number): number {
+    let received = 0;
     for (const waiter of [...this.waiters]) {
       const result = this.readAfter(waiter.cursor, waiter.filter, waiter.limit);
       if (result.entries.length === 0 && !result.dropped) continue;
       clearTimeout(waiter.timer);
       this.waiters.delete(waiter);
+      if (result.entries.some(entry => entry.gen === gen)) received += 1;
       waiter.resolve({ ...result, timedOut: false });
     }
+    return received;
   }
 }
 
@@ -439,7 +466,7 @@ function matchesFilter(
   if (filter.excludePaneIds && filter.excludePaneIds.includes(entry.paneId)) return false;
   if (filter.repoId !== undefined && entry.repoId !== filter.repoId) return false;
   if (filter.nameContains && !entry.paneName.toLocaleLowerCase().includes(filter.nameContains.toLocaleLowerCase())) return false;
-  if (filter.agentsOnly && !entry.agentType && !PANE_LEVEL_KINDS.includes(entry.kind)) return false;
+  if (filter.agentsOnly && !entry.agentType && !AGENTS_ONLY_EXEMPT_KINDS.includes(entry.kind)) return false;
   return true;
 }
 

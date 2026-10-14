@@ -42,6 +42,7 @@ interface StatusAccess {
   setupTerminalHandlers(terminal: TerminalFixture['terminal']): void;
   pollAgentStatus(): void;
   sendInitialInputOnce(panelId: string): void;
+  holdInitialInput(panelId: string): void;
   getProcessCwd(pid: number): Promise<string>;
 }
 
@@ -452,6 +453,131 @@ describe('terminal status events', () => {
     expect(manager.getAgentStatus('p')).toBe('working');
     fixture.exit();
     expect(manager.getAgentStatus('p')).toBeUndefined();
+  });
+
+  describe('a held starting message for a wrapper launch', () => {
+    const rule = '─'.repeat(40);
+    let customState: TerminalPanelState;
+
+    function attachWrapper(initialInput = 'Read and follow /tmp/prompt.md') {
+      customState = { initialCommand: 'agent-farm run greenfield/planner:opus', initialInput, initialInputSubmitStrategy: 'enter' };
+      const panel = {
+        id: 'p', sessionId: 's', type: 'terminal' as const, title: 'Farm',
+        state: { isActive: true, customState },
+        metadata: { createdAt: '', lastActiveAt: '', position: 0 },
+      };
+      panelManager.getPanel.mockImplementation(() => ({ ...panel, state: { ...panel.state, customState } }));
+      panelManager.updatePanel.mockImplementation(async (_id: string, updates: { state?: { customState?: TerminalPanelState } }) => {
+        if (updates.state?.customState) customState = { ...updates.state.customState };
+      });
+      const fixture = attach();
+      fixture.terminal.agentType = undefined;
+      fixture.terminal.pty.process = 'node';
+      access.holdInitialInput('p');
+      return fixture;
+    }
+
+    // The status poll runs the release; let its write and the staged submit settle on real timers.
+    async function settle(ms = 1_000) {
+      const now = Date.now();
+      vi.useRealTimers();
+      await new Promise(resolve => setTimeout(resolve, ms));
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(now + ms);
+    }
+
+    it('waits for the detected agent\'s composer, then stages the text and presses Enter on its own', async () => {
+      const fixture = attachWrapper();
+      fixture.data('Building agent bundle...\r\n');
+      await pollAgentStatus();
+      await pollAgentStatus();
+      await settle(100);
+      expect(fixture.terminal.pty.write).not.toHaveBeenCalled();
+
+      fixture.data(`\x1b[2J\x1b[H${rule}\r\n❯ \r\n${rule}\r\n`);
+      await pollAgentStatus();
+      await pollAgentStatus();
+      expect(fixture.terminal.agentType).toBe('claude');
+      fixture.terminal.pty.write.mockImplementation((data: string) => {
+        if (data !== '\r') fixture.data(`\x1b[2J\x1b[H${rule}\r\n❯ ${data}\r\n${rule}\r\n`);
+      });
+      // Idle once the screen has settled.
+      vi.setSystemTime(Date.now() + 11_000);
+      await pollAgentStatus();
+      expect(manager.getAgentStatus('p')).toBe('idle');
+      await settle(1_000);
+      expect(fixture.terminal.pty.write.mock.calls.map(call => call[0])).toEqual(['Read and follow /tmp/prompt.md', '\r']);
+      expect(customState.initialInputSentAt).toEqual(expect.any(String));
+    });
+
+    it('submits to a detected Codex with Ctrl+Enter', async () => {
+      const fixture = attachWrapper('say hi');
+      // Detected from its screen, which works where the foreground process name is unknown (Windows).
+      fixture.data('>_ OpenAI Codex (v0.160.1)\r\n\r\n› Ask Codex to do anything\r\n\r\n  gpt-5.6 high\r\n  ? for shortcuts');
+      await pollAgentStatus();
+      await pollAgentStatus();
+      expect(fixture.terminal.agentType).toBe('codex');
+      fixture.terminal.pty.write.mockImplementation((data: string) => { if (data === 'say hi') fixture.data('x'); });
+      vi.setSystemTime(Date.now() + 11_000);
+      await pollAgentStatus();
+      expect(manager.getAgentStatus('p')).toBe('idle');
+      await settle(1_500);
+      expect(fixture.terminal.pty.write.mock.calls.map(call => call[0])).toEqual(['say hi', '\x1b[13;5u\r']);
+    });
+
+    it('never types the message when no supported agent appears, and records why', async () => {
+      const fixture = attachWrapper();
+      fixture.data('Building agent bundle...\r\n');
+      await pollAgentStatus();
+      vi.setSystemTime(Date.now() + 31_000);
+      await pollAgentStatus();
+      fixture.data('Done.\r\n');
+      await pollAgentStatus();
+      await settle(100);
+      expect(fixture.terminal.pty.write).not.toHaveBeenCalled();
+      expect(customState.initialInputError).toContain('No supported agent');
+      expect(customState.initialInputSentAt).toBeUndefined();
+    });
+
+    it('keeps holding while a startup prompt waits for the person', async () => {
+      const fixture = attachWrapper();
+      fixture.data('Trust this repository workspace? [y/N] ');
+      await pollAgentStatus();
+      vi.setSystemTime(Date.now() + 60_000);
+      await pollAgentStatus();
+      expect(customState.initialInputError).toBeUndefined();
+      expect(fixture.terminal.pty.write).not.toHaveBeenCalled();
+    });
+  });
+
+  // Windows terminals cannot report their foreground, so Pane never claims an exit there.
+  it.skipIf(process.platform === 'win32')('reports a launch command as exited once its shell owns the foreground again', async () => {
+    let foregroundGroup: number | undefined = 999;
+    const exitManager = new TerminalPanelManager(undefined, undefined, async () => foregroundGroup);
+    // SAFETY: This seam mirrors the private members used by these PTY fixtures, as `access` does above.
+    const exitAccess = exitManager as StatusAccess;
+    const fixture = createTerminal();
+    fixtures.push(fixture);
+    fixture.terminal.agentType = undefined;
+    Object.assign(fixture.terminal, { launchCommandWrittenAt: Date.now(), isPtyHost: false });
+    exitAccess.terminals.set('p', fixture.terminal);
+    const shellPid = fixture.terminal.pty.pid;
+
+    // Too soon after the command was written: the shell may not have started it yet.
+    foregroundGroup = shellPid;
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(false);
+
+    vi.setSystemTime(Date.now() + 2_000);
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(true);
+
+    // A wrapper, even a script run by the same shell program, runs in a process group of its own.
+    foregroundGroup = shellPid + 1;
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(false);
+
+    // Once an agent is identified, the launch did not exit.
+    foregroundGroup = shellPid;
+    fixture.terminal.agentType = 'claude';
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(false);
   });
 
   it('detects a wrapper agent from its screen and then reports it to agents-only watchers', async () => {

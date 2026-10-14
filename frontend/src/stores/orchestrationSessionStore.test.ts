@@ -97,3 +97,41 @@ describe('Session selection per desktop', () => {
     expect(store.getState().selectedSessionId).toBe('b');
   });
 });
+
+describe('Session order', () => {
+  // SAFETY: Order tests read only record ids.
+  const four = ['a', 'b', 'c', 'd'].map(id => ({ id, name: id.toUpperCase() } as OrchestrationSessionRecord));
+  const ids = (records: OrchestrationSessionRecord[]) => records.map(record => record.id);
+  const reorder = vi.fn();
+  async function orderStore() {
+    vi.resetModules();
+    vi.stubGlobal('window', { electronAPI: { orchestrationSessions: { select, list, reorder } } });
+    const { useOrchestrationSessionStore: store } = await import('./orchestrationSessionStore');
+    store.setState({ sessions: four, selectedSessionId: 'a', availability: 'ready' });
+    return store;
+  }
+
+  it('shows the new order before the host answers, moving only the listed Sessions', async () => {
+    const answer = deferred<{ success: boolean; data: { sessions: OrchestrationSessionRecord[] } }>();
+    reorder.mockReturnValue(answer.promise);
+    const store = await orderStore();
+
+    const saving = store.getState().reorder(['d', 'b']);
+
+    expect(ids(store.getState().sessions)).toEqual(['a', 'd', 'c', 'b']);
+    expect(reorder).toHaveBeenCalledWith(['d', 'b']);
+    answer.resolve({ success: true, data: { sessions: [four[0], four[3], four[2], four[1]] } });
+    await saving;
+    expect(ids(store.getState().sessions)).toEqual(['a', 'd', 'c', 'b']);
+  });
+
+  it('puts the order back and reports the failure when the host does not save it', async () => {
+    reorder.mockResolvedValue({ success: false, error: 'disk full' });
+    list.mockResolvedValue({ success: true, data: { sessions: four, selectedSessionId: 'a' } });
+    const store = await orderStore();
+
+    await expect(store.getState().reorder(['d', 'a'])).rejects.toThrow('disk full');
+
+    expect(ids(store.getState().sessions)).toEqual(['a', 'b', 'c', 'd']);
+  });
+});

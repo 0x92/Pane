@@ -853,6 +853,18 @@
       "--interrupt",
       "--yes",
       "--json"
+    ],
+    [
+      "watch",
+      "--as",
+      "orch",
+      "--until-event",
+      "--quiet",
+      "--json",
+      "--kinds",
+      "agent.report,agent.blocked,panel.exited,pane.gone",
+      "--timeout-ms",
+      "600000"
     ]
   ],
   "help": {
