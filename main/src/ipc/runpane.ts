@@ -2996,7 +2996,8 @@ async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest):
 }
 
 function commandExitedReason(panel: ToolPanel, screen: RunpanePanelScreenResult): RunpaneReadinessReason {
-  const errorLine = lastLaunchErrorLine(screen.text, panelLaunchCommand(panel));
+  const cols = terminalPanelManager.getTerminalSnapshot(panel.id)?.cols;
+  const errorLine = lastLaunchErrorLine(screen.text, panelLaunchCommand(panel), cols);
   const said = errorLine ? ` It printed: "${errorLine}".` : '';
   if (!screen.state.agentType) {
     return {
@@ -3017,17 +3018,23 @@ const ERROR_LINE = /\b(?:error|fatal|failed|exception)\b/iu;
 
 /**
  * The last line that reads as an error between the launch command's echo and
- * the shell prompt it exited to, such as Agent Farm's `error: ...`.
+ * the shell prompt it exited to, such as Agent Farm's `error: ...`. Rows that
+ * fill the terminal's `cols` continue on the next row and are joined back.
  */
-function lastLaunchErrorLine(screenText: string, launchCommand: string | undefined): string | undefined {
-  const lines = screenText.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
-  // The last line is the shell's prompt. The command's echo names its program as a word of its
+function lastLaunchErrorLine(screenText: string, launchCommand: string | undefined, cols: number | undefined): string | undefined {
+  const rows = screenText.split(/\r?\n/u).filter(row => row.trim());
+  // The last row is the shell's prompt. The command's echo names its program as a word of its
   // own; a path inside an error (`.agent-farm/generated/...`) does not end the search.
   const program = launchCommand?.trim().split(/\s+/u)[0];
-  for (let index = lines.length - 2; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (program && line.split(/\s+/u).includes(program)) return undefined;
-    if (ERROR_LINE.test(line)) return line.length > ERROR_LINE_LIMIT ? `${line.slice(0, ERROR_LINE_LIMIT)}…` : line;
+  for (let index = rows.length - 2; index >= 0; index -= 1) {
+    if (program && rows[index].trim().split(/\s+/u).includes(program)) return undefined;
+    if (!ERROR_LINE.test(rows[index])) continue;
+    let line = rows[index];
+    for (let next = index + 1; cols && [...rows[next - 1]].length >= cols && next < rows.length - 1; next += 1) {
+      line += rows[next];
+    }
+    line = line.trim();
+    return line.length > ERROR_LINE_LIMIT ? `${line.slice(0, ERROR_LINE_LIMIT)}…` : line;
   }
   return undefined;
 }

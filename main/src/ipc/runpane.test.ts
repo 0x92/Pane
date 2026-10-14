@@ -4023,11 +4023,15 @@ describe('runpane IPC handlers', () => {
           customResumeStarted: true,
         } },
       };
-      const exitedScreen = (text: string) => ({ ...terminalSnapshot(text, 'idle', 'claude'), isCliPanel: true, isCliReady: true });
+      const cols = 60;
+      const exitedScreen = (text: string) => ({ ...terminalSnapshot(text, 'idle', 'claude'), isCliPanel: true, isCliReady: true, cols });
+      const agentFarmError = 'error: Symlinks are not supported in bundle inputs: /repo/.agent-farm/generated/main/.venv/bin/python';
+      // The terminal wraps the error across rows of `cols` characters.
       const failedRelaunch = [
         '~/repo % agent-farm run greenfield/implementer:opus --resume af-launch-7',
         'Resuming af-launch-7',
-        'error: Symlinks are not supported in bundle inputs: /repo/.agent-farm/generated/main/.venv/bin/python',
+        agentFarmError.slice(0, cols),
+        agentFarmError.slice(cols),
         '~/repo % ',
       ].join('\n');
 
@@ -4085,9 +4089,7 @@ describe('runpane IPC handlers', () => {
             timedOut: false,
             reason: {
               code: 'command-exited',
-              message: expect.stringContaining(
-                'It printed: "error: Symlinks are not supported in bundle inputs: /repo/.agent-farm/generated/main/.venv/bin/python".',
-              ),
+              message: expect.stringContaining(`It printed: "${agentFarmError}".`),
             },
           },
         });
