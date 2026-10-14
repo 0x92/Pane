@@ -559,6 +559,7 @@ describe('terminal status events', () => {
     const fixture = createTerminal();
     fixtures.push(fixture);
     fixture.terminal.agentType = undefined;
+    fixture.terminal.pty.process = 'zsh';
     Object.assign(fixture.terminal, { launchCommandWrittenAt: Date.now(), isPtyHost: false });
     exitAccess.terminals.set('p', fixture.terminal);
     const shellPid = fixture.terminal.pty.pid;
@@ -574,9 +575,13 @@ describe('terminal status events', () => {
     foregroundGroup = shellPid + 1;
     expect(await exitManager.hasLaunchCommandExited('p')).toBe(false);
 
-    // Once an agent is identified, the launch did not exit.
+    // An agent Pane identified that exits back to the shell has exited too.
     foregroundGroup = shellPid;
     fixture.terminal.agentType = 'claude';
+    expect(await exitManager.hasLaunchCommandExited('p')).toBe(true);
+
+    // Only Pane's own shell in the foreground can mean the command exited.
+    fixture.terminal.pty.process = 'claude';
     expect(await exitManager.hasLaunchCommandExited('p')).toBe(false);
   });
 
