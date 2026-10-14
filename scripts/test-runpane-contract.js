@@ -900,15 +900,16 @@ class ClosedReader:
 
 codes = {}
 real = sys.stdout
-for code in (errno.EPIPE, errno.ENOTCONN, errno.EINVAL):
+# errno.errorcode names ENOTCONN WSAENOTCONN on Windows, so name the codes here.
+for name, code in (("EPIPE", errno.EPIPE), ("ENOTCONN", errno.ENOTCONN), ("EINVAL", errno.EINVAL)):
     sys.stdout = ClosedReader(code)
     try:
-        codes[errno.errorcode[code]] = local_control.run_watch(parse_args(["watch", "--until-event", "--json"]))
+        codes[name] = local_control.run_watch(parse_args(["watch", "--until-event", "--json"]))
     finally:
         sys.stdout = real
 print(json.dumps(codes))
 `);
-  assert.deepStrictEqual(JSON.parse(result), { EPIPE: 0, ENOTCONN: 0, EINVAL: 0 }, 'Python watch must exit 0 when its reader is gone');
+  assert.deepStrictEqual(JSON.parse(result), { EPIPE: 0, ENOTCONN: 0, EINVAL: 0 }, `Python watch must exit 0 when its reader is gone: ${result}`);
 }
 
 async function checkReportDeliveryLine() {
