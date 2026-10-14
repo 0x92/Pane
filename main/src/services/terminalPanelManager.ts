@@ -1344,6 +1344,31 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   async stageInitialCommand(panelId: string, initialCommand: string): Promise<void> {
+    this.writeToTerminal(panelId, await this.resolveLaunchInShell(panelId, initialCommand));
+  }
+
+  /**
+   * Run the panel's saved launch command again in its live shell, once
+   * hasLaunchCommandExited says the last one exited. It resolves the way a
+   * fresh start does, so an agent relaunches with its resume command.
+   */
+  async relaunchInShell(panelId: string): Promise<void> {
+    const terminal = this.terminals.get(panelId);
+    const panel = panelManager.getPanel(panelId);
+    const initialCommand = panel ? terminalCustomState(panel.state).initialCommand : undefined;
+    if (!terminal || terminal.destroying || !initialCommand) {
+      throw new Error(`Panel ${panelId} has no live shell with a launch command to run again`);
+    }
+    const commandToRun = await this.resolveLaunchInShell(panelId, initialCommand);
+    if (this.terminals.get(panelId) !== terminal || terminal.destroying) {
+      throw new Error(`Panel ${panelId} closed before its launch command could run again`);
+    }
+    this.writeToTerminal(panelId, `${commandToRun}\r`);
+    terminal.launchCommandWrittenAt = Date.now();
+  }
+
+  /** Resolve and persist a launch command for a panel's live shell; returns the text to type. */
+  private async resolveLaunchInShell(panelId: string, initialCommand: string): Promise<string> {
     const panel = panelManager.getPanel(panelId);
     if (!panel) throw new Error(`Panel ${panelId} not found`);
     const state = terminalCustomState(panel.state);
@@ -1367,7 +1392,7 @@ export class TerminalPanelManager extends EventEmitter {
       terminal.reportedSessionIdLocked = undefined;
       terminal.agentSessionScrapeBuffer = '';
     }
-    this.writeToTerminal(panelId, launch.commandToRun);
+    return launch.commandToRun;
   }
 
   private async persistOpenCodeLaunchState(
@@ -2546,16 +2571,19 @@ export class TerminalPanelManager extends EventEmitter {
 
   /**
    * The panel's launch command ran and Pane's own shell is back in the
-   * foreground (the terminal's foreground process group is the shell's)
-   * with no agent identified: the command exited. A wrapper script, even one
-   * run by the same shell program, has a process group of its own. False
-   * where the foreground is unknown (Windows, WSL, ptyHost).
+   * foreground (the terminal's foreground process group is the shell's): the
+   * command exited, whether or not it had started an agent Pane identified.
+   * A wrapper script, even one run by the same shell program, has a process
+   * group of its own. False where the foreground is unknown (Windows, WSL,
+   * ptyHost).
    */
   async hasLaunchCommandExited(panelId: string): Promise<boolean> {
     const terminal = this.terminals.get(panelId);
-    if (!terminal || terminal.destroying || terminal.agentType || terminal.launchCommandWrittenAt === undefined) return false;
+    if (!terminal || terminal.destroying || terminal.launchCommandWrittenAt === undefined) return false;
     if (Date.now() - terminal.launchCommandWrittenAt < LAUNCH_EXIT_GRACE_MS) return false;
-    if (terminal.isPtyHost || terminal.isWSL || process.platform === 'win32') return false;
+    // Only Pane's own shell can be back at its prompt; skip the `ps` read for any other foreground.
+    const name = this.readForegroundProcessName(terminal);
+    if (!name || !this.isInteractiveShellProcess(terminal, name)) return false;
     try {
       return await this.readForegroundGroup(terminal.pty.pid) === terminal.pty.pid;
     } catch {

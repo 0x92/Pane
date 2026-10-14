@@ -1042,12 +1042,13 @@ export function registerRunpaneHandlers(
   });
 
   commandRegistry.register('runpane:panels:list', async (request: PaneCommandValue): Promise<RunpanePanelListResult> => {
-    return withRunpaneAction(services, 'panels:list', {}, () => {
+    return withRunpaneAction(services, 'panels:list', {}, async () => {
       const normalized = parsePanelListRequest(request);
       const pane = resolvePane(sessionManager, normalized.paneId);
       const storedPanels = panelManager.getPanelsForSession(pane.id);
       const dockPanelId = getDockTerminalPanel(storedPanels)?.id;
-      const panels = storedPanels.map(panel => panelToSummary(panel, dockPanelId));
+      const panels = await Promise.all(storedPanels.map(async panel =>
+        panelToSummary(panel, dockPanelId, await terminalPanelManager.hasLaunchCommandExited(panel.id))));
 
       return {
         ok: true,
@@ -1271,7 +1272,8 @@ export function registerRunpaneHandlers(
         });
       }
 
-      const stopped = candidates.filter(candidate => !candidate.running);
+      const exited = await Promise.all(candidates.map(candidate => terminalPanelManager.hasLaunchCommandExited(candidate.panelId)));
+      const stopped = candidates.filter((candidate, index) => !candidate.running || exited[index]);
       const concurrency = normalized.concurrency ?? DEFAULT_RESUME_CONCURRENCY;
       // Restart --concurrency panels at a time, then wait on all of them together, so the whole
       // call takes the restarts plus one ready timeout however many panels are in scope.
@@ -1901,8 +1903,11 @@ function panelResumeSummary(
   return { resumeId, resumeSource };
 }
 
-/** Pass the Pane's dock shell id (see getDockTerminalPanel) to mark that panel `dock: true`. */
-function panelToSummary(panel: ToolPanel, dockPanelId?: string) {
+/**
+ * Pass the Pane's dock shell id (see getDockTerminalPanel) to mark that panel `dock: true`, and
+ * `launchExited` (hasLaunchCommandExited) to report a panel whose command exited to its shell as stopped.
+ */
+function panelToSummary(panel: ToolPanel, dockPanelId?: string, launchExited = false) {
   const customState = isRecord(panel.state.customState) ? panel.state.customState : {};
   const initialCommand = optionalString(customState.initialCommand);
   const commandAgentType = resolveAgentTypeFromCommand(initialCommand);
@@ -1919,7 +1924,7 @@ function panelToSummary(panel: ToolPanel, dockPanelId?: string) {
     title: panel.title,
     active: Boolean(panel.state.isActive),
     initialized: panel.type === 'terminal' ? terminalPanelManager.isTerminalInitialized(panel.id) : undefined,
-    running: panel.type === 'terminal' ? terminalPanelManager.isTerminalInitialized(panel.id) : undefined,
+    running: panel.type === 'terminal' ? terminalPanelManager.isTerminalInitialized(panel.id) && !launchExited : undefined,
     agentType,
     agentDetection,
     launchCommand: optionalString(customState.launchCommand) ?? initialCommand,
@@ -2759,6 +2764,12 @@ async function resumeTerminalPanel(
     }))
     : undefined;
   if (terminalPanelManager.isTerminalInitialized(panel.id)) {
+    if (await terminalPanelManager.hasLaunchCommandExited(panel.id)) {
+      // The agent exited back to Pane's shell: run its saved command there again.
+      await terminalPanelManager.relaunchInShell(panel.id);
+      const relaunched = panelManager.getPanel(panel.id) ?? panel;
+      return panelResumeResult(relaunched, 'resumed', resumeMessage(relaunched), await waitIfAsked(relaunched));
+    }
     // It may have just been started elsewhere (the app shows the Pane), so still answer --wait-ready.
     return panelResumeResult(panel, 'already-running', 'The panel is already running; nothing was restarted.', await waitIfAsked(panel));
   }
@@ -2862,7 +2873,7 @@ async function buildPanelScreenResult(panel: ToolPanel, limit: number): Promise<
   await terminalPanelManager.waitForTerminalState(panel.id);
   const liveSnapshot = terminalPanelManager.getTerminalSnapshot(panel.id);
   const customState = getTerminalCustomState(panel);
-  const state = panelStateSummary(panel, liveSnapshot, customState);
+  const state = panelStateSummary(panel, liveSnapshot, customState, await terminalPanelManager.hasLaunchCommandExited(panel.id));
   const persisted = liveSnapshot ? null : panelDatabase.getPanelBuffers(panel.id);
   const { source, rawText } = selectPanelScreenText(liveSnapshot, customState, persisted);
   const bounded = boundSanitizedLines(rawText, limit);
@@ -2897,13 +2908,15 @@ function panelStateSummary(
   panel: ToolPanel,
   snapshot: TerminalPanelSnapshot | null,
   customState: TerminalPanelState = getTerminalCustomState(panel),
+  launchExited = false,
 ): RunpanePanelStateSummary {
   const customAgentType = optionalAgentId(customState.agentType);
   const hasLiveTerminal = Boolean(snapshot || terminalPanelManager.isTerminalInitialized(panel.id));
 
   return {
     initialized: hasLiveTerminal,
-    running: hasLiveTerminal,
+    // Its shell is alive, but the command it launched has exited: stopped, so `panels resume` relaunches it.
+    running: hasLiveTerminal && !launchExited,
     isAlternateScreen: snapshot?.isAlternateScreen ?? customState.isAlternateScreen,
     activityStatus: snapshot?.activityStatus,
     isCliReady: snapshot?.isCliReady ?? (hasLiveTerminal ? customState.isCliReady : undefined),
@@ -2961,12 +2974,8 @@ async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest):
     if (blocked && condition !== 'text') {
       return panelWaitResult(panel, condition, false, false, startedAt, lastScreen, blocked);
     }
-    if (condition === 'ready' && launched && !lastScreen.state.agentType && await terminalPanelManager.hasLaunchCommandExited(panel.id)) {
-      return panelWaitResult(panel, condition, false, false, startedAt, lastScreen, undefined, {
-        code: 'command-exited',
-        message: 'The launch command exited back to the shell without starting a supported agent, so the panel will not become ready. '
-          + 'Nothing was sent to it. Check the command on screen, or pass --agent if it runs an agent Pane should recognise.',
-      });
+    if (condition === 'ready' && launched && await terminalPanelManager.hasLaunchCommandExited(panel.id)) {
+      return panelWaitResult(panel, condition, false, false, startedAt, lastScreen, undefined, commandExitedReason(panel, lastScreen));
     }
     // Give a lazy start a moment, then report a panel that is not running instead of timing out.
     if (
@@ -2984,6 +2993,50 @@ async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest):
 
   const reason = condition === 'ready' && launched ? readinessTimeoutReason(lastScreen.state, timeoutMs) : undefined;
   return panelWaitResult(panel, condition, false, true, startedAt, lastScreen, undefined, reason);
+}
+
+function commandExitedReason(panel: ToolPanel, screen: RunpanePanelScreenResult): RunpaneReadinessReason {
+  const cols = terminalPanelManager.getTerminalSnapshot(panel.id)?.cols;
+  const errorLine = lastLaunchErrorLine(screen.text, panelLaunchCommand(panel), cols);
+  const said = errorLine ? ` It printed: "${errorLine}".` : '';
+  if (!screen.state.agentType) {
+    return {
+      code: 'command-exited',
+      message: `The launch command exited back to the shell without starting a supported agent, so the panel will not become ready.${said} `
+        + 'Nothing was sent to it. Check the command on screen, or pass --agent if it runs an agent Pane should recognise.',
+    };
+  }
+  return {
+    code: 'command-exited',
+    message: `The ${AGENT_TEMPLATES[screen.state.agentType].title} command exited back to the shell, so the panel will not become ready.${said} `
+      + `Nothing was sent to it. Fix what it reported, then run \`${panelResumeCommand(panel.id)}\` to launch it again.`,
+  };
+}
+
+const ERROR_LINE_LIMIT = 300;
+const ERROR_LINE = /\b(?:error|fatal|failed|exception)\b/iu;
+
+/**
+ * The last line that reads as an error between the launch command's echo and
+ * the shell prompt it exited to, such as Agent Farm's `error: ...`. Rows that
+ * fill the terminal's `cols` continue on the next row and are joined back.
+ */
+function lastLaunchErrorLine(screenText: string, launchCommand: string | undefined, cols: number | undefined): string | undefined {
+  const rows = screenText.split(/\r?\n/u).filter(row => row.trim());
+  // The last row is the shell's prompt. The command's echo names its program as a word of its
+  // own; a path inside an error (`.agent-farm/generated/...`) does not end the search.
+  const program = launchCommand?.trim().split(/\s+/u)[0];
+  for (let index = rows.length - 2; index >= 0; index -= 1) {
+    if (program && rows[index].trim().split(/\s+/u).includes(program)) return undefined;
+    if (!ERROR_LINE.test(rows[index])) continue;
+    let line = rows[index];
+    for (let next = index + 1; cols && [...rows[next - 1]].length >= cols && next < rows.length - 1; next += 1) {
+      line += rows[next];
+    }
+    line = line.trim();
+    return line.length > ERROR_LINE_LIMIT ? `${line.slice(0, ERROR_LINE_LIMIT)}…` : line;
+  }
+  return undefined;
 }
 
 /** The command a terminal panel launched in its shell, if it launched one. */
@@ -3028,7 +3081,8 @@ function isWaitConditionMatched(
     case 'initialized':
       return screen.state.initialized;
     case 'ready':
-      if (blocked || !screen.state.initialized) return false;
+      // Not `initialized`: a launch that exited back to its live shell is stopped, whatever its last frame shows.
+      if (blocked || !screen.state.running) return false;
       if (!screen.state.isCliPanel && !launched) return true;
       if (!screen.state.agentType) return false;
       if (screen.state.agentType === 'codex' && !hasConfiguredCodexScreen(screen.text)) return false;

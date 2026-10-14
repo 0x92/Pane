@@ -65,6 +65,7 @@ vi.spyOn(terminalPanelManager, 'deliverPendingInitialInput');
 vi.spyOn(terminalPanelManager, 'getAgentStatus');
 vi.spyOn(terminalPanelManager, 'getForegroundProcess');
 vi.spyOn(terminalPanelManager, 'hasLaunchCommandExited');
+vi.spyOn(terminalPanelManager, 'relaunchInShell');
 vi.spyOn(terminalPanelManager, 'isBracketedPasteEnabled');
 vi.spyOn(terminalPanelManager, 'launchShellReadsPromptFile');
 vi.spyOn(panelDatabase, 'getPanelBuffers');
@@ -348,6 +349,7 @@ describe('runpane IPC handlers', () => {
     vi.mocked(terminalPanelManager.getAgentStatus).mockReset();
     vi.mocked(terminalPanelManager.getForegroundProcess).mockReset().mockReturnValue(undefined);
     vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockReset().mockResolvedValue(false);
+    vi.mocked(terminalPanelManager.relaunchInShell).mockReset().mockResolvedValue(undefined);
     vi.mocked(terminalPanelManager.isBracketedPasteEnabled).mockReset().mockReturnValue(false);
     vi.mocked(terminalPanelManager.launchShellReadsPromptFile).mockReset().mockReturnValue(true);
     vi.mocked(terminalPanelManager.getOutputGeneration).mockReturnValue(0);
@@ -3743,6 +3745,16 @@ describe('runpane IPC handlers', () => {
       });
     });
 
+    it('resumes an agent that exited back to its live shell, in that shell', async () => {
+      vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockImplementation(async (id: string) => id === runningCodex.id);
+      const registry = createRegistry(bulkServices());
+
+      const result = await registry.invoke('runpane:panels:resume-many', [{ allStopped: true }]);
+
+      expect(terminalPanelManager.relaunchInShell).toHaveBeenCalledWith(runningCodex.id);
+      expect(result).toMatchObject({ resumed: 3, alreadyRunning: 0 });
+    });
+
     it('also resumes a stopped Agent Farm panel that never reported an agent', async () => {
       const agentFarm: ToolPanel = {
         ...terminalPanel,
@@ -3988,12 +4000,99 @@ describe('runpane IPC handlers', () => {
       const result = await registry.invoke('runpane:panels:resume', [{ panelId: terminalPanel.id }]);
 
       expect(terminalPanelManager.initializeTerminal).not.toHaveBeenCalled();
+      expect(terminalPanelManager.relaunchInShell).not.toHaveBeenCalled();
       expect(result).toMatchObject({
         ok: true,
         panelId: terminalPanel.id,
         action: 'already-running',
         message: expect.stringContaining('already running'),
         panel: { running: true },
+      });
+    });
+
+    describe('once the agent has exited back to its shell', () => {
+      const exitedPanel: ToolPanel = {
+        ...terminalPanel,
+        title: 'Agent Farm',
+        state: { isActive: false, customState: {
+          initialCommand: 'agent-farm run greenfield/implementer:opus',
+          launchMode: 'wrapped',
+          agentType: 'claude',
+          isCliPanel: true,
+          agentSessionId: 'af-launch-7',
+          customResumeStarted: true,
+        } },
+      };
+      const cols = 60;
+      const exitedScreen = (text: string) => ({ ...terminalSnapshot(text, 'idle', 'claude'), isCliPanel: true, isCliReady: true, cols });
+      const agentFarmError = 'error: Symlinks are not supported in bundle inputs: /repo/.agent-farm/generated/main/.venv/bin/python';
+      // The terminal wraps the error across rows of `cols` characters.
+      const failedRelaunch = [
+        '~/repo % agent-farm run greenfield/implementer:opus --resume af-launch-7',
+        'Resuming af-launch-7',
+        agentFarmError.slice(0, cols),
+        agentFarmError.slice(cols),
+        '~/repo % ',
+      ].join('\n');
+
+      beforeEach(() => {
+        vi.mocked(panelManager.getPanel).mockReturnValue(exitedPanel);
+        vi.mocked(terminalPanelManager.isTerminalInitialized).mockReturnValue(true);
+        vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockResolvedValue(true);
+        vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(exitedScreen(failedRelaunch));
+      });
+
+      it('lists and shows the panel as stopped, pointing at panels resume', async () => {
+        vi.mocked(panelManager.getPanelsForSession).mockReturnValue([exitedPanel]);
+        const registry = createRegistry();
+
+        const list = await registry.invoke('runpane:panels:list', [{ paneId: session.id }]);
+        const screen = await registry.invoke('runpane:panels:screen', [{ panelId: exitedPanel.id }]);
+
+        expect(list).toMatchObject({ panels: [{ panelId: exitedPanel.id, initialized: true, running: false }] });
+        expect(screen).toMatchObject({
+          state: { initialized: true, running: false },
+          nextCommand: `runpane panels resume --panel ${exitedPanel.id} --wait-ready --yes --json`,
+        });
+      });
+
+      it('relaunches the saved command in the same shell instead of reporting already-running', async () => {
+        vi.mocked(terminalPanelManager.relaunchInShell).mockImplementation(async () => {
+          vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockResolvedValue(false);
+        });
+        const registry = createRegistry();
+
+        const result = await registry.invoke('runpane:panels:resume', [{ panelId: exitedPanel.id }]);
+
+        expect(terminalPanelManager.relaunchInShell).toHaveBeenCalledWith(exitedPanel.id);
+        expect(terminalPanelManager.initializeTerminal).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          ok: true,
+          action: 'resumed',
+          agentSessionId: 'af-launch-7',
+          message: "Relaunched the panel's Agent Farm command with --resume af-launch-7.",
+          panel: { running: true },
+        });
+      });
+
+      it('reports a relaunch that exits at once with the error line it printed, not a timeout', async () => {
+        const registry = createRegistry();
+
+        const result = await registry.invoke('runpane:panels:resume', [{ panelId: exitedPanel.id, waitReady: true, readyTimeoutMs: 30_000 }]);
+
+        expect(terminalPanelManager.relaunchInShell).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({
+          ok: false,
+          action: 'resumed',
+          readiness: {
+            ok: false,
+            timedOut: false,
+            reason: {
+              code: 'command-exited',
+              message: expect.stringContaining(`It printed: "${agentFarmError}".`),
+            },
+          },
+        });
       });
     });
 
