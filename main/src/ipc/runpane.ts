@@ -60,11 +60,20 @@ import type { Session, SessionOutput } from '../types/session';
 import type { BrowserPanelState, CreatePanelRequest, EditorPanelState, TerminalAgentReport, TerminalPanelState, ToolPanel } from '../../../shared/types/panels';
 import { RUNPANE_CONTRACT } from '../../../shared/types/generatedRunpaneContract';
 import { isAgentSupportedOnPlatform } from '../../../shared/constants/agentLaunchPresets';
+import { getDockTerminalPanel } from '../../../shared/utils/terminalDock';
 import {
   TERMINAL_IMAGE_OPTIONS,
   terminalGraphicsProtocols,
 } from '../../../shared/constants/terminalGraphics';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
+import {
+  decodeOrchestrationSessionPayload,
+  orchestrationExpectedRevisionSchema,
+  orchestrationLinksSchema,
+  orchestrationReportSchema,
+  orchestrationTextArraySchema,
+  orchestrationTextSchema,
+} from '../services/orchestrationSessionPayload';
 import type {
   RunpaneAgentId,
   RunpaneAgentDoctorRequest,
@@ -289,51 +298,38 @@ const orchestrationSelectorSchema = boundary.object({
   sessionId: boundary.optional(boundary.nonEmptyString),
   name: boundary.optional(boundary.nonEmptyString),
 });
-const orchestrationLinkSchema = boundary.object({
-  label: boundary.nonEmptyString,
-  url: boundary.nonEmptyString,
-  kind: boundary.optional(boundary.enumeration('evidence', 'output', 'ticket', 'pull-request', 'other')),
-  provenance: boundary.optional(boundary.string),
-  addedAt: boundary.nonEmptyString,
-});
 const orchestrationSessionCreateSchema = boundary.object({
   runtime: boundary.optional(boundary.enumeration('windows', 'wsl')),
   wslDistribution: boundary.optional(boundary.nonEmptyString),
   name: boundary.nonEmptyString,
   isPinned: boundary.optional(boundary.boolean),
   agent: boundary.optional(boundary.enumeration('claude', 'codex', 'cursor')),
-  launchCommand: boundary.optional(boundary.string),
-  profile: boundary.optional(boundary.string),
-  goal: boundary.optional(boundary.string),
-  context: boundary.optional(boundary.string),
-  decisions: boundary.optional(boundary.array(boundary.string)),
-  blockers: boundary.optional(boundary.array(boundary.string)),
-  nextAction: boundary.optional(boundary.string),
-  evidence: boundary.optional(boundary.array(orchestrationLinkSchema)),
-  outputs: boundary.optional(boundary.array(orchestrationLinkSchema)),
+  launchCommand: boundary.optional(orchestrationTextSchema),
+  profile: boundary.optional(orchestrationTextSchema),
+  goal: boundary.optional(orchestrationTextSchema),
+  context: boundary.optional(orchestrationTextSchema),
+  decisions: boundary.optional(orchestrationTextArraySchema),
+  blockers: boundary.optional(orchestrationTextArraySchema),
+  nextAction: boundary.optional(orchestrationTextSchema),
+  evidence: boundary.optional(orchestrationLinksSchema),
+  outputs: boundary.optional(orchestrationLinksSchema),
 });
 const orchestrationSessionUpdateSchema = boundary.object({
-  name: boundary.optional(boundary.string),
+  name: boundary.optional(orchestrationTextSchema),
   archived: boundary.optional(boundary.boolean),
   isPinned: boundary.optional(boundary.boolean),
   agent: boundary.optional(boundary.enumeration('claude', 'codex', 'cursor')),
-  launchCommand: boundary.optional(boundary.string),
-  profile: boundary.optional(boundary.string),
-  goal: boundary.optional(boundary.string),
-  context: boundary.optional(boundary.string),
-  decisions: boundary.optional(boundary.array(boundary.string)),
-  blockers: boundary.optional(boundary.array(boundary.string)),
-  nextAction: boundary.optional(boundary.string),
-  evidence: boundary.optional(boundary.array(orchestrationLinkSchema)),
-  outputs: boundary.optional(boundary.array(orchestrationLinkSchema)),
-  report: boundary.optional(boundary.nullable(boundary.object({
-    summary: boundary.nonEmptyString,
-    status: boundary.enumeration('reported', 'verified'),
-    evidence: boundary.array(orchestrationLinkSchema),
-    reportedAt: boundary.nonEmptyString,
-    provenance: boundary.nonEmptyString,
-  }))),
-  expectedRevision: boundary.optional(boundary.number),
+  launchCommand: boundary.optional(orchestrationTextSchema),
+  profile: boundary.optional(orchestrationTextSchema),
+  goal: boundary.optional(orchestrationTextSchema),
+  context: boundary.optional(orchestrationTextSchema),
+  decisions: boundary.optional(orchestrationTextArraySchema),
+  blockers: boundary.optional(orchestrationTextArraySchema),
+  nextAction: boundary.optional(orchestrationTextSchema),
+  evidence: boundary.optional(orchestrationLinksSchema),
+  outputs: boundary.optional(orchestrationLinksSchema),
+  report: boundary.optional(boundary.nullable(orchestrationReportSchema)),
+  expectedRevision: boundary.optional(orchestrationExpectedRevisionSchema),
   source: boundary.optional(boundary.enumeration('user', 'agent')),
 });
 const lockOwnerInputSchema = boundary.object({
@@ -1030,7 +1026,9 @@ export function registerRunpaneHandlers(
     return withRunpaneAction(services, 'panels:list', {}, () => {
       const normalized = parsePanelListRequest(request);
       const pane = resolvePane(sessionManager, normalized.paneId);
-      const panels = panelManager.getPanelsForSession(pane.id).map(panelToSummary);
+      const storedPanels = panelManager.getPanelsForSession(pane.id);
+      const dockPanelId = getDockTerminalPanel(storedPanels)?.id;
+      const panels = storedPanels.map(panel => panelToSummary(panel, dockPanelId));
 
       return {
         ok: true,
@@ -1743,12 +1741,15 @@ function resolveAggregatedAgentStatus(panels: readonly ToolPanel[]): RunpanePane
 }
 
 /**
- * A Pane with a live terminal is running, whatever lifecycle value was stored
- * when it was created or adopted. Errors and startup keep their stored status.
+ * A Pane with a live tool or agent terminal is running, whatever lifecycle value was
+ * stored when it was created or adopted. The dock shell is ambient and doesn't count.
+ * Errors and startup keep their stored status.
  */
 function resolvePaneLiveStatus(session: Session, panels: readonly ToolPanel[]): string {
   if (session.status === 'error' || session.status === 'initializing') return session.status;
-  const hasLiveTerminal = panels.some(panel => panel.type === 'terminal' && terminalPanelManager.isTerminalInitialized(panel.id));
+  const dockPanelId = getDockTerminalPanel(panels)?.id;
+  const hasLiveTerminal = panels.some(panel =>
+    panel.type === 'terminal' && panel.id !== dockPanelId && terminalPanelManager.isTerminalInitialized(panel.id));
   return hasLiveTerminal ? 'running' : session.status;
 }
 
@@ -1774,7 +1775,8 @@ function optionalAgentDetection(value: PaneCommandValue): RunpaneAgentDetection 
   }
 }
 
-function panelToSummary(panel: ToolPanel) {
+/** Pass the Pane's dock shell id (see getDockTerminalPanel) to mark that panel `dock: true`. */
+function panelToSummary(panel: ToolPanel, dockPanelId?: string) {
   const customState = isRecord(panel.state.customState) ? panel.state.customState : {};
   const initialCommand = optionalString(customState.initialCommand);
   const commandAgentType = resolveAgentTypeFromCommand(initialCommand);
@@ -1795,6 +1797,7 @@ function panelToSummary(panel: ToolPanel) {
     agentDetection,
     launchCommand: optionalString(customState.launchCommand) ?? initialCommand,
     isCliPanel,
+    dock: panel.id === dockPanelId || undefined,
     position: optionalNumber(panel.metadata.position),
     createdAt: toIsoString(panel.metadata.createdAt),
     lastActiveAt: toIsoString(panel.metadata.lastActiveAt),
@@ -3426,7 +3429,7 @@ function parseOrchestrationSessionSelector(value: PaneCommandValue): RunpaneSess
 }
 
 function parseOrchestrationSessionCreateRequest(value: PaneCommandValue): OrchestrationSessionCreateInput {
-  return decodeBoundary(value, orchestrationSessionCreateSchema);
+  return decodeOrchestrationSessionPayload(value, orchestrationSessionCreateSchema, 'create');
 }
 
 interface OrchestrationSessionUpdateRequest {
@@ -3437,7 +3440,7 @@ interface OrchestrationSessionUpdateRequest {
 function parseOrchestrationSessionUpdateRequest(value: PaneCommandValue): OrchestrationSessionUpdateRequest {
   if (!isRecord(value)) throw new Error('Session update request must be an object');
   const selector = parseOrchestrationSessionSelector(value.selector);
-  const input = decodeBoundary(value.input, orchestrationSessionUpdateSchema);
+  const input = decodeOrchestrationSessionPayload(value.input, orchestrationSessionUpdateSchema, 'update');
   return { selector, input };
 }
 
@@ -4938,6 +4941,19 @@ function resolveProjectByName(projects: Project[], selectorName: string): Projec
   return matches[0];
 }
 
+const TOOL_COMMAND_TITLE_LIMIT = 40;
+
+/** A tab title for a launched command: whole words up to the limit, never the dock's "Terminal". */
+function toolCommandTitle(command: string): string {
+  const words = command.trim().split(/\s+/u);
+  let title = words[0].slice(0, TOOL_COMMAND_TITLE_LIMIT);
+  for (const word of words.slice(1)) {
+    if (title.length + 1 + word.length > TOOL_COMMAND_TITLE_LIMIT) return `${title}…`;
+    title = `${title} ${word}`;
+  }
+  return words[0].length > TOOL_COMMAND_TITLE_LIMIT ? `${title}…` : title;
+}
+
 function resolveToolSpec(tool: RunpaneToolSpec, environment?: ProjectEnvironment): RunpaneResolvedTool {
   if ('agent' in tool) {
     const template = AGENT_TEMPLATES[tool.agent];
@@ -4960,7 +4976,7 @@ function resolveToolSpec(tool: RunpaneToolSpec, environment?: ProjectEnvironment
   }
   if (!declaredAgent) {
     return {
-      title: tool.title ?? 'Terminal',
+      title: tool.title ?? toolCommandTitle(tool.command),
       command: tool.command,
       initialInput: tool.initialInput,
       initialInputAsFilePointer: tool.initialInputAsFilePointer,

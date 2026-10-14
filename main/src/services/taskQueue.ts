@@ -621,7 +621,9 @@ export class TaskQueue {
       // No prompt provided - update session status to stopped if toolType is 'none'
       const resolvedToolType: 'claude' | 'none' = toolType || 'claude';
       if (resolvedToolType === 'none') {
-        console.log(`[TaskQueue] Session ${session.id} has no prompt and no AI tool, marking as stopped`);
+        // Tools and agents start in their own terminals after setup; runpane reports the
+        // Pane running while one of them is live, so don't announce the Pane as stopped.
+        console.log(`[TaskQueue] Session ${session.id} has no initial prompt (stored status: stopped); its live status follows its tool and agent terminals`);
         await sessionManager.updateSession(session.id, { status: 'stopped', statusMessage: undefined });
       }
     }
