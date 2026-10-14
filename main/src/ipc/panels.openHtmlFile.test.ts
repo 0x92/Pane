@@ -10,6 +10,8 @@ import { setPaneRuntime, type PaneRuntime } from '../core/runtime';
 import { databaseService } from '../services/database';
 import { registerFileHandlers } from './file';
 import { registerPanelHandlers } from './panels';
+import { panelManager } from '../services/panelManager';
+import type { ToolPanel } from '../../../shared/types/panels';
 
 function partial<Contract>(value: Partial<Contract>): Contract {
   // SAFETY: Each fixture supplies every member read by the tested code.
@@ -79,8 +81,32 @@ describe('panels:open-html-file', () => {
     expect(panel.metadata.openPlacement).toBeUndefined();
     expect(send).toHaveBeenCalledWith('panel:created', expect.objectContaining({ id: panel.id }));
 
+  });
+
+  it('returns the tab already showing the file instead of opening another', async () => {
+    const first = await registry.invokeRemote('panels:open-html-file', [{ sessionId, filePath: 'site/index.html' }]);
+    // SAFETY: A successful open returns the panel.
+    const panelId = (first as { data: { id: string } }).data.id;
+    send.mockClear();
+
     const again = await registry.invokeRemote('panels:open-html-file', [{ sessionId, filePath: 'site/index.html' }]);
+
+    expect(again).toMatchObject({ success: true, data: { id: panelId } });
+    expect(send).not.toHaveBeenCalledWith('panel:created', expect.anything());
+  });
+
+  it('opens a new tab when the earlier tab has navigated to another page', async () => {
+    const first = await registry.invokeRemote('panels:open-html-file', [{ sessionId, filePath: 'site/index.html' }]);
+    // SAFETY: A successful open returns the panel.
+    const panel = (first as { data: ToolPanel }).data;
+    await panelManager.updatePanel(panel.id, {
+      state: { ...panel.state, customState: { currentUrl: 'http://localhost:3000/' } },
+    });
+
+    const again = await registry.invokeRemote('panels:open-html-file', [{ sessionId, filePath: 'site/index.html' }]);
+
     expect(again).toMatchObject({ success: true, data: { id: expect.not.stringMatching(panel.id) } });
+    expect(panelManager.getPanel(panel.id)?.state.customState).toEqual({ currentUrl: 'http://localhost:3000/' });
   });
 
   it('still refuses a remote panels:create that points a tab at a file', async () => {
