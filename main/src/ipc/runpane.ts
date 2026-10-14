@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { browserFileContext } from '../services/browserFileContext';
-import { PaneError, reasonOf } from '../../../shared/paneError';
+import { PaneError, paneErrorText, reasonOf } from '../../../shared/paneError';
 import { isOrchestrationInternalSessionId } from '../../../shared/types/orchestrationSession';
 import type { IpcMain } from 'electron';
 import type { AppServices } from './types';
@@ -28,7 +28,7 @@ import { fastCheckWorkingDirectory, listCommitsAhead } from '../services/gitPlum
 import { assertNewBranchName } from '../services/worktreeManager';
 import { queuedSetupMessage } from '../services/taskQueue';
 import { assessComposerEvidence, hasConfiguredCodexScreen, isSlashCommandInput, looksLikePendingComposer } from './runpaneComposerEvidence';
-import { projectWorkspaceEntry } from '../services/workspaceJournal';
+import { presentStoppedPanel, projectWorkspaceEntry } from '../services/workspaceJournal';
 import { detectAgentState } from '../services/agentStatus/manifestEngine';
 import { getManifestForAgent, CURSOR_MANIFEST } from '../services/agentStatus/manifests';
 import { detectAgentComposer, detectAgentFromScreen, screenShowsQueuedMessage } from '../services/agents/agentScreenSignature';
@@ -139,6 +139,11 @@ import type {
   RunpanePanelOutputResult,
   RunpanePanelScreenRequest,
   RunpanePanelScreenResult,
+  RunpanePanelResumeRequest,
+  RunpanePanelResumeResult,
+  RunpanePanelResumeManyItem,
+  RunpanePanelResumeManyRequest,
+  RunpanePanelResumeManyResult,
   RunpanePanelStateSummary,
   RunpanePanelSubmitComposerRequest,
   RunpanePanelSubmitComposerResult,
@@ -237,6 +242,8 @@ const RUNPANE_CHANNELS = [
   'runpane:panels:submit',
   'runpane:panels:submit-composer',
   'runpane:panels:wait',
+  'runpane:panels:resume',
+  'runpane:panels:resume-many',
   'runpane:panels:last-message',
   'runpane:report',
   'runpane:workspace:state',
@@ -251,6 +258,11 @@ const DEFAULT_PANEL_SCREEN_LIMIT = 80;
 const DEFAULT_LAST_MESSAGE_LIMIT = 20_000;
 const LAST_MESSAGE_TRUNCATION_MARKER = '[earlier text truncated]\n';
 const DEFAULT_PANEL_WAIT_TIMEOUT_MS = 30_000;
+/** How long a ready/idle wait lets a panel that is not running start before reporting it stopped. */
+const STOPPED_PANEL_WAIT_GRACE_MS = 2_000;
+/** Agents a bulk resume restarts at once; each spawn also takes one of the terminal manager's slots. */
+const DEFAULT_RESUME_CONCURRENCY = 3;
+const MAX_RESUME_CONCURRENCY = 10;
 const DEFAULT_PANEL_WAIT_INTERVAL_MS = 500;
 /** How much of a blocking prompt a blocked result quotes. */
 const BLOCKED_PROMPT_LINES = 12;
@@ -1222,6 +1234,91 @@ export function registerRunpaneHandlers(
     }));
   });
 
+  commandRegistry.register('runpane:panels:resume', async (request: PaneCommandValue): Promise<RunpanePanelResumeResult> => {
+    return withRunpaneAction(services, 'panels:resume', {}, async () => {
+      const normalized = parsePanelResumeRequest(request);
+      return resumeTerminalPanel(services, resolveTerminalPanel(normalized.panelId), normalized);
+    }, result => ({
+      paneId: result.paneId,
+      panelId: result.panelId,
+      ok: result.ok,
+      resultCount: result.action === 'resumed' ? 1 : 0,
+    }));
+  });
+
+  commandRegistry.register('runpane:panels:resume-many', async (request: PaneCommandValue): Promise<RunpanePanelResumeManyResult> => {
+    return withRunpaneAction(services, 'panels:resume-many', {}, async () => {
+      const normalized = parsePanelResumeManyRequest(request);
+      let scope: RunpanePanelResumeManyResult['scope'] = { kind: 'all-stopped' };
+      let candidates = workspaceStateReader.listManagedCliPanels();
+      if (normalized.sessionId !== undefined) {
+        const record = await requireOrchestrationSessionManager(services).get({ sessionId: normalized.sessionId });
+        if (record.archived) {
+          throw new PaneError(
+            'ERR_RUNPANE_SESSION_ARCHIVED',
+            `Session ${record.name} is archived, so its panels were not resumed. Nothing was changed.`,
+            `Restore the Session in Pane, then run \`runpane panels resume --session ${record.id} --yes\`.`,
+          );
+        }
+        const membership = services.orchestrationSessionManager?.workspaceMembership(record.id);
+        scope = { kind: 'session', sessionId: record.id, sessionName: record.name };
+        candidates = candidates.filter((candidate) => {
+          const limitedTo = membership?.panes.get(candidate.paneId);
+          return limitedTo !== undefined
+            && (limitedTo.length === 0 || limitedTo.includes(candidate.panelId))
+            && !membership?.ownPaneIds.has(candidate.paneId)
+            && !membership?.ownPanelIds.has(candidate.panelId);
+        });
+      }
+
+      const stopped = candidates.filter(candidate => !candidate.running);
+      const concurrency = normalized.concurrency ?? DEFAULT_RESUME_CONCURRENCY;
+      // Restart --concurrency panels at a time, then wait on all of them together, so the whole
+      // call takes the restarts plus one ready timeout however many panels are in scope.
+      const restarted = await mapWithConcurrency(stopped, concurrency, async (candidate): Promise<RunpanePanelResumeManyItem> => {
+        const base = {
+          panelId: candidate.panelId,
+          paneId: candidate.paneId,
+          paneName: candidate.paneName,
+          panelTitle: candidate.panelTitle,
+          agentType: candidate.agentType,
+        };
+        try {
+          const result = await resumeTerminalPanel(services, resolveTerminalPanel(candidate.panelId), { waitReady: false });
+          return { ...base, ok: result.ok, action: result.action, message: result.message, agentSessionId: result.agentSessionId };
+        } catch (error) {
+          return { ...base, ok: false, error: error instanceof PaneError ? paneErrorText(error) : error instanceof Error ? error.message : String(error) };
+        }
+      });
+      const items = normalized.waitReady
+        ? await Promise.all(restarted.map(async (item): Promise<RunpanePanelResumeManyItem> => {
+          if (item.error !== undefined) return item;
+          const panel = panelManager.getPanel(item.panelId);
+          if (!panel) return { ...item, ok: false, error: `Panel ${item.panelId} disappeared while resuming` };
+          const readiness = toPaneReadiness(await waitForPanel(panel, {
+            panelId: panel.id,
+            condition: 'ready',
+            timeoutMs: normalized.readyTimeoutMs ?? DEFAULT_PANEL_WAIT_TIMEOUT_MS,
+            intervalMs: DEFAULT_PANEL_WAIT_INTERVAL_MS,
+          }));
+          return { ...item, ok: readiness.ok, readiness };
+        }))
+        : restarted;
+
+      return {
+        ok: items.every(item => item.ok),
+        scope,
+        resumed: items.filter(item => item.action === 'resumed').length,
+        alreadyRunning: candidates.length - stopped.length + items.filter(item => item.action === 'already-running').length,
+        failed: items.filter(item => item.error !== undefined).length,
+        notReady: items.filter(item => item.readiness !== undefined && !item.readiness.ok).length,
+        concurrency,
+        items,
+        nextCommand: scope.kind === 'session' ? `runpane sessions overview --session ${scope.sessionId} --json` : undefined,
+      };
+    }, result => ({ ok: result.ok, resultCount: result.resumed }));
+  });
+
   commandRegistry.register('runpane:panels:screen', async (request: PaneCommandValue): Promise<RunpanePanelScreenResult> => {
     return withRunpaneAction(services, 'panels:screen', {}, async () => {
       const normalized = parsePanelScreenRequest(request);
@@ -1479,7 +1576,8 @@ export function registerRunpaneHandlers(
       const project = normalized.repo
         ? resolveRepoSelector(databaseService.getAllProjects(), normalized.repo)
         : undefined;
-      return workspaceStateReader.read(project?.id);
+      const state = workspaceStateReader.read(project?.id);
+      return { ...state, entries: state.entries.map(entry => presentStoppedPanel(entry, {})) };
     }, result => ({ resultCount: result.entries.length }));
   });
 
@@ -1534,6 +1632,7 @@ export function registerRunpaneHandlers(
         // Baseline entries restate current state after a reset; replay marks them so a consumer never
         // reads a replayed agent.ready as a turn that just ended.
         const baselineEntries = (): RunpaneWorkspaceEntry[] => workspaceStateReader.read(project?.id).entries
+          .map(entry => presentStoppedPanel(entry, filter))
           .filter(workspaceJournal.matcher(filter))
           .map(entry => ({ ...projectWorkspaceEntry(entry, filter), replay: true as const }));
 
@@ -1820,6 +1919,7 @@ function panelToSummary(panel: ToolPanel, dockPanelId?: string) {
     title: panel.title,
     active: Boolean(panel.state.isActive),
     initialized: panel.type === 'terminal' ? terminalPanelManager.isTerminalInitialized(panel.id) : undefined,
+    running: panel.type === 'terminal' ? terminalPanelManager.isTerminalInitialized(panel.id) : undefined,
     agentType,
     agentDetection,
     launchCommand: optionalString(customState.launchCommand) ?? initialCommand,
@@ -2630,6 +2730,100 @@ function resolvePanelCreateActivation(
   return !tool.agent;
 }
 
+/**
+ * Restart a stopped terminal panel in place: the same restart the app runs when it shows the
+ * panel, so the saved launch command resolves to the agent's resume command. A running panel is
+ * left alone.
+ */
+async function resumeTerminalPanel(
+  services: AppServices,
+  panel: ToolPanel,
+  options: Pick<RunpanePanelResumeRequest, 'waitReady' | 'readyTimeoutMs'>,
+): Promise<RunpanePanelResumeResult> {
+  const pane = services.sessionManager.getSession(panel.sessionId);
+  // Archive marks the Pane before bounded process teardown and worktree removal.
+  // Cleanup may still be running or have failed; neither makes it resumable.
+  if (pane?.archived) {
+    throw new PaneError(
+      'ERR_RUNPANE_PANE_ARCHIVED',
+      `Pane ${pane.id} is archived, so panel ${panel.id} was not resumed. Nothing was changed.`,
+      'Restore the Pane from the Archived list in Pane before resuming its panels.',
+    );
+  }
+  const waitIfAsked = async (target: ToolPanel) => options.waitReady
+    ? toPaneReadiness(await waitForPanel(target, {
+      panelId: target.id,
+      condition: 'ready',
+      timeoutMs: options.readyTimeoutMs ?? DEFAULT_PANEL_WAIT_TIMEOUT_MS,
+      intervalMs: DEFAULT_PANEL_WAIT_INTERVAL_MS,
+    }))
+    : undefined;
+  if (terminalPanelManager.isTerminalInitialized(panel.id)) {
+    // It may have just been started elsewhere (the app shows the Pane), so still answer --wait-ready.
+    return panelResumeResult(panel, 'already-running', 'The panel is already running; nothing was restarted.', await waitIfAsked(panel));
+  }
+
+  const customState = isRecord(panel.state.customState) ? panel.state.customState : {};
+  const cwd = pane?.worktreePath
+    ?? optionalString(customState.cwd)
+    ?? process.cwd();
+  // initializeTerminal also checks the old process tree: absence from the live
+  // PTY map alone does not prove that bounded teardown finished killing it.
+  await terminalPanelManager.initializeTerminal(panel, cwd, sessionWslContext(services, panel.sessionId));
+  const resumed = panelManager.getPanel(panel.id) ?? panel;
+  return panelResumeResult(resumed, 'resumed', resumeMessage(resumed), await waitIfAsked(resumed));
+}
+
+/** Run `worker` over `items`, at most `limit` at a time, keeping the input order in the results. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const lanes = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(lanes);
+  return results;
+}
+
+function panelResumeResult(
+  panel: ToolPanel,
+  action: RunpanePanelResumeResult['action'],
+  message: string,
+  readiness?: RunpanePaneReadiness,
+): RunpanePanelResumeResult {
+  const summary = panelToSummary(panel);
+  return {
+    ok: readiness?.ok ?? true,
+    panelId: panel.id,
+    paneId: panel.sessionId,
+    action,
+    message,
+    agentType: summary.agentType,
+    agentSessionId: summary.resumeId,
+    panel: summary,
+    readiness,
+    nextCommand: readiness?.nextCommand ?? (action === 'resumed' ? panelWaitCommand(panel.id) : panelScreenCommand(panel.id)),
+  };
+}
+
+function resumeMessage(panel: ToolPanel): string {
+  const customState = isRecord(panel.state.customState) ? panel.state.customState : {};
+  const initialCommand = optionalString(customState.initialCommand);
+  if (!initialCommand) return 'Started a new shell in the panel.';
+  const { resumeId, resumeSource } = panelResumeSummary(customState, initialCommand);
+  if (!resumeId) return "Relaunched the panel's command.";
+  return resumeSource === 'agent-farm'
+    ? `Relaunched the panel's Agent Farm command with --resume ${resumeId}.`
+    : `Relaunched the panel's agent, resuming conversation ${resumeId}.`;
+}
+
 function toPaneReadiness(result: RunpanePanelWaitResult): RunpanePaneReadiness {
   return {
     ok: result.ok,
@@ -2693,7 +2887,9 @@ async function buildPanelScreenResult(panel: ToolPanel, limit: number): Promise<
     text: bounded.text,
     state,
     composer,
-    nextCommand: bounded.hasMore ? panelOutputCommand(panel.id) : panelWaitCommand(panel.id),
+    nextCommand: !state.running
+      ? panelResumeCommand(panel.id)
+      : bounded.hasMore ? panelOutputCommand(panel.id) : panelWaitCommand(panel.id),
   };
 }
 
@@ -2707,6 +2903,7 @@ function panelStateSummary(
 
   return {
     initialized: hasLiveTerminal,
+    running: hasLiveTerminal,
     isAlternateScreen: snapshot?.isAlternateScreen ?? customState.isAlternateScreen,
     activityStatus: snapshot?.activityStatus,
     isCliReady: snapshot?.isCliReady ?? (hasLiveTerminal ? customState.isCliReady : undefined),
@@ -2748,7 +2945,10 @@ async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest):
     requiresFirstEvaluation = false;
     lastScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
     condition = request.condition ?? defaultWaitCondition(lastScreen.state);
-    const blocked = detectPanelBlocker(lastScreen.text, lastScreen.state.agentType, panel.id);
+    // A stopped panel's saved screen can show an old prompt; it is not a live blocker.
+    const blocked = lastScreen.state.running
+      ? detectPanelBlocker(lastScreen.text, lastScreen.state.agentType, panel.id)
+      : undefined;
     const matched = isWaitConditionMatched(condition, lastScreen, request.contains, blocked, launched);
 
     // Codex briefly paints a usable-looking composer before its first-run menu.
@@ -2767,6 +2967,14 @@ async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest):
         message: 'The launch command exited back to the shell without starting a supported agent, so the panel will not become ready. '
           + 'Nothing was sent to it. Check the command on screen, or pass --agent if it runs an agent Pane should recognise.',
       });
+    }
+    // Give a lazy start a moment, then report a panel that is not running instead of timing out.
+    if (
+      (condition === 'ready' || condition === 'idle') &&
+      !lastScreen.state.running &&
+      Date.now() - startedAt >= STOPPED_PANEL_WAIT_GRACE_MS
+    ) {
+      return panelWaitResult(panel, condition, false, false, startedAt, lastScreen);
     }
 
     const remainingMs = timeoutMs - (Date.now() - startedAt);
@@ -2844,6 +3052,7 @@ function panelWaitResult(
   blocked?: RunpanePanelBlockedState,
   reason?: RunpaneReadinessReason,
 ): RunpanePanelWaitResult {
+  const stopped = !matched && condition !== 'text' && !screen.state.running;
   return {
     ok: matched && !timedOut && !blocked && !reason,
     panelId: panel.id,
@@ -2855,12 +3064,15 @@ function panelWaitResult(
     state: screen.state,
     blocked,
     reason,
+    stopped: stopped ? true : undefined,
     screen: {
       source: screen.source,
       text: screen.text,
       hasMore: screen.hasMore,
     },
-    nextCommand: blocked?.suggestedCommand ?? (matched || reason ? panelScreenCommand(panel.id) : panelWaitCommand(panel.id, condition)),
+    nextCommand: blocked?.suggestedCommand ?? (matched || reason
+      ? panelScreenCommand(panel.id)
+      : stopped ? panelResumeCommand(panel.id) : panelWaitCommand(panel.id, condition)),
   };
 }
 
@@ -3572,6 +3784,10 @@ function panelScreenCommand(panelId: string): string {
   return `runpane panels screen --panel ${panelId} --limit ${DEFAULT_PANEL_SCREEN_LIMIT} --json`;
 }
 
+function panelResumeCommand(panelId: string): string {
+  return `runpane panels resume --panel ${panelId} --wait-ready --yes --json`;
+}
+
 function panelWaitCommand(panelId: string, condition: RunpanePanelWaitCondition = 'ready'): string {
   return `runpane panels wait --panel ${panelId} --for ${condition} --timeout-ms ${DEFAULT_PANEL_WAIT_TIMEOUT_MS} --json`;
 }
@@ -3807,6 +4023,7 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pane.created',
   'pane.gone',
   'panel.exited',
+  'panel.stopped',
   'pane.associated',
   'pane.detached',
   'pr.conflicted',
@@ -4246,6 +4463,40 @@ function parsePanelScreenRequest(value: PaneCommandValue): RunpanePanelScreenReq
   return {
     panelId,
     limit: parsePositiveInteger(value.limit, 'limit'),
+  };
+}
+
+function parsePanelResumeRequest(value: PaneCommandValue): RunpanePanelResumeRequest {
+  if (!isRecord(value)) {
+    throw new Error('Panel resume request must be an object');
+  }
+  const panelId = optionalString(value.panelId)?.trim();
+  if (!panelId) {
+    throw new Error('Panel resume request must include panelId');
+  }
+  return {
+    panelId,
+    waitReady: optionalBoolean(value.waitReady),
+    readyTimeoutMs: parsePositiveInteger(value.readyTimeoutMs, 'readyTimeoutMs'),
+  };
+}
+
+function parsePanelResumeManyRequest(value: PaneCommandValue): RunpanePanelResumeManyRequest {
+  if (!isRecord(value)) {
+    throw new Error('Panel resume request must be an object');
+  }
+  const sessionId = optionalString(value.sessionId)?.trim() || undefined;
+  const allStopped = optionalBoolean(value.allStopped) === true;
+  if ((sessionId !== undefined) === allStopped) {
+    throw new Error('Panel resume request must include exactly one of sessionId or allStopped');
+  }
+  const concurrency = parsePositiveInteger(value.concurrency, 'concurrency');
+  return {
+    sessionId,
+    allStopped: allStopped || undefined,
+    waitReady: optionalBoolean(value.waitReady),
+    readyTimeoutMs: parsePositiveInteger(value.readyTimeoutMs, 'readyTimeoutMs'),
+    concurrency: concurrency === undefined ? undefined : Math.min(concurrency, MAX_RESUME_CONCURRENCY),
   };
 }
 

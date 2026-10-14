@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TerminalStateEmulator } from './terminalStateEmulator';
 import type { WorkspaceHeldInputScreen } from './workspaceHeldInput';
-import { WorkspaceJournal, workspaceFilterKey } from './workspaceJournal';
+import { WorkspaceJournal, presentStoppedPanel, workspaceFilterKey } from './workspaceJournal';
 
 /** A Claude screen as the live emulator reads it, with `composer` written into its composer box. */
 async function claudeScreen(composer: string): Promise<WorkspaceHeldInputScreen> {
@@ -409,5 +409,22 @@ describe('WorkspaceJournal', () => {
     await vi.advanceTimersByTimeAsync(50);
     await expect(waiting).resolves.toMatchObject({ timedOut: true, entries: [] });
     vi.useRealTimers();
+  });
+});
+
+describe('presentStoppedPanel', () => {
+  const stopped = {
+    gen: 0, at: 'T', kind: 'panel.stopped' as const, paneId: 'pane-1', paneName: 'Pane', panelId: 'panel-1',
+    source: 'agent' as const, running: false, baseline: true as const,
+  };
+
+  it('delivers panel.stopped only to a consumer that lists it', () => {
+    expect(presentStoppedPanel(stopped, { kinds: ['agent.ready', 'panel.stopped'] }).kind).toBe('panel.stopped');
+  });
+
+  it('gives older clients, including Session watchers without kinds, agent.unknown with running: false', () => {
+    for (const filter of [{}, { sessionId: 'session-1' }, { kinds: ['agent.ready' as const] }]) {
+      expect(presentStoppedPanel(stopped, filter)).toMatchObject({ kind: 'agent.unknown', running: false });
+    }
   });
 });

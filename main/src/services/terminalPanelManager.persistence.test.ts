@@ -22,6 +22,7 @@ import { sessionWorkspacePath } from './sessionWorkspace';
 import { windowsPathToWSLMount } from '../utils/wslUtils';
 import * as shellPathUtils from '../utils/shellPath';
 import { ShellDetector } from '../utils/shellDetector';
+import * as processTree from '../utils/processTree';
 
 /** In-process stand-in for a ptyHost PTY: output is whatever the test emits. */
 class FakePtyHandle implements PtyHandleLike {
@@ -167,6 +168,8 @@ describe('terminal panel persistence', () => {
   let configManager: ConfigManager;
 
   beforeEach(() => {
+    vi.spyOn(processTree, 'listDescendantPids').mockResolvedValue([]);
+    vi.spyOn(processTree, 'isProcessAlive').mockReturnValue(false);
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-terminal-persistence-'));
     ptyHost = new FakePtyHost();
     events = [];
@@ -205,6 +208,7 @@ describe('terminal panel persistence', () => {
     panelManagerMock.updatePanel.mockReset();
     panelManagerMock.getPanel.mockReset();
     resetPaneRuntimeForTests();
+    vi.restoreAllMocks();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -712,6 +716,74 @@ function emitOpenCodeIdleFrame(handle: FakePtyHandle, transparent = false): void
     await startTerminal(panel);
 
     expect(panel.state.customState?.agentSessionId).toBe('ses_PersistedBuffer123');
+  });
+
+  it('refuses to restart a destroyed panel until its old shell and agent have exited', async () => {
+    const panel = makePanel('resume-during-teardown');
+    vi.mocked(processTree.listDescendantPids).mockResolvedValue([4243]);
+    const alive = new Set([4242, 4243]);
+    vi.mocked(processTree.isProcessAlive).mockImplementation(pid => alive.has(pid));
+    const { manager } = await startTerminal(panel);
+    await manager.destroyTerminal(panel.id);
+    expect(manager.isTerminalInitialized(panel.id)).toBe(false);
+
+    await expect(manager.initializeTerminal(panel, tempDir)).rejects.toThrow('still stopping');
+    expect(ptyHost.handles.size).toBe(1);
+    alive.delete(4242);
+    await expect(manager.initializeTerminal(panel, tempDir)).rejects.toThrow('still stopping');
+    expect(ptyHost.handles.size).toBe(1);
+
+    alive.clear();
+    await manager.initializeTerminal(panel, tempDir);
+    expect(ptyHost.handles.size).toBe(2);
+  });
+
+  it('keeps the old terminal registered until its process snapshot completes', async () => {
+    const panel = makePanel('resume-during-snapshot');
+    let finishSnapshot!: (pids: number[]) => void;
+    vi.mocked(processTree.listDescendantPids).mockReturnValue(new Promise(resolve => { finishSnapshot = resolve; }));
+    const { manager, handle } = await startTerminal(panel);
+    const kill = vi.spyOn(handle, 'kill');
+    const destroying = manager.destroyTerminal(panel.id, { saveState: false });
+    await manager.initializeTerminal(panel, tempDir);
+    expect(ptyHost.handles.size).toBe(1);
+    expect(kill).not.toHaveBeenCalled();
+    finishSnapshot([4243]);
+    await destroying;
+    expect(kill).toHaveBeenCalledOnce();
+    expect(manager.isTerminalInitialized(panel.id)).toBe(false);
+  });
+
+  it('blocks resume even after session teardown gives up on a surviving agent', async () => {
+    const panel = makePanel('resume-after-teardown-budget');
+    vi.mocked(processTree.listDescendantPids).mockResolvedValue([4243]);
+    vi.mocked(processTree.isProcessAlive).mockImplementation(pid => pid === 4243);
+    vi.spyOn(processTree, 'waitForProcessesToExit').mockResolvedValue([4243]);
+    vi.spyOn(processTree, 'terminateProcessTrees').mockResolvedValue([4243]);
+    const { manager } = await startTerminal(panel);
+    await manager.terminateSessionTerminals(panel.sessionId, { timeoutMs: 0 });
+    expect(manager.isTerminalInitialized(panel.id)).toBe(false);
+    await expect(manager.initializeTerminal(panel, tempDir)).rejects.toThrow('still stopping');
+    expect(ptyHost.handles.size).toBe(1);
+  });
+
+  it('also blocks resume on surviving children discovered during escalation', async () => {
+    const panel = makePanel('resume-after-new-child-survives');
+    vi.mocked(processTree.listDescendantPids).mockResolvedValue([4243]);
+    vi.mocked(processTree.isProcessAlive).mockImplementation(pid => pid === 4244);
+    vi.spyOn(processTree, 'waitForProcessesToExit').mockResolvedValue([4243]);
+    let finishKill!: (pids: number[]) => void;
+    const kill = vi.spyOn(processTree, 'terminateProcessTrees').mockReturnValue(new Promise(resolve => { finishKill = resolve; }));
+    const { manager } = await startTerminal(panel);
+    const termination = manager.terminateSessionTerminals(panel.sessionId, { timeoutMs: 0 });
+    expect(manager.terminateSessionTerminals(panel.sessionId)).toBe(termination);
+    await vi.waitFor(() => expect(kill).toHaveBeenCalledOnce());
+    await expect(manager.initializeTerminal(panel, tempDir)).rejects.toThrow('still stopping');
+    expect(ptyHost.handles.size).toBe(1);
+    finishKill([4244]);
+    await termination;
+    await expect(manager.initializeTerminal(panel, tempDir)).rejects.toThrow('still stopping');
+    expect(ptyHost.handles.size).toBe(1);
   });
 
   it('streams an unviewed terminal without pausing, then applies backpressure while viewed', async () => {

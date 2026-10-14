@@ -89,6 +89,7 @@ export interface ParsedArgs {
   minIntervalMs?: number;
   idleBackoff?: boolean;
   allManaged?: boolean;
+  allStopped?: boolean;
   includeShells?: boolean;
   noHeldInput?: boolean;
   selfTest?: boolean;
@@ -549,6 +550,10 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
   }
   if (flag === '--all-managed') {
     parsed.allManaged = true;
+    return;
+  }
+  if (flag === '--all-stopped') {
+    parsed.allStopped = true;
     return;
   }
   if (flag === '--include-shells') {
