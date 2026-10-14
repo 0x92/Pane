@@ -1804,7 +1804,7 @@
       },
       {
         "name": "--wait-ready",
-        "description": "Wait for created terminal panels to be ready before returning."
+        "description": "Wait until each created panel's agent is at its input box, then deliver and verify any starting message, before returning."
       },
       {
         "name": "--no-focus",
@@ -2274,7 +2274,7 @@
         "  --prompt-file <path|->         Alias for --initial-input-file",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
-        "  --wait-ready                   Wait for terminal readiness before returning",
+        "  --wait-ready                   Wait for the agent's input box, then deliver and verify the prompt",
         "  --ready-timeout-ms <ms>        Readiness wait timeout; defaults to 30000",
         "  --concurrency <count>          Accepted; creation is currently serialized",
         "  --source <user|agent>          Mark mutation source; agent implies background creation",
@@ -2299,7 +2299,7 @@
         "",
         "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --prompt <text> or --prompt-file <path|-> and --wait-ready require --launch; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
         "",
-        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
+        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it."
       ],
       "panes archive": [
         "Usage:",
@@ -2546,7 +2546,7 @@
         "  --no-focus                    Create the panel in the background.",
         "  --focus                       Explicitly focus the created panel.",
         "  --source <user|agent>         Mark the mutation source; agent implies background creation.",
-        "  --wait-ready                  Wait until the terminal tool is ready.",
+        "  --wait-ready                  Wait for the agent's input box, then deliver and verify the prompt.",
         "  --ready-timeout-ms <ms>       Readiness wait timeout.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
@@ -3485,7 +3485,7 @@
         "  --prompt-file <path|->         Alias for --initial-input-file",
         "  --from-json <path|->           Read a full request payload",
         "  --timeout-ms <milliseconds>    Pane creation timeout",
-        "  --wait-ready                   Wait for terminal readiness before returning",
+        "  --wait-ready                   Wait for the agent's input box, then deliver and verify the prompt",
         "  --ready-timeout-ms <ms>        Readiness wait timeout; defaults to 30000",
         "  --concurrency <count>          Accepted; creation is currently serialized",
         "  --source <user|agent>          Mark mutation source; agent implies background creation",
@@ -3510,7 +3510,7 @@
         "",
         "Options: --resume <id> stages the agent resume command (built-in agents only); --launch runs the command immediately; --prompt <text> or --prompt-file <path|-> and --wait-ready require --launch; --folder <name> groups the pane; --no-pinned opts out of pinning; --no-associate skips automatic Session association; --dry-run previews.",
         "",
-        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
+        "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it."
       ],
       "panes archive": [
         "Usage:",
@@ -3749,7 +3749,7 @@
         "  --no-focus                    Create the panel in the background.",
         "  --focus                       Explicitly focus the created panel.",
         "  --source <user|agent>         Mark the mutation source; agent implies background creation.",
-        "  --wait-ready                  Wait until the terminal tool is ready.",
+        "  --wait-ready                  Wait for the agent's input box, then deliver and verify the prompt.",
         "  --ready-timeout-ms <ms>       Readiness wait timeout.",
         "  --yes                         Skip confirmation prompts.",
         "  --json                        Print JSON output."
@@ -4422,7 +4422,7 @@
       "`runpane panes list` lists Pane sessions, optionally scoped to one saved repository.",
       "`runpane panes cost` reports estimated token costs per Pane for the last 30 days, including per-model breakdowns and cache efficiency; unscoped output includes an Unattributed bucket that reconciles against workspace totals.",
       "`runpane panes create` connects to the running local Pane daemon, resolves the requested saved base repository, creates user-visible Pane sessions backed by Pane-managed worktrees/branches, opens terminal-backed tool tabs, and optionally sends initial input to the started tool. Built-in agent panes and `--source agent` default to background/no-focus unless `--focus` is passed. New Panes are pinned into the UI's favorite/pin set by default, except when the CLI runs inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID`), where child worktrees default to unpinned. Explicit `--pinned` / `--no-pinned` override creation defaults. First Session association clears an existing pin, including an explicit creation pin; use `panes pin` after association to pin a child. This avoids duplicating Session children in the global pinned list. Manual pins applied afterward are preserved. Panes created interactively in the Pane UI are unaffected. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.",
-      "For `panes create --wait-ready`, `initialInput.delivery` says where the prompt went: `taken` or `queued` (from the agent's transcript or its screen), `in-composer`, or `unknown` (`argv` means a prompt was routed at launch but acceptance is not yet observed). `initialInput.verifiedSubmitted` is true exactly when it is `taken` or `queued`. Routing input does not by itself verify submission. CLI readiness is confirmed on consecutive polls. Codex also requires a recognized configured model or context footer below its live composer; its provisional startup composer is not ready. Hidden or unrecognized Codex status lines conservatively time out rather than prove readiness. Cursor launch prompts currently remain unknown because no acceptance probe is available. First-run trust and daemon dialogs return blocked.kind=first-run-dialog with the dialog in blocked.message and a suggestedCommand; while readiness is blocked or times out, launch-argument delivery remains unknown and unverified.",
+      "For `panes create --wait-ready` (and `panels create`, `panes adopt --launch`), ready means an identified agent at its own input box: declared with `--agent`, or detected from the command, its foreground process or its screen. A `--tool-command` that never shows a supported agent is not ready: `readiness.ok` is false with `readiness.reason.code` `no-agent-detected` after the timeout, or `command-exited` as soon as the command exits back to the shell, and nothing is typed into it. `agent-not-ready` means the agent was detected but its input box was not ready in time. CLI readiness is confirmed on consecutive polls. Codex also requires a recognized configured model or context footer below its live composer; its provisional startup composer is not ready. Hidden or unrecognized Codex status lines conservatively time out rather than prove readiness. Startup prompts return blocked with the prompt's own text in blocked.message and a suggestedCommand, and Pane never answers them: first-run trust and daemon dialogs and Agent Farm's `Trust this repository workspace? [y/N]` as blocked.kind=first-run-dialog; Codex's security setup banner and any other prompt, including a wrapper's or shell's `[y/N]` before the agent appears, as agent-prompt. A starting message blocked this way is held and sent once the prompt is answered and the agent's input box is ready. Every create with a starting message returns `initialInput`. Pane stages the text in the composer, presses the agent's submit key separately (Ctrl+Enter for Codex, declared or detected), and checks where it went: `initialInput.delivery` is `taken` or `queued` (from the agent's transcript or its screen), `in-composer`, or `unknown` (`argv` means a prompt was routed at launch; Pane gives the transcript up to 10 seconds before settling on unknown). `initialInput.verifiedSubmitted` is true exactly when it is `taken` or `queued`, and the create's `ok` is false unless a Claude or Codex starting message is verified. Cursor and OpenCode have no acceptance probe: their delivery stays `unknown` with a delivery.message saying so, `verification: unverifiable`, and `ok` follows readiness. Without `--wait-ready` the create returns at once with `initialInput.verifiedSubmitted: false`, a delivery.message saying the call did not wait, and a `panels wait` nextCommand; Pane still sends the message once the agent is identified and at its input box, and gives up without typing it if no supported agent appears within 30 seconds.",
       "`runpane panes archive` refreshes the configured upstream, reports exact unpushed commit evidence, and refuses unsafe archive operations unless `--force` is used. A branch whose upstream is gone counts as pushed when a merged GitHub pull request has HEAD as its head (`safetyCheck.mergedViaPr`). Add `--dry-run` to inspect the same evidence without archiving. `--remove-worktree` applies the same check and removal to an adopted worktree; local branches are always kept. Successful archives report `worktreeCleanup: completed` once the worktree is gone from its path and from git; `trashDeletion: pending` means its files are still being deleted in the background. `runpane panes archive --session <id|name> --merged` archives every Session Pane that is clean and pushed or merged, and reports a reason for each skipped Pane.",
       "`runpane panes rename` trims and updates a Pane's display name without changing its worktree, branch, panels, or focus, and returns the updated pane summary.",
       "`runpane panes focus` raises the Pane window and selects a Pane (and optionally one of its panels) exactly like clicking it in the UI. Because it steals the user's window focus, run it only on an explicit user request to open, focus, show, or switch to a Pane; never focus a Pane proactively, the same doctrine that keeps `panes create` background/no-focus for `--source agent`.",
@@ -6342,6 +6342,26 @@
                             "type": "string"
                           },
                           "suggestedCommand": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "reason": {
+                        "type": "object",
+                        "required": [
+                          "code",
+                          "message"
+                        ],
+                        "properties": {
+                          "code": {
+                            "enum": [
+                              "no-agent-detected",
+                              "agent-not-ready",
+                              "command-exited"
+                            ]
+                          },
+                          "message": {
                             "type": "string"
                           }
                         },
@@ -8505,6 +8525,26 @@
           },
           "additionalProperties": false
         },
+        "reason": {
+          "type": "object",
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "no-agent-detected",
+                "agent-not-ready",
+                "command-exited"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
         "screen": {
           "type": "object",
           "required": [
@@ -8865,6 +8905,26 @@
                   "type": "string"
                 },
                 "suggestedCommand": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "reason": {
+              "type": "object",
+              "required": [
+                "code",
+                "message"
+              ],
+              "properties": {
+                "code": {
+                  "enum": [
+                    "no-agent-detected",
+                    "agent-not-ready",
+                    "command-exited"
+                  ]
+                },
+                "message": {
                   "type": "string"
                 }
               },
@@ -9934,7 +9994,7 @@
         "If WSL cannot reach Pane or `runpane` resolves to a broken Windows shim, the user may be running Windows Pane; try `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane doctor --json'`.",
         "If the repository exists on disk but is not saved in Pane, use `runpane repos add --path <repo> --yes --json` before creating panes.",
         "Use `runpane agents doctor --agent <codex|claude|cursor> --repo <selector> --json` when agent availability differs across host, Windows, WSL, or repo environments.",
-        "Use `runpane panes create --wait-ready` to create Panes and validate initial terminal readiness in one call.",
+        "Use `runpane panes create --wait-ready` to create Panes, wait for each agent's input box, and verify its starting message in one call.",
         "Use `runpane panels screen` for compact current state, including Claude and Codex composer state. Use `panels wait` for create-time readiness or text checks. Use `runpane watch --follow` to block on workspace transitions (READY, BLOCKED, IDLE, STUCK, EXIT) without polling. Use `panels submit` to send and submit a new turn. Use `panels submit-composer --strategy auto` only for a composer that was filled separately.",
         "Use `runpane panels input` only when exact bytes are required, such as Ctrl-C or handcrafted terminal input.",
         "Pane terminals draw inline images: sixel, iTerm2 inline images, and the kitty graphics protocol. Tools that need kitty graphics, such as terminal-browser and terminal-doom, run inside a Pane panel; `runpane doctor --json` reports the exact list under `terminal.graphicsProtocols`.",
@@ -10820,7 +10880,7 @@
           {
             "name": "--wait-ready",
             "required": false,
-            "description": "Wait for each created terminal panel to be ready before returning."
+            "description": "Wait until each created panel's agent is at its input box, then deliver and verify any starting message, before returning."
           },
           {
             "name": "--ready-timeout-ms",
@@ -10862,16 +10922,16 @@
           "Use --initial-input-file for multi-line prompts or shell-sensitive initial input. A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
           "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts.",
           "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
-          "With --wait-ready, `initialInput.delivery` reports `taken`, `queued`, `in-composer` or `unknown` with its evidence (`transcript`, `screen`, or `argv` for a prompt passed at launch); verifiedSubmitted is true for `taken` or `queued`. Routing initial input alone does not imply verified submission.",
+          "With --wait-ready, `initialInput.delivery` reports `taken`, `queued`, `in-composer` or `unknown` with its evidence (`transcript`, `screen`, or `argv` for a prompt passed at launch); verifiedSubmitted is true for `taken` or `queued`. Routing initial input alone does not imply verified submission, and the create's `ok` is false unless a Claude or Codex starting message is verified.",
           "If initialInput.blocked.kind is submission_unverified, do not submit again automatically. Inspect initialInput.staged and attempts, then run nextCommand to resolve the ambiguous composer state.",
           "When the JSON result includes nextCommand, run it to validate that the terminal produced output before reporting success.",
           "Multi-pane requests are created sequentially today. The --concurrency flag is accepted for compatibility, but agents should not rely on parallel creation.",
           "For POSIX or WSL command chaining, use a custom terminal command like `bash -lc 'cmd1 && cmd2 && cmd3'`.",
           "For Windows PowerShell command chaining, use a custom terminal command like `powershell -NoProfile -Command \"cmd1; if ($LASTEXITCODE) { exit $LASTEXITCODE }; cmd2\"`.",
           "From WSL with Windows Pane, invoke through PowerShell and select the saved WSL repo by name or id, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane panes create --repo \"WSL Pane\" --name issue-123 --agent <agent> --prompt \"Plan this issue\" --source agent --no-focus --wait-ready --yes --json'`.",
-          "Use --wait-ready when an agent needs to verify that an agent terminal started instead of only creating a pane.",
+          "Use --wait-ready when an agent needs the started agent at its input box, and its starting message verified, instead of only creating a pane.",
           "If readiness returns blocked, inspect blocked.suggestedCommand rather than guessing which prompt to answer.",
-          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it.",
           "At most 2 Panes run setup at once (worktree file sync, dependency install, build script); more wait in line. A queued `panes create` returns the Pane id right away with `setupQueue` ({ position, message }) and no `panelId`; the agent starts when setup finishes. Find its panel later with `runpane panels list --pane <id> --json`.",
           "`panes create --branch <name>` fails with code `ERR_RUNPANE_BRANCH_HAS_PANE` when another Pane already has that branch checked out. The message names the Pane and gives the next step: `runpane panels create --pane <id> --tool-command \"<cmd>\" --source agent --no-focus`."
         ]
@@ -10997,7 +11057,7 @@
           "The resume command is staged without Enter unless --launch is passed.",
           "Archiving never deletes an adopted worktree unless `runpane panes archive --remove-worktree` is used.",
           "One of --agent or --tool-command is required.",
-          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen.",
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it.",
           "--resume needs a built-in agent command; a wrapper command resumes its own way.",
           "The adopted Pane reports `status: running` in `panes list` while its terminal is live.",
           "A prompt (--prompt, --initial-input, --prompt-file, --initial-input-file) or --wait-ready needs --launch; without it adopt fails instead of dropping the prompt.",
@@ -11814,7 +11874,7 @@
           "Panels share the existing Pane's worktree and branch.",
           "`panels create` is for visible helper/reviewer tabs, not the agent's default private delegation mechanism.",
           "For agent-created panels, prefer --source agent or --no-focus to avoid stealing focus from the user or implementation tab.",
-          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen."
+          "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it."
         ]
       },
       "panels open": {

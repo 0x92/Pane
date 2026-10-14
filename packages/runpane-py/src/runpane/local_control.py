@@ -1613,7 +1613,8 @@ def print_pane_cost_models(models: list[Dict[str, Any]]) -> None:
 def print_pane_create_result(result: Dict[str, Any], dry_run: bool = False, action: str = "create") -> None:
     for item in result.get("items", []):
         name = item.get("name") or f"pane {item.get('index')}"
-        if item.get("ok"):
+        # A created item can be not ok (agent not ready, prompt unverified); only an error item failed.
+        if "error" not in item:
             worktree = f" at {item.get('worktreePath')}" if item.get("worktreePath") else ""
             if dry_run:
                 print(f"Would {action} {name}{worktree}")
@@ -1621,11 +1622,7 @@ def print_pane_create_result(result: Dict[str, Any], dry_run: bool = False, acti
             print(f"{'Adopted' if action == 'adopt' else 'Created'} {name}: session {item.get('sessionId', 'unknown')} panel {item.get('panelId', 'unknown')}{worktree}")
             readiness = item.get("readiness")
             if readiness:
-                ready_state = "yes" if readiness.get("ok") else "timed out" if readiness.get("timedOut") else "blocked"
-                print(f"  Ready: {ready_state} after {readiness.get('elapsedMs')}ms")
-                blocked = readiness.get("blocked")
-                if blocked:
-                    print(f"  Blocked: {blocked.get('message')}")
+                print_readiness(readiness, "  ")
             print_initial_input_delivery(item.get("initialInput"), "  ")
             association = item.get("association")
             if association:
@@ -1721,15 +1718,29 @@ def print_panel_create_result(result: Dict[str, Any]) -> None:
     print(f"Created panel {result.get('panelId')} in pane {result.get('paneId')}: {result.get('title')}{active}")
     readiness = result.get("readiness")
     if readiness:
-        ready_state = "yes" if readiness.get("ok") else "timed out" if readiness.get("timedOut") else "blocked"
-        print(f"Ready: {ready_state} after {readiness.get('elapsedMs')}ms")
-        blocked = readiness.get("blocked")
-        if blocked:
-            print(f"Blocked: {blocked.get('message')}")
+        print_readiness(readiness)
     print_initial_input_delivery(result.get("initialInput"))
     print_prompt_notes(result)
     if result.get("nextCommand"):
         print(f"Next: {result.get('nextCommand')}")
+
+
+def print_readiness(readiness: Dict[str, Any], prefix: str = "") -> None:
+    reason = readiness.get("reason") or {}
+    if readiness.get("ok"):
+        state = "yes"
+    elif readiness.get("blocked"):
+        state = "blocked"
+    elif reason.get("code") == "command-exited":
+        state = "command exited"
+    else:
+        state = "timed out" if readiness.get("timedOut") else "no"
+    print(f"{prefix}Ready: {state} after {readiness.get('elapsedMs')}ms")
+    blocked = readiness.get("blocked")
+    if blocked:
+        print(f"{prefix}Blocked: {blocked.get('message')}")
+    if reason:
+        print(f"{prefix}Why: {reason.get('message')}")
 
 
 def print_initial_input_delivery(initial_input: Optional[Dict[str, Any]], prefix: str = "") -> None:
@@ -1764,6 +1775,8 @@ def print_panel_wait_result(result: Dict[str, Any]) -> None:
         print(f"Timed out waiting for {condition} on panel {panel_id} after {elapsed}ms.")
     else:
         print(f"Did not match {condition} for panel {panel_id}.")
+    if result.get("reason"):
+        print(f"Why: {result['reason'].get('message')}")
 
     state = result.get("state") or {}
     status_parts = [

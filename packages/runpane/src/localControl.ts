@@ -734,6 +734,12 @@ interface PanelBlockedState {
   suggestedCommand?: string;
 }
 
+/** Why a `ready` wait on a launched command did not match. */
+interface PanelReadinessReason {
+  code: 'no-agent-detected' | 'agent-not-ready' | 'command-exited';
+  message: string;
+}
+
 interface PanelReadiness {
   ok: boolean;
   condition: string;
@@ -742,6 +748,7 @@ interface PanelReadiness {
   elapsedMs: number;
   state: PanelStateSummary;
   blocked?: PanelBlockedState;
+  reason?: PanelReadinessReason;
   nextCommand?: string;
 }
 
@@ -981,6 +988,10 @@ const panelStateSchema: BoundarySchema<PanelStateSummary> = boundary.object({
   agentType: boundary.optional(agentSchema),
   lastActivity: boundary.optional(boundary.string),
 });
+const panelReadinessReasonSchema: BoundarySchema<PanelReadinessReason | undefined> = boundary.optional(boundary.object({
+  code: boundary.enumeration('no-agent-detected', 'agent-not-ready', 'command-exited'),
+  message: boundary.string,
+}));
 const panelReadinessSchema: BoundarySchema<PanelReadiness> = boundary.object({
   ok: boundary.boolean,
   condition: boundary.string,
@@ -989,6 +1000,7 @@ const panelReadinessSchema: BoundarySchema<PanelReadiness> = boundary.object({
   elapsedMs: boundary.number,
   state: panelStateSchema,
   blocked: boundary.optional(panelBlockedSchema),
+  reason: panelReadinessReasonSchema,
   nextCommand: boundary.optional(boundary.string),
 });
 const verificationSchema = boundary.optional(boundary.enumeration('observed', 'unverifiable'));
@@ -1626,6 +1638,7 @@ const panelWaitResultSchema: BoundarySchema<PanelWaitResult> = boundary.object({
   elapsedMs: boundary.number,
   state: panelStateSchema,
   blocked: boundary.optional(panelBlockedSchema),
+  reason: panelReadinessReasonSchema,
   nextCommand: boundary.optional(boundary.string),
   panelId: boundary.string,
   paneId: boundary.optional(boundary.string),
@@ -3453,12 +3466,7 @@ function printPaneCreateResult(result: PaneCreateResult, dryRun = false, action:
         continue;
       }
       console.log(`Created ${item.name ?? `pane ${item.index}`}: session ${item.sessionId ?? 'unknown'} panel ${item.panelId ?? 'unknown'}${worktree}`);
-      if (item.readiness) {
-        console.log(`  Ready: ${item.readiness.ok ? 'yes' : item.readiness.timedOut ? 'timed out' : 'blocked'} after ${item.readiness.elapsedMs}ms`);
-        if (item.readiness.blocked) {
-          console.log(`  Blocked: ${item.readiness.blocked.message}`);
-        }
-      }
+      if (item.readiness) printReadiness(item.readiness, '  ');
       printInitialInputDelivery(item.initialInput, '  ');
       if (item.association) {
         console.log(item.association.ok
@@ -3547,17 +3555,22 @@ function printArchiveCommitEvidence(
 
 function printPanelCreateResult(result: PanelCreateResult): void {
   console.log(`Created panel ${result.panelId} in pane ${result.paneId}: ${result.title}${result.active ? ' active' : ' background'}`);
-  if (result.readiness) {
-    console.log(`Ready: ${result.readiness.ok ? 'yes' : result.readiness.timedOut ? 'timed out' : 'blocked'} after ${result.readiness.elapsedMs}ms`);
-    if (result.readiness.blocked) {
-      console.log(`Blocked: ${result.readiness.blocked.message}`);
-    }
-  }
+  if (result.readiness) printReadiness(result.readiness);
   printInitialInputDelivery(result.initialInput);
   printPromptNotes(result);
   if (result.nextCommand) {
     console.log(`Next: ${result.nextCommand}`);
   }
+}
+
+function printReadiness(readiness: PanelReadiness, prefix = ''): void {
+  const state = readiness.ok ? 'yes'
+    : readiness.blocked ? 'blocked'
+    : readiness.reason?.code === 'command-exited' ? 'command exited'
+    : readiness.timedOut ? 'timed out' : 'no';
+  console.log(`${prefix}Ready: ${state} after ${readiness.elapsedMs}ms`);
+  if (readiness.blocked) console.log(`${prefix}Blocked: ${readiness.blocked.message}`);
+  if (readiness.reason) console.log(`${prefix}Why: ${readiness.reason.message}`);
 }
 
 function printInitialInputDelivery(initialInput: InitialInputDeliveryResult | undefined, prefix = ''): void {
@@ -3593,6 +3606,7 @@ function printPanelWaitResult(result: PanelWaitResult): void {
   } else {
     console.log(`Did not match ${result.condition} for panel ${result.panelId}.`);
   }
+  if (result.reason) console.log(`Why: ${result.reason.message}`);
 
   const statusParts = [
     result.state.initialized ? 'initialized' : 'not-initialized',
