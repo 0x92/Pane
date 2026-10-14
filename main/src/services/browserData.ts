@@ -11,17 +11,24 @@ const KEPT_PARTITION_FOLDERS: ReadonlySet<string> = new Set(
 
 interface ClearBrowserDataDeps {
   userDataPath: string;
-  sharedSession: { clearStorageData(): Promise<void>; clearCache(): Promise<void> };
+  sharedSession: {
+    clearStorageData(): Promise<void>;
+    clearCache(): Promise<void>;
+    /** Forgets saved HTTP (Basic/Digest) sign-ins, which clearStorageData leaves in place. */
+    clearAuthCache(): Promise<void>;
+    /** Drops open connections, which would otherwise keep sending the forgotten sign-ins. */
+    closeAllConnections(): Promise<void>;
+  };
   reloadBrowserTabs(): void;
   /** Deletes one leftover store. `fs.rm` removes a link itself, never what it points to. */
   removeStore?: (target: string) => Promise<void>;
 }
 
 /**
- * Signs out of every site in Pane's browser: clears the shared store, deletes the
- * per-project and per-Session stores older versions left behind, and reloads open
- * tabs. The shared store is cleared even when an old store can't be deleted, and
- * running it again retries the deletion.
+ * Signs out of every site in Pane's browser: clears the shared store and its saved
+ * HTTP sign-ins, deletes the per-project and per-Session stores older versions left
+ * behind, and reloads open tabs. Once cookies and site data are cleared, every other
+ * step still runs when one fails, and running it again retries what failed.
  */
 export async function clearBrowserData({
   userDataPath,
@@ -30,33 +37,58 @@ export async function clearBrowserData({
   removeStore = target => fs.rm(target, { recursive: true, force: true }),
 }: ClearBrowserDataDeps): Promise<void> {
   await sharedSession.clearStorageData();
-  await sharedSession.clearCache();
+
+  const authFailure = await failureOf(async () => {
+    await sharedSession.clearAuthCache();
+    await sharedSession.closeAllConnections();
+  });
+  const cacheFailure = await failureOf(() => sharedSession.clearCache());
 
   const partitionsDir = path.join(userDataPath, 'Partitions');
-  let failure: { target: string; cause: unknown } | null = null;
+  let storeFailure: { target: string; cause: unknown } | null = null;
   let leftovers: string[] = [];
   try {
     leftovers = await leftoverStoreNames(partitionsDir);
   } catch (cause) {
-    failure = { target: partitionsDir, cause };
+    storeFailure = { target: partitionsDir, cause };
   }
   for (const name of leftovers) {
     const target = path.join(partitionsDir, name);
     try {
       await removeStore(target);
     } catch (cause) {
-      failure ??= { target, cause };
+      storeFailure ??= { target, cause };
     }
   }
 
   reloadBrowserTabs();
 
-  if (failure) {
-    throw new PaneError(
-      'browser-data-cleanup-incomplete',
-      `Pane cleared your logins but couldn't remove some older browser data at ${failure.target}: ${reasonOf(failure.cause)}.`,
-      'Close any open browser tabs and run Clear browser data again.',
-    );
+  const failures: string[] = [];
+  if (authFailure) failures.push(`clear saved site passwords: ${reasonOf(authFailure.cause)}. Sites that use them may still be signed in.`);
+  if (cacheFailure) failures.push(`clear the browser cache: ${reasonOf(cacheFailure.cause)}. Pages may still show copies saved before you cleared.`);
+  if (storeFailure) failures.push(`remove some older browser data at ${storeFailure.target}: ${reasonOf(storeFailure.cause)}.`);
+  if (failures.length === 0) return;
+
+  const cleared = authFailure ? 'Pane cleared cookies and site data' : 'Pane cleared your logins';
+  const message = [`${cleared} but couldn't ${failures[0]}`, ...failures.slice(1).map(failure => `It also couldn't ${failure}`)].join(' ');
+  if (!authFailure && !cacheFailure) {
+    throw new PaneError('browser-data-cleanup-incomplete', message, 'Close any open browser tabs and run Clear browser data again.');
+  }
+  throw new PaneError(
+    'browser-data-clear-incomplete',
+    message,
+    'Run Clear browser data again. If it fails again, quit and reopen Pane, then run it once more.',
+  );
+}
+
+interface StepFailure { cause: unknown }
+
+async function failureOf(step: () => Promise<void>): Promise<StepFailure | null> {
+  try {
+    await step();
+    return null;
+  } catch (cause) {
+    return { cause };
   }
 }
 
