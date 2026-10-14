@@ -599,6 +599,8 @@ interface ReportResult {
   panelId: string;
   report: AgentReport;
   sessionIds: string[];
+  /** Watches waiting when the report was journaled; absent from older daemons. */
+  liveWatchers?: number;
 }
 
 type PanelLastMessageResult =
@@ -1058,6 +1060,7 @@ const reportResultSchema: BoundarySchema<ReportResult> = boundary.object({
   panelId: boundary.string,
   report: agentReportSchema,
   sessionIds: boundary.array(boundary.string),
+  liveWatchers: boundary.optional(boundary.number),
 });
 const panelLastMessageResultSchema: BoundarySchema<PanelLastMessageResult> = boundary.union(
   boundary.object({
@@ -2134,24 +2137,36 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
   }
   const defaults = RUNPANE_CONTRACT.defaults.watch;
   const format: WatchFormat = parsed.watchFormat ?? (parsed.json ? 'json' : 'lines');
+  // --until-event takes --follow's scope defaults; it only stops after the first event.
+  const keepsWaiting = parsed.follow || parsed.untilEvent;
   const heartbeatMs = effectiveWatchHeartbeatMs(
     parsed.heartbeatSeconds ?? (parsed.follow ? defaults.heartbeatSeconds : 0),
   );
-  const idleAfterMs = parsed.idleAfterMs ?? (parsed.follow ? defaults.idleAfterMs : 0);
+  const idleAfterMs = parsed.idleAfterMs ?? (keepsWaiting ? defaults.idleAfterMs : 0);
   const effectiveAgentsOnly = parsed.includeShells
     ? undefined
-    : parsed.agentsOnly || parsed.follow ? true : undefined;
+    : parsed.agentsOnly || keepsWaiting ? true : undefined;
   const includeHeldInput = parsed.includeHeldInput && !parsed.noHeldInput ? true : undefined;
   // Lines mode turns presence into STUCK; JSON mode passes heldInputPresent through as the equivalent.
   const includeHeldInputPresence = defaults.includeHeldInputPresence
-    && !parsed.noHeldInput && parsed.follow ? true : undefined;
+    && !parsed.noHeldInput && keepsWaiting ? true : undefined;
   const cadenceValueFlagPresent = hasCadenceValueFlag(parsed);
+  const ownPanelId = process.env.PANE_PANEL_ID?.trim() || undefined;
   // Cadence state lives in the daemon per named consumer, so an anonymous follower names itself.
   // A Session watch is named after the Session, so it survives an orchestrator agent switch.
   const sessionCursor = parsed.sessionId ? sessionWatchCursorName(parsed.sessionId) : undefined;
-  const panelCursor = process.env.PANE_PANEL_ID ? derivedWatchCursorName('panel', process.env.PANE_PANEL_ID) : undefined;
+  const panelCursor = ownPanelId ? derivedWatchCursorName('panel', ownPanelId) : undefined;
+  // An --until-event re-arm resumes where the last one stopped, under a name apart from the
+  // panel's --follow cursor so it never takes over a running monitor.
+  const untilEventCursor = ownPanelId && parsed.watchSince === undefined
+    ? derivedWatchCursorName('until', `until-${ownPanelId}`)
+    : undefined;
   const watchAs = parsed.watchAs
+    ?? (parsed.untilEvent ? untilEventCursor : undefined)
     ?? (parsed.follow ? sessionCursor || panelCursor || (cadenceValueFlagPresent ? `follow-${process.pid}` : undefined) : undefined);
+  // Under --until-event, --timeout-ms is the deadline for the whole wait, not for one daemon call.
+  const deadlineAt = parsed.untilEvent && parsed.timeoutMs !== undefined ? Date.now() + parsed.timeoutMs : undefined;
+  exitWhenReaderCloses();
   // --quiet drops lines that only prove liveness; --self-test still prints its WATCH OK result.
   const emitControlLine = (line: string): void => {
     if (!parsed.quiet) emitWatchLine(line);
@@ -2184,9 +2199,15 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
   let failingCode: string | undefined;
   let lastFailureAt = 0;
   let lastHeartbeatAt = Date.now();
-  let anonymousIdleWindowStartMs = !watchAs && parsed.follow ? 0 : undefined;
+  let anonymousIdleWindowStartMs = !watchAs && keepsWaiting ? 0 : undefined;
   do {
-    const requestedWaitMs = parsed.timeoutMs ?? (heartbeatMs > 0 ? heartbeatMs : 60_000);
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+      emitControlLine(formatNonEntry('_timeout', { timeoutMs: parsed.timeoutMs }, format));
+      return 124;
+    }
+    const requestedWaitMs = deadlineAt !== undefined
+      ? deadlineAt - Date.now()
+      : parsed.timeoutMs ?? (heartbeatMs > 0 ? heartbeatMs : parsed.untilEvent ? 120_000 : 60_000);
     const heartbeatWaitMs = heartbeatMs > 0
       ? Math.max(0, heartbeatMs - (Date.now() - lastHeartbeatAt))
       : requestedWaitMs;
@@ -2208,14 +2229,27 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
         emitControlLine(formatNonEntry('_reconnected', { generation: result.generation }, format));
         failingCode = undefined;
       }
-      if (!armed && (parsed.follow || parsed.selfTest)) {
+      if (!armed && (keepsWaiting || parsed.selfTest)) {
         const okLine = formatNonEntry('_ok', { generation: result.generation, epoch: result.epoch }, format);
         if (parsed.selfTest) emitWatchLine(okLine);
         else emitControlLine(okLine);
         armed = true;
         if (parsed.selfTest) return 0;
       }
-      for (const line of formatWaitResult(result, format)) emitWatchLine(line);
+      if (parsed.untilEvent) {
+        // A reset restates current state; it never ends the wait. Nor does the caller's own panel.
+        if (result.reset || result.dropped !== undefined) {
+          for (const line of formatWaitResult(result, format)) emitControlLine(line);
+        } else {
+          const entries = ownPanelId ? result.entries.filter(entry => entry.panelId !== ownPanelId) : result.entries;
+          if (entries.length > 0) {
+            for (const line of formatWaitResult({ ...result, entries }, format)) emitWatchLine(line);
+            return 0;
+          }
+        }
+      } else {
+        for (const line of formatWaitResult(result, format)) emitWatchLine(line);
+      }
       if (heartbeatMs > 0 && Date.now() - lastHeartbeatAt >= heartbeatMs) {
         emitControlLine(formatNonEntry('_heartbeat', {
           generation: result.generation,
@@ -2225,11 +2259,11 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
       }
       if (!watchAs) {
         request.since = result.generation;
-        if (parsed.follow) anonymousIdleWindowStartMs = Date.now();
+        if (keepsWaiting) anonymousIdleWindowStartMs = Date.now();
       }
     } catch (error) {
       const watchError = error instanceof Error ? error : new Error(String(error));
-      if (!parsed.follow || !isRetryableWatchError(watchError)) {
+      if (!keepsWaiting || !isRetryableWatchError(watchError)) {
         return emitWatchFailure(watchError, format);
       }
       const code = watchErrorCode(watchError);
@@ -2240,13 +2274,21 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
       failingCode = code;
       await new Promise(resolve => setTimeout(resolve, 1_000));
     }
-  } while (parsed.follow);
+  } while (keepsWaiting);
 
   return 0;
 }
 
 function emitWatchLine(line: string): void {
   output.write(`${line}\n`);
+}
+
+/** A reader that exits early (`| head -1`) closes stdout; the next write then ends the watch cleanly. */
+function exitWhenReaderCloses(): void {
+  output.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EPIPE') throw error;
+    process.exit(0);
+  });
 }
 
 /** Names older daemons accept; the daemon itself allows up to 128 characters. */
@@ -2717,10 +2759,27 @@ export async function runReport(parsed: ParsedArgs, env: NodeJS.ProcessEnv = pro
   if (parsed.json) {
     printJson(result);
   } else {
-    const sessions = result.sessionIds.length > 0 ? ` Recorded on Session ${result.sessionIds.join(', ')}.` : '';
-    console.log(`Reported ${describeReport(result.report)} for panel ${result.panelId}.${sessions}`);
+    for (const line of describeReportDelivery(result)) console.log(line);
   }
   return 0;
+}
+
+/**
+ * What `runpane report` prints: the report, who recorded it, and how many watches were waiting.
+ * Zero waiting watchers means nobody is waiting right now, not that the report is lost.
+ */
+function describeReportDelivery(result: ReportResult): string[] {
+  const sessions = result.sessionIds.length > 0 ? ` Recorded on Session ${result.sessionIds.join(', ')}.` : '';
+  const watchers = result.liveWatchers ?? 0;
+  const delivered = watchers > 0 ? ` Delivered to ${watchers} waiting watcher${watchers === 1 ? '' : 's'}.` : '';
+  const lines = [`Reported ${describeReport(result.report)} for panel ${result.panelId}.${sessions}${delivered}`];
+  if (result.sessionIds.length > 0 || watchers > 0) return lines;
+  const stored = `It is stored on the panel (runpane agents status --panel ${result.panelId})`;
+  lines.push(result.liveWatchers === undefined
+    ? `No Session recorded this report. ${stored}, and only watchers that list agent.report receive it.`
+    : `No Session recorded this report and no watcher was waiting for it. ${stored}, `
+      + 'and a watch with a named cursor (runpane watch --as <name> --kinds agent.report) still receives it when it next waits.');
+  return lines;
 }
 
 export async function runPanelsSubmit(parsed: ParsedArgs): Promise<number> {

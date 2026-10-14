@@ -5820,7 +5820,7 @@ describe('runpane IPC handlers', () => {
         state: 'ready', pr: 747, head: 'fc5dce9', summary: `Opened PR 747. ${'x'.repeat(3_000)}`, summaryPath: '/tmp/report.md',
         reportedAt: '2026-09-27T18:00:00.000Z',
       };
-      expect(result).toEqual({ ok: true, generation: 0, paneId: session.id, panelId: terminalPanel.id, report, sessionIds: ['session-a'] });
+      expect(result).toEqual({ ok: true, generation: 0, liveWatchers: 0, paneId: session.id, panelId: terminalPanel.id, report, sessionIds: ['session-a'] });
       expect(stored.state.customState).toMatchObject({ agentType: 'claude', isCliPanel: true, agentReport: report });
       expect(recordAgentReport).toHaveBeenCalledWith(terminalPanel.id, report);
 
@@ -5845,6 +5845,26 @@ describe('runpane IPC handlers', () => {
       await registry.invoke('runpane:report', [{ panelId: terminalPanel.id, state: 'blocked', question: 'Drop the old column?' }]);
       expect(stored.state.customState).toMatchObject({ agentReport: { state: 'blocked', question: 'Drop the old column?' } });
       expect(stored.state.customState).not.toHaveProperty('agentReport.pr');
+    });
+
+    it('tells the reporter how many waiting watchers received its report', async () => {
+      const workspaceJournal = new WorkspaceJournal();
+      const registry = createRegistry(createServices({ workspaceJournal }));
+      const report = { panelId: terminalPanel.id, state: 'blocked', question: 'q' };
+
+      await expect(registry.invoke('runpane:report', [report])).resolves.toMatchObject({ ok: true, liveWatchers: 0 });
+
+      const since = workspaceJournal.generation;
+      const waiting = registry.invoke('runpane:workspace:wait', [{ since, timeoutMs: 60_000, kinds: ['agent.report'] }]);
+      const otherKinds = registry.invoke('runpane:workspace:wait', [{ since, timeoutMs: 50, kinds: ['agent.ready'] }]);
+      for (let tick = 0; tick < 5; tick += 1) await new Promise(resolve => setImmediate(resolve));
+
+      await expect(registry.invoke('runpane:report', [report])).resolves.toMatchObject({ ok: true, liveWatchers: 1 });
+      await expect(waiting).resolves.toMatchObject({
+        timedOut: false,
+        entries: [{ kind: 'agent.report', panelId: terminalPanel.id, report: { state: 'blocked', question: 'q' } }],
+      });
+      await expect(otherKinds).resolves.toMatchObject({ timedOut: true, entries: [] });
     });
 
     it('refuses a blocked report without a question, a bad head, and a panel from another Pane', async () => {

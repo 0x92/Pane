@@ -176,6 +176,7 @@ class ParsedArgs:
     watch_exclude_pane_ids: List[str] = field(default_factory=list)
     name_contains: Optional[str] = None
     follow: bool = False
+    until_event: bool = False
     agents_only: bool = False
     ack_now: bool = False
     include_held_input: bool = False
@@ -447,6 +448,8 @@ def parse_args(argv: List[str]) -> ParsedArgs:
         validate_panes_archive_args(parsed)
     if parsed.command == "watch" and parsed.follow and parsed.timeout_ms == 0:
         raise ValueError("--timeout-ms must be greater than 0 with --follow.")
+    if parsed.command == "watch" and parsed.until_event:
+        validate_until_event_args(parsed)
     if parsed.command == "watch" and parsed.session_id is not None and parsed.watch_pane_ids:
         raise ValueError(
             "runpane watch accepts either --session or --pane, not both; "
@@ -468,6 +471,24 @@ def parse_args(argv: List[str]) -> ParsedArgs:
     if parsed.command == "report":
         validate_report_args(parsed)
     return parsed
+
+
+def validate_until_event_args(parsed: ParsedArgs) -> None:
+    if parsed.follow:
+        raise ValueError(
+            "runpane watch accepts either --until-event or --follow, not both. "
+            "Use --until-event to exit on the first event, or --follow to stream until interrupted."
+        )
+    if parsed.self_test:
+        raise ValueError(
+            "runpane watch accepts either --until-event or --self-test, not both. "
+            "Run --self-test on its own to probe the watch path."
+        )
+    if parsed.timeout_ms == 0:
+        raise ValueError(
+            "--timeout-ms must be greater than 0 with --until-event; it is the total deadline. "
+            "Leave it out to wait as long as it takes."
+        )
 
 
 def validate_report_args(parsed: ParsedArgs) -> None:
@@ -648,6 +669,9 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
         return
     if flag == "--follow":
         parsed.follow = True
+        return
+    if flag == "--until-event":
+        parsed.until_event = True
         return
     if flag == "--idle-backoff":
         parsed.idle_backoff = True

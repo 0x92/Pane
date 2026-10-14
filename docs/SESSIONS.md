@@ -563,20 +563,34 @@ The daemon then:
 - journals an `agent.report` entry with the same fields (summary cut to 2,000
   characters), printed as `REPORT <pane-name> pane <pane-id> panel <panel-id>
   ready pr#747 fc5dce9` or `... blocked: <question>`. It skips the
-  `--min-interval` batch. Only watchers that list `agent.report` in `--kinds`
-  receive it, because released CLIs reject journal kinds they don't know;
+  `--min-interval` batch. Only watchers that list `agent.report` in `--kinds`,
+  and Session watches, receive it, because released CLIs reject journal kinds
+  they don't know. It passes `--agents-only` (which `--follow` and
+  `--until-event` imply) whatever panel sent it, so a report from a shell tab
+  or a wrapper launch whose agent isn't detected yet still arrives;
 - appends a `report` activity (with the worker's `paneId` and `panelId`) to
   every Session the Pane is associated with, which makes an older Session
   report stale;
 - shows the report in `agents status`, `panels list`, and `sessions overview`,
   where `panes[].report` is the newest report among the Pane's panels, with its
-  `panelId`.
+  `panelId`;
+- returns `liveWatchers`, the number of watches that were waiting and received
+  it. The CLI prints `Delivered to 1 waiting watcher.`; with no Session and
+  nobody waiting it says the report is stored on the panel and that a
+  named-cursor watch receives it when it next waits.
 
 The orchestrator treats REPORT as the completion signal. A READY without a
 report means look, and maybe nudge: `runpane panels last-message --panel
 <panel-id> --json` returns the agent's last reply from its Claude or Codex
 transcript (never the screen; `transcript-unavailable` otherwise), and the
 worker can be asked to run `runpane report`.
+
+An orchestrator outside a Session, or one whose harness wakes only when a
+process exits (Claude Code background Bash, Codex), waits for a report with
+`runpane watch --pane <pane-id> --as <name> --until-event --quiet --json --kinds
+agent.report,agent.blocked,panel.exited,pane.gone`, run as a background task and run again after each
+event. `--until-event` exits 0 on the first event; a `RESET` and the caller's
+own panel never end the wait.
 
 ## Skill contract
 

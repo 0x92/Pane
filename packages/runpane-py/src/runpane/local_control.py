@@ -7,7 +7,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .daemon_client import PaneDaemonClientError, invoke_daemon
 from .generated_contract import RUNPANE_CONTRACT
@@ -361,29 +361,40 @@ def run_watch(parsed: Any) -> int:
 
     defaults = RUNPANE_CONTRACT["defaults"]["watch"]
     output_format = parsed.watch_format or ("json" if parsed.json else "lines")
+    # --until-event takes --follow's scope defaults; it only stops after the first event.
+    keeps_waiting = bool(parsed.follow or parsed.until_event)
     heartbeat_seconds = parsed.heartbeat_seconds
     if heartbeat_seconds is None:
         heartbeat_seconds = defaults["heartbeatSeconds"] if parsed.follow else 0
     heartbeat_ms = effective_watch_heartbeat_ms(heartbeat_seconds)
     idle_after_ms = parsed.idle_after_ms
     if idle_after_ms is None:
-        idle_after_ms = defaults["idleAfterMs"] if parsed.follow else 0
-    effective_agents_only = None if parsed.include_shells else (True if parsed.agents_only or parsed.follow else None)
+        idle_after_ms = defaults["idleAfterMs"] if keeps_waiting else 0
+    effective_agents_only = None if parsed.include_shells else (True if parsed.agents_only or keeps_waiting else None)
     include_held_input = True if parsed.include_held_input and not parsed.no_held_input else None
     # Lines mode turns presence into STUCK; JSON mode passes heldInputPresent through as the equivalent.
     include_held_input_presence = (
         True if defaults["includeHeldInputPresence"]
-        and not parsed.no_held_input and parsed.follow else None
+        and not parsed.no_held_input and keeps_waiting else None
     )
     cadence_value_flag_present = has_cadence_value_flag(parsed)
+    own_panel_id = (os.environ.get("PANE_PANEL_ID") or "").strip() or None
     # Cadence state lives in the daemon per named consumer, so an anonymous follower names itself.
     # A Session watch is named after the Session, so it survives an orchestrator agent switch.
     watch_as = parsed.watch_as
+    if watch_as is None and parsed.until_event and own_panel_id and parsed.watch_since is None:
+        # An --until-event re-arm resumes where the last one stopped, under a name apart from the
+        # panel's --follow cursor so it never takes over a running monitor.
+        watch_as = derived_watch_cursor_name("until", f"until-{own_panel_id}")
     if watch_as is None and parsed.follow:
         session_cursor = session_watch_cursor_name(parsed.session_id) if parsed.session_id else None
-        panel_id = os.environ.get("PANE_PANEL_ID")
-        panel_cursor = derived_watch_cursor_name("panel", panel_id) if panel_id else None
+        panel_cursor = derived_watch_cursor_name("panel", own_panel_id) if own_panel_id else None
         watch_as = session_cursor or panel_cursor or (f"follow-{os.getpid()}" if cadence_value_flag_present else None)
+    # Under --until-event, --timeout-ms is the deadline for the whole wait, not for one daemon call.
+    deadline_at = (
+        time.monotonic() * 1_000 + parsed.timeout_ms
+        if parsed.until_event and parsed.timeout_ms is not None else None
+    )
     # --quiet drops lines that only prove liveness; --self-test still prints its WATCH OK result.
     quiet = bool(parsed.quiet)
     request: Dict[str, Any] = {
@@ -414,15 +425,24 @@ def run_watch(parsed: Any) -> int:
     failing_code: Optional[str] = None
     last_failure_at = 0.0
     last_heartbeat_at = time.monotonic() * 1_000
-    anonymous_idle_window_start_ms = 0 if not watch_as and parsed.follow else None
+    anonymous_idle_window_start_ms = 0 if not watch_as and keeps_waiting else None
     try:
         while True:
-            requested_wait_ms = parsed.timeout_ms if parsed.timeout_ms is not None else (heartbeat_ms or 60_000)
+            if deadline_at is not None and time.monotonic() * 1_000 >= deadline_at:
+                if not quiet:
+                    emit_watch_non_entry("_timeout", output_format, timeoutMs=parsed.timeout_ms)
+                return 124
+            if deadline_at is not None:
+                requested_wait_ms = deadline_at - time.monotonic() * 1_000
+            elif parsed.timeout_ms is not None:
+                requested_wait_ms = parsed.timeout_ms
+            else:
+                requested_wait_ms = heartbeat_ms or (120_000 if parsed.until_event else 60_000)
             heartbeat_wait_ms = (
                 max(0, heartbeat_ms - (time.monotonic() * 1_000 - last_heartbeat_at))
                 if heartbeat_ms > 0 else requested_wait_ms
             )
-            timeout_ms = 0 if parsed.self_test else min(requested_wait_ms, heartbeat_wait_ms, 120_000)
+            timeout_ms = 0 if parsed.self_test else int(min(requested_wait_ms, heartbeat_wait_ms, 120_000))
             try:
                 call_request = dict(request)
                 call_request["timeoutMs"] = timeout_ms
@@ -440,7 +460,7 @@ def run_watch(parsed: Any) -> int:
                     event_include=[],
                 )
             except PaneDaemonClientError as error:
-                if not parsed.follow or error.code not in {
+                if not keeps_waiting or error.code not in {
                     "ERR_RUNPANE_DAEMON_CLOSED",
                     "ERR_RUNPANE_DAEMON_CONNECT_FAILED",
                     "ERR_RUNPANE_DAEMON_TIMEOUT",
@@ -469,7 +489,7 @@ def run_watch(parsed: Any) -> int:
                 if not quiet:
                     emit_watch_non_entry("_reconnected", output_format, generation=result.get("generation"))
                 failing_code = None
-            if not armed and (parsed.follow or parsed.self_test):
+            if not armed and (keeps_waiting or parsed.self_test):
                 if parsed.self_test or not quiet:
                     emit_watch_non_entry(
                         "_ok",
@@ -480,7 +500,21 @@ def run_watch(parsed: Any) -> int:
                 armed = True
                 if parsed.self_test:
                     return 0
-            print_workspace_wait_result(result, output_format)
+            if parsed.until_event:
+                # A reset restates current state; it never ends the wait. Nor does the caller's own panel.
+                if result.get("reset") or result.get("dropped") is not None:
+                    if not quiet:
+                        print_workspace_wait_result(result, output_format)
+                else:
+                    entries = [
+                        entry for entry in result.get("entries", [])
+                        if not own_panel_id or entry.get("panelId") != own_panel_id
+                    ]
+                    if entries:
+                        print_workspace_wait_result({**result, "entries": entries}, output_format)
+                        return 0
+            else:
+                print_workspace_wait_result(result, output_format)
             now_ms = time.monotonic() * 1_000
             if heartbeat_ms > 0 and now_ms - last_heartbeat_at >= heartbeat_ms:
                 if not quiet:
@@ -493,11 +527,16 @@ def run_watch(parsed: Any) -> int:
                 last_heartbeat_at = now_ms
             if not watch_as:
                 request["since"] = result.get("generation")
-                if parsed.follow:
+                if keeps_waiting:
                     anonymous_idle_window_start_ms = time.time() * 1_000
-            if not parsed.follow:
+            if not keeps_waiting:
                 break
     except KeyboardInterrupt:
+        return 0
+    except BrokenPipeError:
+        # A reader that exits early (`| head -1`) closed stdout; end quietly, and keep the
+        # interpreter's final flush from reporting the closed pipe.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         return 0
 
     return 0
@@ -920,10 +959,34 @@ def run_report(parsed: Any, env: Optional[Dict[str, str]] = None) -> int:
     if parsed.json:
         print_json(result)
     else:
-        session_ids = result.get("sessionIds") or []
-        sessions = f" Recorded on Session {', '.join(session_ids)}." if session_ids else ""
-        print(f"Reported {describe_report(result.get('report') or {})} for panel {result.get('panelId')}.{sessions}")
+        for line in describe_report_delivery(result):
+            print(line)
     return 0
+
+
+def describe_report_delivery(result: Dict[str, Any]) -> List[str]:
+    """What `runpane report` prints: the report, who recorded it, and how many watches were waiting.
+
+    Zero waiting watchers means nobody is waiting right now, not that the report is lost.
+    """
+    session_ids = result.get("sessionIds") or []
+    sessions = f" Recorded on Session {', '.join(session_ids)}." if session_ids else ""
+    live_watchers = result.get("liveWatchers")
+    watchers = live_watchers or 0
+    delivered = f" Delivered to {watchers} waiting watcher{'' if watchers == 1 else 's'}." if watchers > 0 else ""
+    panel_id = result.get("panelId")
+    lines = [f"Reported {describe_report(result.get('report') or {})} for panel {panel_id}.{sessions}{delivered}"]
+    if session_ids or watchers > 0:
+        return lines
+    stored = f"It is stored on the panel (runpane agents status --panel {panel_id})"
+    if live_watchers is None:
+        lines.append(f"No Session recorded this report. {stored}, and only watchers that list agent.report receive it.")
+    else:
+        lines.append(
+            f"No Session recorded this report and no watcher was waiting for it. {stored}, "
+            "and a watch with a named cursor (runpane watch --as <name> --kinds agent.report) still receives it when it next waits."
+        )
+    return lines
 
 
 def run_panels_submit(parsed: Any) -> int:
@@ -1516,6 +1579,8 @@ def emit_watch_non_entry(kind: str, output_format: str, **fields: Any) -> None:
         print(f"HEARTBEAT gen {fields.get('generation')} at {fields.get('at')}", flush=True)
     elif kind == "_reconnected":
         print(f"WATCH RECONNECTED gen {fields.get('generation')}", flush=True)
+    elif kind == "_timeout":
+        print(f"WATCH TIMEOUT after {fields.get('timeoutMs')}ms", flush=True)
     else:
         print(f"WATCH ERROR {sanitize_watch_value(fields.get('code'))}: {sanitize_watch_value(fields.get('message'))}", flush=True)
 

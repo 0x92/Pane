@@ -950,6 +950,11 @@ export interface RunpaneReportResult {
   report: TerminalAgentReport;
   /** Named Sessions the Pane is associated with, which recorded the report as activity. */
   sessionIds: string[];
+  /**
+   * Watches that were waiting for this report when it was journaled and received it. A snapshot:
+   * a named-cursor watch that waits later still reads it. Absent from daemons older than the field.
+   */
+  liveWatchers?: number;
 }
 
 export interface RunpanePanelLastMessageRequest {

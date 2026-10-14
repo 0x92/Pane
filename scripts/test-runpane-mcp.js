@@ -221,6 +221,7 @@ test('the server lists daemon and diagnostic commands but not installer commands
   assert.equal(tools.find((tool) => tool.name === 'repos_add').annotations.readOnlyHint, false);
   const watch = tools.find((tool) => tool.name === 'watch');
   assert.ok(!('follow' in watch.inputSchema.properties), 'watch must not offer --follow over MCP');
+  assert.ok(!('untilEvent' in watch.inputSchema.properties), 'watch must not offer --until-event over MCP');
 });
 
 test('a tool call returns the CLI JSON from the daemon', async () => {

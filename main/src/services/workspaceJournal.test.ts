@@ -344,6 +344,48 @@ describe('WorkspaceJournal', () => {
     expect(journal.readAfter(0, { kinds: ['agent.ready'] }).entries).toEqual([]);
   });
 
+  it('delivers a report from a panel with no detected agent type to agents-only watchers that list it', () => {
+    const journal = new WorkspaceJournal({ resolvePane: paneId => ({ paneId, paneName: paneId }) });
+    const report = { state: 'blocked' as const, question: 'q', reportedAt: '2026-10-14T20:00:00.000Z' };
+    journal.appendPaneEntry('one', { kind: 'agent.report', panelId: 'agent-panel', agentType: 'claude', source: 'agent', report });
+    journal.appendPaneEntry('one', { kind: 'agent.report', panelId: 'shell-panel', source: 'agent', report });
+    journal.appendPaneEntry('one', { kind: 'agent.ready', panelId: 'shell-panel', source: 'agent' });
+    journal.appendPaneEntry('one', { kind: 'agent.idle', panelId: 'shell-panel', source: 'agent' });
+
+    const followWithReports = { kinds: ['agent.report', 'agent.ready'] as const, agentsOnly: true };
+    expect(journal.readAfter(0, followWithReports).entries.map(entry => entry.panelId)).toEqual(['agent-panel', 'shell-panel']);
+    expect(journal.readAfter(0, { agentsOnly: true }).entries).toEqual([]);
+  });
+
+  it('delivers a report from an untyped panel to an agents-only Session watcher', () => {
+    const sessionId = '__orchestration_session_s1__';
+    const journal = new WorkspaceJournal({
+      resolvePane: paneId => ({ paneId, paneName: paneId }),
+      resolveSessionMembership: () => ({ panes: new Map([['one', []]]), ownPaneIds: new Set(), ownPanelIds: new Set() }),
+    });
+    const report = { state: 'done' as const, reportedAt: '2026-10-14T20:00:00.000Z' };
+    journal.appendPaneEntry('one', { kind: 'agent.report', panelId: 'shell-panel', source: 'agent', report });
+    journal.appendPaneEntry('one', { kind: 'agent.ready', panelId: 'shell-panel', source: 'agent' });
+
+    expect(journal.readAfter(0, { sessionId, agentsOnly: true }).entries.map(entry => entry.kind)).toEqual(['agent.report']);
+  });
+
+  it('tells the caller how many waiting watchers received an appended entry', async () => {
+    const journal = new WorkspaceJournal({ resolvePane: paneId => ({ paneId, paneName: paneId }) });
+    const report = { state: 'blocked' as const, reportedAt: '2026-10-14T20:00:00.000Z' };
+    expect(journal.deliverPaneEntry('one', { kind: 'agent.report', panelId: 'p1', source: 'agent', report }).liveWatchers).toBe(0);
+
+    const first = journal.waitAfter(journal.generation, { kinds: ['agent.report'] }, 1000, 256, 'orch');
+    const second = journal.waitAfter(journal.generation, { kinds: ['agent.report'], agentsOnly: true }, 1000);
+    const other = journal.waitAfter(journal.generation, { kinds: ['agent.ready'] }, 50);
+    const delivered = journal.deliverPaneEntry('one', { kind: 'agent.report', panelId: 'p1', source: 'agent', report });
+
+    expect(delivered).toMatchObject({ liveWatchers: 2, entry: { kind: 'agent.report', gen: 2, paneName: 'one' } });
+    await expect(first).resolves.toMatchObject({ entries: [{ gen: 2 }] });
+    await expect(second).resolves.toMatchObject({ entries: [{ gen: 2 }] });
+    await expect(other).resolves.toMatchObject({ timedOut: true });
+  });
+
   it('times out without inventing an entry', async () => {
     vi.useFakeTimers();
     const journal = new WorkspaceJournal();

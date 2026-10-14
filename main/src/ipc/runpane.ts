@@ -1455,7 +1455,7 @@ export function registerRunpaneHandlers(
       const report = normalizeAgentReport(normalized, new Date().toISOString());
       await storePanelAgentReport(panel, report);
       const panelSummary = panelToSummary(panelManager.getPanel(panel.id) ?? panel);
-      workspaceJournal.appendPaneEntry(panel.sessionId, {
+      const { liveWatchers } = workspaceJournal.deliverPaneEntry(panel.sessionId, {
         kind: 'agent.report',
         panelId: panel.id,
         panelTitle: panel.title,
@@ -1464,7 +1464,7 @@ export function registerRunpaneHandlers(
         report: journalAgentReport(report),
       });
       const sessionIds = await services.orchestrationSessionManager?.recordAgentReport(panel.id, report) ?? [];
-      return { ok: true, paneId: panel.sessionId, panelId: panel.id, report, sessionIds };
+      return { ok: true, paneId: panel.sessionId, panelId: panel.id, report, sessionIds, liveWatchers };
     }, result => ({ paneId: result.paneId, panelId: result.panelId, ok: result.ok }));
   });
 
