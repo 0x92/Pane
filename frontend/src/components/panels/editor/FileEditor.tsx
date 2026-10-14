@@ -46,6 +46,7 @@ interface HeadlessFileTreeProps {
   shortcutsActive?: boolean;
 }
 
+/** @public Mounted directly by tests/fixtures/file-tree-selection.tsx. */
 export function HeadlessFileTree({
   sessionId,
   onFileSelect,

@@ -5,18 +5,18 @@ import { HeadlessFileTree } from '../../frontend/src/components/panels/editor/Fi
 // A worktree with plans/cows.html, AGENTS.md and CLAUDE.md. Opening a file moves
 // the active editor path the way FileEditor does; an HTML file opens in the
 // browser instead, so the active editor path stays put.
-const listing: Record<string, Array<{ name: string; path: string; isDirectory: boolean }>> = {
-  '': [
+const listing = new Map([
+  ['', [
     { name: 'plans', path: 'plans', isDirectory: true },
     { name: 'AGENTS.md', path: 'AGENTS.md', isDirectory: false },
     { name: 'CLAUDE.md', path: 'CLAUDE.md', isDirectory: false },
-  ],
-  plans: [{ name: 'cows.html', path: 'plans/cows.html', isDirectory: false }],
-};
+  ]],
+  ['plans', [{ name: 'cows.html', path: 'plans/cows.html', isDirectory: false }]],
+]);
 Object.assign(window, {
   electronAPI: {
     invoke: async (channel: string, request: { path: string }) => {
-      if (channel === 'file:list') return { success: true, files: listing[request.path] ?? [] };
+      if (channel === 'file:list') return { success: true, files: listing.get(request.path) ?? [] };
       throw new Error(`Unexpected IPC: ${channel}`);
     },
   },
