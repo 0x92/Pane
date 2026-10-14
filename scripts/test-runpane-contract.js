@@ -501,7 +501,7 @@ async function checkPanesCreateBaseNotice() {
       const run = (args) => withFakeDaemon(paneDir, () => ({ result: futureResult }), () => runCliOnce(runtime, args, paneDir));
       const human = await run(['panes', 'create', '--repo', 'active', '--name', 'worker', '--agent', 'claude', '--yes']);
       assert.strictEqual(human.code, 0, `${runtime} panes create exited ${human.code}. stdout=${human.stdout} stderr=${human.stderr}`);
-      assertIncludes(human.stdout, `\n  ! ${notice}\n`);
+      assertIncludes(human.stdout.replace(/\r\n/g, '\n'), `\n  ! ${notice}\n`);
       const json = await run(['panes', 'create', '--repo', 'active', '--name', 'worker', '--agent', 'claude', '--yes', '--json']);
       assert.strictEqual(json.code, 0, `${runtime} panes create --json exited ${json.code}. stderr=${json.stderr}`);
       assert.deepStrictEqual(JSON.parse(json.stdout).items[0].base, item.base, `${runtime} panes create --json lost base`);
