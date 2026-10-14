@@ -8,6 +8,7 @@ import { invokeDaemon, PaneDaemonClientError } from './daemonClient';
 import { RUNPANE_CONTRACT } from './generated/contract';
 import { hasCadenceValueFlag, type ParsedArgs, type RunpaneAgent } from './commands';
 import type { BoundarySchema, JsonValue } from './boundaryDecoder';
+import { parseSessionCreatePayload, parseSessionUpdatePayload } from './sessionPayload';
 import { describeReport, effectiveWatchHeartbeatMs, formatNonEntry, formatWaitResult, type WatchFormat } from './watchLines';
 
 interface OrchestrationLink {
@@ -86,38 +87,6 @@ interface RunpaneSessionResult {
 
 interface SessionSelectorValue {
   sessionId: string;
-}
-
-interface SessionCreatePayload {
-  runtime?: 'windows' | 'wsl';
-  wslDistribution?: string;
-  name: string;
-  isPinned?: boolean;
-  agent?: OrchestrationAgent;
-  goal?: string;
-  context?: string;
-  decisions?: string[];
-  blockers?: string[];
-  nextAction?: string;
-  evidence?: OrchestrationLink[];
-  outputs?: OrchestrationLink[];
-}
-
-interface SessionUpdatePayload {
-  name?: string;
-  archived?: boolean;
-  isPinned?: boolean;
-  agent?: OrchestrationAgent;
-  goal?: string;
-  context?: string;
-  decisions?: string[];
-  blockers?: string[];
-  nextAction?: string;
-  evidence?: OrchestrationLink[];
-  outputs?: OrchestrationLink[];
-  report?: OrchestrationReport | null;
-  expectedRevision?: number;
-  source?: 'user' | 'agent';
 }
 
 interface OrchestrationPanelOverview {
@@ -632,6 +601,7 @@ interface PanelSummary {
   agentDetection?: 'declared' | 'command' | 'process' | 'screen';
   launchCommand?: string;
   isCliPanel?: boolean;
+  dock?: boolean;
   position?: number;
   createdAt?: string;
   lastActiveAt?: string;
@@ -1109,6 +1079,7 @@ const panelSummarySchema: BoundarySchema<PanelSummary> = boundary.object({
   agentDetection: boundary.optional(boundary.enumeration('declared', 'command', 'process', 'screen')),
   launchCommand: boundary.optional(boundary.string),
   isCliPanel: boundary.optional(boundary.boolean),
+  dock: boundary.optional(boundary.boolean),
   position: boundary.optional(boundary.number),
   createdAt: boundary.optional(boundary.string),
   lastActiveAt: boundary.optional(boundary.string),
@@ -2062,46 +2033,6 @@ function sessionSelectorFromParsed(parsed: ParsedArgs): SessionSelectorValue {
   const sessionId = parsed.sessionId?.trim();
   if (!sessionId) throw new Error('Named Session id or name is required via --session.');
   return { sessionId };
-}
-
-function parseSessionCreatePayload(value: JsonValue): SessionCreatePayload {
-  return decodeBoundary(value, boundary.object({
-    runtime: boundary.optional(boundary.enumeration('windows', 'wsl')),
-    wslDistribution: boundary.optional(boundary.nonEmptyString),
-    name: boundary.nonEmptyString,
-    isPinned: boundary.optional(boundary.boolean),
-    agent: boundary.optional(boundary.enumeration('codex', 'claude', 'cursor')),
-  launchCommand: boundary.optional(boundary.string),
-  profile: boundary.optional(boundary.string),
-    goal: boundary.optional(boundary.string),
-    context: boundary.optional(boundary.string),
-    decisions: boundary.optional(boundary.array(boundary.string)),
-    blockers: boundary.optional(boundary.array(boundary.string)),
-    nextAction: boundary.optional(boundary.string),
-    evidence: boundary.optional(boundary.array(orchestrationLinkSchema)),
-    outputs: boundary.optional(boundary.array(orchestrationLinkSchema)),
-  }));
-}
-
-function parseSessionUpdatePayload(value: JsonValue): SessionUpdatePayload {
-  return decodeBoundary(value, boundary.object({
-    name: boundary.optional(boundary.string),
-    archived: boundary.optional(boundary.boolean),
-    isPinned: boundary.optional(boundary.boolean),
-    agent: boundary.optional(boundary.enumeration('codex', 'claude', 'cursor')),
-  launchCommand: boundary.optional(boundary.string),
-  profile: boundary.optional(boundary.string),
-    goal: boundary.optional(boundary.string),
-    context: boundary.optional(boundary.string),
-    decisions: boundary.optional(boundary.array(boundary.string)),
-    blockers: boundary.optional(boundary.array(boundary.string)),
-    nextAction: boundary.optional(boundary.string),
-    evidence: boundary.optional(boundary.array(orchestrationLinkSchema)),
-    outputs: boundary.optional(boundary.array(orchestrationLinkSchema)),
-    report: boundary.optional(boundary.nullable(orchestrationReportSchema)),
-    expectedRevision: boundary.optional(boundary.number),
-    source: boundary.optional(boundary.enumeration('user', 'agent')),
-  }));
 }
 
 function printSessionResult(result: RunpaneSessionResult, json: boolean, action: string): number {

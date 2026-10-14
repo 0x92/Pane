@@ -811,6 +811,8 @@ export interface RunpanePanelSummary {
   agentDetection?: RunpaneAgentDetection;
   launchCommand?: string;
   isCliPanel?: boolean;
+  /** The Pane's terminal dock: its plain shell, not a tool or agent tab. Omitted on every other panel. */
+  dock?: boolean;
   position?: number;
   createdAt?: string;
   lastActiveAt?: string;

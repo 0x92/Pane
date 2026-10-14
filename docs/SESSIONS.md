@@ -77,8 +77,9 @@ picker when WSL reports installed distributions. Windows is the default on every
 creation. Choose a named distribution to run the agent there; install the agent
 inside that distribution first. Cursor is available when WSL is selected.
 The runtime and distribution belong to the Session and survive reopening,
-application restart, and terminal supervisor restart. Existing records retain
-their host runtime through an additive store migration.
+application restart, and terminal supervisor restart. Only WSL Sessions carry a
+`runtime` (`"wsl"`); a Session on the native host omits it on every OS. Older
+records that stored `"windows"` for the native host lose the field when read.
 If creation fails before publishing a terminal owner, Pane removes untouched
 generated files so the name can be retried; user files or edits prevent rollback.
 
@@ -106,7 +107,9 @@ and panel identities. PowerShell is invoked by its mounted Windows path, so
 cannot replace this bridge for a Windows daemon.
 
 For CLI JSON creation, `runtime: "wsl"` and `wslDistribution: "Ubuntu-24.04"`
-select an installed distribution; omitted runtime selects the host.
+select an installed distribution; omitted runtime selects the native host.
+`runtime: "windows"` is still accepted as a legacy name for the native host and is
+not stored.
 
 ## Resuming custom launchers
 
@@ -440,6 +443,27 @@ context, evidence, links, and reports in the JSON file or stdin; do not put
 external text into shell source. Re-read mutation results and inspect the
 overview after associations or updates.
 
+### Session JSON shapes
+
+- `decisions` and `blockers` are arrays of strings.
+- `evidence` and `outputs` are arrays of links:
+  `{"label", "url", "addedAt", "kind"?, "provenance"?}`. `url` starts with
+  `https://`, `http://`, `file://` or `grain://`; `addedAt` is an ISO 8601
+  date; `kind` is `evidence`, `output`, `ticket`, `pull-request` or `other`.
+- `report` (update only) is `{"summary", "status": "reported"|"verified",
+  "evidence": [at least one link], "reportedAt", "provenance"}`; `null`
+  clears it.
+- Arrays replace the stored value, so send the whole list. Each array holds at
+  most 100 items and each text at most 16000 characters
+  (`shared/types/orchestrationSession.ts`).
+- A bad payload is refused whole with one `ERR_SESSION_PAYLOAD_INVALID` error
+  that lists every problem (`outputs[0].addedAt: missing`, ...). The CLI
+  checks it before calling Pane, and the daemon checks it again for clients
+  such as `runpane-py` (`main/src/services/orchestrationSessionPayload.ts`).
+
+`runpane agent-context --command "sessions update"` prints the fields and a
+complete example.
+
 ## Resume and refresh persisted context
 
 When responding to a user task that needs Session state, read
@@ -610,7 +634,11 @@ Session conversation. Terminal idle or exit remains activity evidence only.
 liveness: `_ok`, `_heartbeat`, and `_reconnected` (`WATCH OK`, `HEARTBEAT`,
 and `WATCH RECONNECTED` in lines mode). `_error`, `_reset`, and `_dropped`
 always print. Under `--follow`, JSON entries for a panel holding unsent
-composer text carry `heldInputPresent: true`, the JSON form of `STUCK`.
+composer text carry `heldInputPresent: true`, the JSON form of `STUCK`. Only
+text typed into the composer counts, read the way `panels screen` reads
+`composer.hasUndeliveredText`: an agent's dim or grey prompt suggestion or
+placeholder does not, and neither does an older queued message or quote line
+above an empty composer. `heldInput` on `agent.ready` follows the same rule.
 
 ### Watch profiles
 
@@ -695,6 +723,11 @@ its agent tabs. The shell and file browser use the Session's workspace folder.
 Selecting a file opens an editor tab alongside the agent conversation. Panels
 are saved with the Session and reused when you reopen the tools; switching
 Sessions keeps their shells and files separate.
+
+Every Pane has the same dock: its first plain shell, titled **Terminal**, where
+the setup progress notices appear. It is not a tool or agent tab. `runpane panels
+list` marks it `dock: true`, and `runpane panes list` reports a Pane `running`
+only while one of its tool or agent terminals is live, not for the dock alone.
 
 ## Plans, pages, and split view
 

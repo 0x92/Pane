@@ -2159,7 +2159,7 @@
         "",
         "Lists Pane sessions. Pass --repo to limit results to one saved repository.",
         "",
-        "status is running while any terminal panel is live. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
+        "status is running while a tool or agent terminal is live; the dock shell does not count. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
         "",
         "Options:",
         "  --repo <selector>              active, id, exact path, or saved repository name",
@@ -3381,7 +3381,7 @@
         "",
         "Lists Pane sessions. Pass --repo to limit results to one saved repository.",
         "",
-        "status is running while any terminal panel is live. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
+        "status is running while a tool or agent terminal is live; the dock shell does not count. agentState is the most urgent state of the live agent panels: blocked, working, ready, or none.",
         "",
         "Options:",
         "  --repo <selector>",
@@ -7903,6 +7903,10 @@
               "isCliPanel": {
                 "type": "boolean"
               },
+              "dock": {
+                "type": "boolean",
+                "description": "True on the Pane's terminal dock (its plain shell); omitted on every other panel."
+              },
               "position": {
                 "type": "number"
               },
@@ -10714,7 +10718,7 @@
         ],
         "notes": [
           "Without --repo, this lists sessions across saved Pane repositories.",
-          "`status` is `running` while any terminal panel is live, otherwise the stored lifecycle value. `agentState` is the most urgent state of the live agent panels: `blocked`, `working`, `ready`, or `none`. `agentStatus` (`active`/`idle`) is kept for older clients."
+          "`status` is `running` while a tool or agent terminal is live, otherwise the stored lifecycle value (`error` and `initializing` always show as stored). The Pane's dock shell (`dock: true` in `panels list`) does not count, so a Pane whose only live terminal is the dock reads its stored value, usually `stopped`. `agentState` is the most urgent state of the live agent panels: `blocked`, `working`, `ready`, or `none`. `agentStatus` (`active`/`idle`) is kept for older clients."
         ]
       },
       "panes cost": {
@@ -11073,7 +11077,7 @@
           "One of --agent or --tool-command is required.",
           "With --tool-command, --agent names the agent the command runs (a wrapper such as `agent-farm run`): Pane launches the command unchanged and treats the panel as that agent. Without --agent, Pane detects Claude Code, Codex and Cursor from the foreground process or the agent's screen, and --wait-ready waits for the detected agent's input box; a command that never shows a supported agent is not ready and nothing is typed into it.",
           "--resume needs a built-in agent command; a wrapper command resumes its own way.",
-          "The adopted Pane reports `status: running` in `panes list` while its terminal is live.",
+          "The adopted Pane reports `status: running` in `panes list` while its tool terminal is live.",
           "A prompt (--prompt, --initial-input, --prompt-file, --initial-input-file) or --wait-ready needs --launch; without it adopt fails instead of dropping the prompt.",
           "With --launch the result carries the same readiness, initialInput, and nextCommand fields as panes create. With --resume the prompt goes to the resumed conversation's composer once the agent is ready.",
           "To start new work on a named branch, prefer `panes create --base <ref> --branch <name>` over `git worktree add` plus adopt."
@@ -11408,7 +11412,8 @@
         "notes": [
           "The ids returned here are stable inputs for `panels output` and `panels input`.",
           "`agentType` is the agent Pane treats the panel as; `agentDetection` says how it knows (`declared`, `command`, `process`, or `screen`), and `launchCommand` is the command the panel was launched with.",
-          "`resumeId` is the agent session ID Pane saved for reopening the panel, and `resumeSource` says which rule resumes with it: `agent-farm` (an `agent-farm run` or `agent-farm agent` command), `configured` (the panel's own resume command), or `agent` (a built-in agent's captured session). Both are omitted when no ID is saved."
+          "`resumeId` is the agent session ID Pane saved for reopening the panel, and `resumeSource` says which rule resumes with it: `agent-farm` (an `agent-farm run` or `agent-farm agent` command), `configured` (the panel's own resume command), or `agent` (a built-in agent's captured session). Both are omitted when no ID is saved.",
+          "Every Pane has one plain shell titled `Terminal`, its terminal dock: `dock: true` marks it, and the field is omitted on every other panel. Setup progress notices appear there; it is not a tool or agent tab and does not count toward the Pane's `status`. A `--tool-command` tab without `--title` or `--agent` is titled from its command (whole words up to 40 characters)."
         ]
       },
       "panels output": {
@@ -12200,7 +12205,7 @@
           {
             "name": "--include-held-input",
             "required": false,
-            "description": "Include up to 120 characters of unsubmitted composer text in JSON entries. Default off: under --follow, JSON entries carry only heldInputPresent: true."
+            "description": "Include up to 120 characters of unsubmitted composer text (typed text only; prompt suggestions and placeholders excluded) in JSON entries. Default off: under --follow, JSON entries carry only heldInputPresent: true."
           },
           {
             "name": "--no-held-input",
@@ -12255,7 +12260,7 @@
           "Journal loss is surfaced through reset and dropped metadata.",
           "The daemon treats omitted idleAfterMs as disabled so older clients never receive agent.idle unexpectedly.",
           "Control lines are not journal entries. JSON kinds and their lines-format text: _ok (WATCH OK, once when armed), _heartbeat (HEARTBEAT, every --heartbeat seconds), _reconnected (WATCH RECONNECTED, after a retried daemon error), _error (WATCH ERROR, a daemon error; the process exits 2 unless --follow retries it), _reset (RESET, the journal restarted or the cursor fell behind; a fresh baseline follows), and _dropped (DROPPED, entries lost to journal truncation). --quiet drops _ok, _heartbeat, and _reconnected; _error, _reset, and _dropped always print.",
-          "Under --follow, JSON entries for panels holding unsubmitted composer text carry heldInputPresent: true, the JSON equivalent of the STUCK line. --no-held-input turns this off.",
+          "Under --follow, JSON entries for panels holding unsubmitted composer text carry heldInputPresent: true, the JSON equivalent of the STUCK line. Only typed composer text counts, the same reading as panels screen composer.hasUndeliveredText; an agent's dim or grey prompt suggestion or placeholder does not. --no-held-input turns this off.",
           "--session <id|name> scopes the watch to a named Session. The daemon resolves the Session once per request and its associated Panes on every read, so sessions associate and sessions detach take effect without a re-arm; archived and detached Panes drop out, and the Session's own orchestrator panels are excluded. Cadence state is keyed by the Session, not its current Panes, so membership changes keep held lines. A detached Pane's held lines are dropped.",
           "Under --session, pane.associated (JOINED <pane-name> pane <pane-id> session <session-id>) and pane.detached (LEFT ...) report membership changes; list them in --kinds next to the agent kinds. Other consumers receive them only when --kinds lists them, so older clients never see an unknown kind.",
           "PR events (decision D7): about every 3 minutes (jittered) the daemon visits each Pane associated with a live Session (none: no gh at all), finds its PR by branch when no open PR is known yet (gh pr list --head, so unwatched workers' new and reopened PRs are found), runs gh pr view on an open PR, and appends pr.conflicted (PR <pane-name> pane <pane-id> #<number> CONFLICTED: the PR now conflicts with its base), pr.checks (... CHECKS PASSED, or CHECKS FAILED <up to five names>: every check on the head commit finished), and pr.merged (... MERGED). Entries carry pr: {number, url, headOid}, plus checks and failingChecks for pr.checks. They fire on transitions only: the first poll of a PR after the daemon starts only records its state, so re-check conflicts after a restart with gh pr view. pr.conflicted and failed pr.checks bypass --min-interval like BLOCKED. Like JOINED/LEFT, they reach a consumer only under --session or when --kinds lists them. Without gh, or while it is signed out or rate limited, polling backs off (up to an hour) and no PR entries arrive.",
@@ -13401,7 +13406,13 @@
         "notes": [
           "Structured input accepts launchCommand (full command including arguments; empty uses the selected agent default) and profile (Session behavior instructions). Creating/opening a Session submits no automatic prompt. Changes apply on next terminal launch.",
           "JSON isPinned: true/false sets the UI pin star. Creation defaults to false; update preserves the pin when omitted.",
-          "Create-time isPinned requires an updated Pane app. Older apps may ignore the field; use sessions pin after creation and read back the result."
+          "Create-time isPinned requires an updated Pane app. Older apps may ignore the field; use sessions pin after creation and read back the result.",
+          "runtime appears only on WSL Sessions (\"wsl\", with wslDistribution, Windows only). A Session on the native host has no runtime field on any OS; \"windows\" is accepted on input as a legacy name for the native host and is not stored.",
+          "Payload fields (all optional on update; name required on create): name, goal, context, nextAction, launchCommand, profile (strings); isPinned and, on update, archived (booleans); agent (codex|claude|cursor); decisions and blockers (arrays of strings); evidence and outputs (arrays of links); create also takes runtime (windows|wsl) and wslDistribution; update also takes report, expectedRevision (the revision you read; the update is refused if the Session has moved on) and source (user|agent).",
+          "A link is {\"label\": non-empty string, \"url\": an https://, http://, file:// or grain:// URL, \"addedAt\": ISO 8601 date such as 2026-10-14T09:30:00Z, \"kind\"?: evidence|output|ticket|pull-request|other, \"provenance\"?: string}.",
+          "Arrays replace the stored value: send the whole list, not only new items. Limits: at most 100 items per array and 16000 characters per text.",
+          "Every problem in the payload is reported at once in one ERR_SESSION_PAYLOAD_INVALID error (paths such as outputs[0].addedAt, \"missing\" for an absent required field), and nothing is changed.",
+          "Example: {\"name\": \"Release QA\", \"goal\": \"Ship 2.5\", \"decisions\": [\"Cut from main\"], \"blockers\": [], \"outputs\": [{\"label\": \"Release PR\", \"url\": \"https://github.com/greenfield-inc/Pane/pull/1\", \"addedAt\": \"2026-10-14T09:30:00Z\", \"kind\": \"pull-request\"}]}"
         ]
       },
       "sessions get": {
@@ -13448,7 +13459,13 @@
         ],
         "notes": [
           "Structured input accepts launchCommand (full command including arguments; empty uses the selected agent default) and profile (Session behavior instructions). Creating/opening a Session submits no automatic prompt. Changes apply on next terminal launch.",
-          "JSON isPinned: true/false sets the UI pin star. Creation defaults to false; update preserves the pin when omitted."
+          "JSON isPinned: true/false sets the UI pin star. Creation defaults to false; update preserves the pin when omitted.",
+          "Payload fields (all optional on update; name required on create): name, goal, context, nextAction, launchCommand, profile (strings); isPinned and, on update, archived (booleans); agent (codex|claude|cursor); decisions and blockers (arrays of strings); evidence and outputs (arrays of links); create also takes runtime (windows|wsl) and wslDistribution; update also takes report, expectedRevision (the revision you read; the update is refused if the Session has moved on) and source (user|agent).",
+          "A link is {\"label\": non-empty string, \"url\": an https://, http://, file:// or grain:// URL, \"addedAt\": ISO 8601 date such as 2026-10-14T09:30:00Z, \"kind\"?: evidence|output|ticket|pull-request|other, \"provenance\"?: string}.",
+          "Arrays replace the stored value: send the whole list, not only new items. Limits: at most 100 items per array and 16000 characters per text.",
+          "Every problem in the payload is reported at once in one ERR_SESSION_PAYLOAD_INVALID error (paths such as outputs[0].addedAt, \"missing\" for an absent required field), and nothing is changed.",
+          "update only: report is {\"summary\": non-empty string, \"status\": reported|verified, \"evidence\": [at least one link], \"reportedAt\": ISO 8601 date, \"provenance\": non-empty string}; report null clears it.",
+          "Example: {\"expectedRevision\": 4, \"nextAction\": \"Merge after CI\", \"decisions\": [\"Cut from main\", \"Skip beta\"], \"evidence\": [{\"label\": \"QA log\", \"url\": \"file:///tmp/qa.log\", \"addedAt\": \"2026-10-14T09:30:00Z\", \"kind\": \"evidence\", \"provenance\": \"qa agent\"}], \"report\": {\"summary\": \"QA passed\", \"status\": \"verified\", \"evidence\": [{\"label\": \"QA log\", \"url\": \"file:///tmp/qa.log\", \"addedAt\": \"2026-10-14T09:30:00Z\"}], \"reportedAt\": \"2026-10-14T09:31:00Z\", \"provenance\": \"qa agent\"}}"
         ]
       },
       "sessions set-agent": {

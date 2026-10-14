@@ -9,24 +9,18 @@ import type {
 } from '../../../shared/types/orchestrationSession';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 import { PaneError, paneErrorText } from '../../../shared/paneError';
+import {
+  decodeOrchestrationSessionPayload,
+  orchestrationExpectedRevisionSchema,
+  orchestrationLinksSchema,
+  orchestrationReportSchema,
+  orchestrationTextArraySchema,
+  orchestrationTextSchema,
+} from '../services/orchestrationSessionPayload';
 
 const selectorSchema = boundary.object({
   sessionId: boundary.optional(boundary.nonEmptyString),
   name: boundary.optional(boundary.nonEmptyString),
-});
-const linkSchema = boundary.object({
-  label: boundary.nonEmptyString,
-  url: boundary.nonEmptyString,
-  kind: boundary.optional(boundary.enumeration('evidence', 'output', 'ticket', 'pull-request', 'other')),
-  provenance: boundary.optional(boundary.string),
-  addedAt: boundary.nonEmptyString,
-});
-const reportSchema = boundary.object({
-  summary: boundary.nonEmptyString,
-  status: boundary.enumeration('reported', 'verified'),
-  evidence: boundary.array(linkSchema),
-  reportedAt: boundary.nonEmptyString,
-  provenance: boundary.nonEmptyString,
 });
 const createSchema = boundary.object({
   runtime: boundary.optional(boundary.enumeration('windows', 'wsl')),
@@ -35,34 +29,34 @@ const createSchema = boundary.object({
   nameFromFirstMessage: boundary.optional(boundary.boolean),
   isPinned: boundary.optional(boundary.boolean),
   agent: boundary.optional(boundary.enumeration('claude', 'codex', 'cursor')),
-  launchCommand: boundary.optional(boundary.string),
+  launchCommand: boundary.optional(orchestrationTextSchema),
   customResume: boundary.optional(boundary.nullable(customCommandResumeSchema)),
-  profile: boundary.optional(boundary.string),
-  goal: boundary.optional(boundary.string),
-  context: boundary.optional(boundary.string),
-  decisions: boundary.optional(boundary.array(boundary.string)),
-  blockers: boundary.optional(boundary.array(boundary.string)),
-  nextAction: boundary.optional(boundary.string),
-  evidence: boundary.optional(boundary.array(linkSchema)),
-  outputs: boundary.optional(boundary.array(linkSchema)),
+  profile: boundary.optional(orchestrationTextSchema),
+  goal: boundary.optional(orchestrationTextSchema),
+  context: boundary.optional(orchestrationTextSchema),
+  decisions: boundary.optional(orchestrationTextArraySchema),
+  blockers: boundary.optional(orchestrationTextArraySchema),
+  nextAction: boundary.optional(orchestrationTextSchema),
+  evidence: boundary.optional(orchestrationLinksSchema),
+  outputs: boundary.optional(orchestrationLinksSchema),
 });
 const updateSchema = boundary.object({
-  name: boundary.optional(boundary.string),
+  name: boundary.optional(orchestrationTextSchema),
   archived: boundary.optional(boundary.boolean),
   isPinned: boundary.optional(boundary.boolean),
   agent: boundary.optional(boundary.enumeration('claude', 'codex', 'cursor')),
-  launchCommand: boundary.optional(boundary.string),
+  launchCommand: boundary.optional(orchestrationTextSchema),
   customResume: boundary.optional(boundary.nullable(customCommandResumeSchema)),
-  profile: boundary.optional(boundary.string),
-  goal: boundary.optional(boundary.string),
-  context: boundary.optional(boundary.string),
-  decisions: boundary.optional(boundary.array(boundary.string)),
-  blockers: boundary.optional(boundary.array(boundary.string)),
-  nextAction: boundary.optional(boundary.string),
-  evidence: boundary.optional(boundary.array(linkSchema)),
-  outputs: boundary.optional(boundary.array(linkSchema)),
-  report: boundary.optional(boundary.nullable(reportSchema)),
-  expectedRevision: boundary.optional(boundary.number),
+  profile: boundary.optional(orchestrationTextSchema),
+  goal: boundary.optional(orchestrationTextSchema),
+  context: boundary.optional(orchestrationTextSchema),
+  decisions: boundary.optional(orchestrationTextArraySchema),
+  blockers: boundary.optional(orchestrationTextArraySchema),
+  nextAction: boundary.optional(orchestrationTextSchema),
+  evidence: boundary.optional(orchestrationLinksSchema),
+  outputs: boundary.optional(orchestrationLinksSchema),
+  report: boundary.optional(boundary.nullable(orchestrationReportSchema)),
+  expectedRevision: boundary.optional(orchestrationExpectedRevisionSchema),
   source: boundary.optional(boundary.enumeration('user', 'agent')),
 });
 const agentSchema = boundary.object({
@@ -117,7 +111,7 @@ export function registerOrchestrationSessionHandlers(
   commandRegistry.bindChannel(ipcMain, 'orchestration-sessions:select');
 
   commandRegistry.register('orchestration-sessions:create', async (value: PaneCommandValue) => {
-    return invokeSafely(() => requireManager().create(decodeBoundary(value, createSchema)));
+    return invokeSafely(() => requireManager().create(decodeOrchestrationSessionPayload(value, createSchema, 'create')));
   });
   commandRegistry.bindChannel(ipcMain, 'orchestration-sessions:create');
 
@@ -129,7 +123,7 @@ export function registerOrchestrationSessionHandlers(
   commandRegistry.register('orchestration-sessions:update', async (value: PaneCommandValue, update?: PaneCommandValue) => {
     return invokeSafely(() => requireManager().update(
       decodeSelector(value),
-      decodeBoundary(update, updateSchema),
+      decodeOrchestrationSessionPayload(update, updateSchema, 'update'),
     ));
   });
   commandRegistry.bindChannel(ipcMain, 'orchestration-sessions:update');
@@ -198,6 +192,7 @@ async function invokeSafely<Value>(operation: () => Promise<Value>): Promise<obj
   } catch (error) {
     return {
       success: false,
+      // Electron IPC keeps only text, so a PaneError carries its next step as "Next: ...".
       error: error instanceof PaneError ? paneErrorText(error) : error instanceof Error ? error.message : 'Sessions operation failed',
     };
   }

@@ -3897,6 +3897,91 @@ async function checkSessionRuntime() {
   }
 }
 
+/** Collecting mode of the CLI decoder copy: every problem at once, "missing" for absent fields. */
+function checkBoundaryDecoderCollectsEveryIssue() {
+  const { boundary, decodeBoundary, decodeBoundaryAll, BoundaryDecodeIssues } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'boundaryDecoder.js'));
+  const schema = boundary.object({
+    items: boundary.array(boundary.object({
+      label: boundary.nonEmptyString,
+      url: boundary.refine(boundary.nonEmptyString, (url) => url.startsWith('https://'), 'expected an https URL'),
+    })),
+    tags: boundary.optional(boundary.array(boundary.string)),
+    choice: boundary.optional(boundary.union(boundary.literal('a'), boundary.object({ label: boundary.string }))),
+  });
+  assert.throws(() => decodeBoundaryAll({ items: [{}, { label: 'x', url: 'ftp://x' }], tags: [1], choice: {} }, schema), (error) => {
+    assert.ok(error instanceof BoundaryDecodeIssues);
+    assert.deepStrictEqual(error.issues.map((issue) => `${issue.where}: ${issue.message}`), [
+      'items[0].label: missing',
+      'items[0].url: missing',
+      'items[1].url: expected an https URL',
+      'tags[0]: expected string',
+      'choice: did not match any allowed shape',
+    ]);
+    return true;
+  });
+  assert.throws(() => decodeBoundaryAll('x', schema), /^BoundaryDecodeIssues: input: expected object$/);
+  const valid = { items: [{ label: 'x', url: 'https://x' }], tags: ['t'], choice: 'a' };
+  assert.deepStrictEqual(decodeBoundaryAll(valid, schema), decodeBoundary(valid, schema));
+  assert.throws(() => decodeBoundary({ items: [{}] }, schema), /input\.items\.0\.label: expected string/);
+}
+
+/** `sessions update --from-json` names every payload problem in one error before reaching the daemon. */
+async function checkSessionPayloadErrors() {
+  const daemonClient = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'daemonClient.js'));
+  const { parseRunpaneArgs } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'commands.js'));
+  const { runSessionsUpdate, runSessionsCreate } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'localControl.js'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-session-payload-'));
+  const file = path.join(directory, 'update.json');
+  const originalInvoke = daemonClient.invokeDaemon;
+  const originalLog = console.log;
+  const calls = [];
+  daemonClient.invokeDaemon = async (channel, args) => {
+    calls.push({ channel, args });
+    return { ok: true, session: { id: 'coordinator', name: 'Coordinator', associations: [] } };
+  };
+  console.log = () => {};
+  try {
+    fs.writeFileSync(file, JSON.stringify({
+      outputs: [{}],
+      evidence: [{ label: 'x', url: 'ftp://x', addedAt: 'now' }],
+      decisions: [1],
+    }));
+    await assert.rejects(runSessionsUpdate(parseRunpaneArgs(['sessions', 'update', '--session', 'coordinator', '--from-json', file])), (error) => {
+      assert.strictEqual(error.code, 'ERR_SESSION_PAYLOAD_INVALID');
+      assert.strictEqual(error.message, 'The Session update payload has 6 problems: decisions[0]: expected string; '
+        + 'evidence[0].url: expected a URL starting with https://, http://, file:// or grain://; '
+        + 'evidence[0].addedAt: expected an ISO 8601 date such as 2026-10-14T09:30:00Z; '
+        + 'outputs[0].label: missing; outputs[0].url: missing; outputs[0].addedAt: missing. Nothing was changed.');
+      assertIncludes(error.next, 'outputs and evidence items are {"label": string, "url": https/http/file/grain URL, "addedAt": ISO 8601 date');
+      assertIncludes(error.next, 'runpane agent-context --command "sessions update"');
+      return true;
+    });
+    assert.strictEqual(calls.length, 0, 'an invalid payload must not reach the daemon');
+
+    fs.writeFileSync(file, JSON.stringify({ name: 'Bad', outputs: 'x' }));
+    await assert.rejects(runSessionsCreate(parseRunpaneArgs(['sessions', 'create', '--from-json', file])), /The Session create payload has 1 problem: outputs: expected array\./);
+
+    const valid = {
+      decisions: ['Ship'],
+      blockers: [],
+      outputs: [{ label: 'PR', url: 'https://github.com/o/r/pull/1', addedAt: '2026-10-14T09:30:00Z', kind: 'pull-request' }],
+      evidence: [{ label: 'Log', url: 'file:///tmp/log.txt', addedAt: '2026-10-14', provenance: 'qa' }],
+      report: {
+        summary: 'Done', status: 'verified', reportedAt: '2026-10-14T09:31:00Z', provenance: 'qa agent',
+        evidence: [{ label: 'Page', url: 'grain://page', addedAt: '2026-10-14T09:30:00Z' }],
+      },
+      expectedRevision: 3,
+    };
+    fs.writeFileSync(file, JSON.stringify(valid));
+    assert.strictEqual(await runSessionsUpdate(parseRunpaneArgs(['sessions', 'update', '--session', 'coordinator', '--from-json', file, '--json'])), 0);
+    assert.deepStrictEqual(calls[0].args[0], { selector: { sessionId: 'coordinator' }, input: valid });
+  } finally {
+    daemonClient.invokeDaemon = originalInvoke;
+    console.log = originalLog;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function runControlProcess(runtime, args, paneDir) {
   return new Promise((resolve, reject) => {
     childProcess.execFile(runtime === 'npm' ? process.execPath : findPython(),
@@ -4073,6 +4158,8 @@ async function runChecks() {
   await checkLockParity();
   await checkOverviewReportsAndLocks();
   await checkSessionRuntime();
+  checkBoundaryDecoderCollectsEveryIssue();
+  await checkSessionPayloadErrors();
   await checkSessionPinCommands();
   await checkPanesAdoptCliParity();
   checkContractDocListsEveryCommand();

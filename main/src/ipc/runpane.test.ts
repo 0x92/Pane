@@ -15,7 +15,7 @@ import type { Project } from '../database/models';
 import type { Session } from '../types/session';
 import type { AppServices } from './types';
 import type { CreatePanelRequest, TerminalPanelState, ToolPanel } from '../../../shared/types/panels';
-import type { RunpaneToolSpec } from '../../../shared/types/runpaneOrchestration';
+import type { RunpanePaneListResult, RunpanePanelListResult, RunpaneToolSpec } from '../../../shared/types/runpaneOrchestration';
 import type { OrchestrationSessionCreateInput } from '../../../shared/types/orchestrationSession';
 
 import { RUNPANE_CONTRACT } from '../../../shared/types/generatedRunpaneContract';
@@ -397,6 +397,44 @@ describe('runpane IPC handlers', () => {
     expect(result).toMatchObject({ ok: true, session: { isPinned: true } });
     await expect(registry.invoke('runpane:sessions:create', [{ name: 'Invalid', isPinned: 'true' }]))
       .rejects.toThrow('expected boolean');
+  });
+
+  it('rejects a Session update payload with every problem named and leaves the Session unchanged', async () => {
+    const update = vi.fn();
+    // SAFETY: This command only reaches update, which must not be called for an invalid payload.
+    const registry = createRegistry(createServices({ orchestrationSessionManager: { update } as never }));
+    const input = {
+      outputs: [{}],
+      evidence: [{ label: 'x', url: 'ftp://x', addedAt: 'now' }],
+      decisions: [1],
+    };
+
+    const failure = registry.invoke('runpane:sessions:update', [{ selector: { sessionId: 'coordinator' }, input }]);
+
+    await expect(failure).rejects.toMatchObject({
+      code: 'ERR_SESSION_PAYLOAD_INVALID',
+      message: 'The Session update payload has 6 problems: decisions[0]: expected string; '
+        + 'evidence[0].url: expected a URL starting with https://, http://, file:// or grain://; '
+        + 'evidence[0].addedAt: expected an ISO 8601 date such as 2026-10-14T09:30:00Z; '
+        + 'outputs[0].label: missing; outputs[0].url: missing; outputs[0].addedAt: missing. Nothing was changed.',
+      next: expect.stringContaining('outputs and evidence items are {"label": string'),
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('passes a well-formed Session update payload through unchanged', async () => {
+    const update = vi.fn(async () => ({ id: 'coordinator', revision: 2 }));
+    // SAFETY: This command only reaches update; the stub returns the minimal Session the handler forwards.
+    const registry = createRegistry(createServices({ orchestrationSessionManager: { update } as never }));
+    const input = {
+      decisions: ['Ship'],
+      outputs: [{ label: 'PR', url: 'https://github.com/o/r/pull/1', addedAt: '2026-10-14T09:30:00Z', kind: 'pull-request' }],
+      expectedRevision: 1,
+    };
+
+    await registry.invoke('runpane:sessions:update', [{ selector: { sessionId: 'coordinator' }, input }]);
+
+    expect(update).toHaveBeenCalledWith({ sessionId: 'coordinator' }, input);
   });
 
   describe('local failure telemetry', () => {
@@ -1328,6 +1366,7 @@ describe('runpane IPC handlers', () => {
     vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(
       terminalSnapshot('› ship it', 'idle', 'codex', '2026-01-01T11:49:00.000Z'),
     );
+    vi.mocked(terminalPanelManager.getInputScreenText).mockReturnValue('› ship it');
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-runpane-idle-test-'));
     tempDirs.push(directory);
     const workspaceJournal = new WorkspaceJournal();
@@ -1390,6 +1429,28 @@ describe('runpane IPC handlers', () => {
       idleWindowStartMs: Date.now(),
     }]);
     expect(advancedWindow.entries).toEqual([]);
+  });
+
+  it('does not flag an idle agent whose composer shows only a dim prompt suggestion', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T12:00:00.000Z'));
+    const rule = '─'.repeat(30);
+    // The emulator blanks the dim suggestion from the typed layer.
+    vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(
+      terminalSnapshot(`${rule}\n❯ ok, keep going\n${rule}`, 'idle', 'claude', '2026-01-01T11:49:00.000Z'),
+    );
+    vi.mocked(terminalPanelManager.getInputScreenText).mockReturnValue(`${rule}\n❯\n${rule}`);
+    const registry = createRegistry(createServices({ workspaceJournal: new WorkspaceJournal() }));
+
+    const result = await registry.invoke('runpane:workspace:wait', [{
+      since: 0,
+      timeoutMs: 0,
+      idleAfterMs: 600_000,
+      includeHeldInputPresence: true,
+    }]);
+
+    expect(result.entries).toContainEqual(expect.objectContaining({ kind: 'agent.idle', agentType: 'claude' }));
+    expect(result.entries.filter(entry => entry.kind === 'agent.idle')[0]).not.toHaveProperty('heldInputPresent');
   });
 
   it('keeps idle disabled for old clients and applies workspace filters', async () => {
@@ -2123,6 +2184,54 @@ describe('runpane IPC handlers', () => {
       }],
     });
     expect(panelManager.getPanelsForSession).toHaveBeenCalledWith(session.id);
+  });
+
+  describe('dock shell', () => {
+    const dockShell: ToolPanel = { ...terminalPanel, id: 'panel-dock', title: 'Terminal', state: { isActive: false, customState: {} } };
+    const toolTab: ToolPanel = { ...terminalPanel, id: 'panel-tool', title: 'sleep 600', state: { isActive: true, customState: { initialCommand: 'sleep 600' } } };
+    const listPanes = async () => {
+      const result = await createRegistry(createServices()).invoke('runpane:panes:list', [{ repo: 'active' }]);
+      // SAFETY: The registry result for panes:list is a RunpanePaneListResult.
+      return (result as RunpanePaneListResult).panes[0].status;
+    };
+
+    beforeEach(() => {
+      vi.mocked(panelManager.getPanelsForSession).mockImplementation((sessionId: string) =>
+        sessionId === session.id ? [dockShell, toolTab] : []
+      );
+    });
+
+    it('marks only the dock shell in panels list', async () => {
+      const result = await createRegistry(createServices()).invoke('runpane:panels:list', [{ paneId: session.id }]);
+
+      expect(result).toMatchObject({ ok: true, panels: [{ id: dockShell.id, title: 'Terminal', dock: true }, { id: toolTab.id }] });
+      // SAFETY: The registry result for panels:list is a RunpanePanelListResult.
+      expect((result as RunpanePanelListResult).panels[1].dock).toBeUndefined();
+    });
+
+    it('is running while a tool tab is live, not while only the dock shell is', async () => {
+      expect(await listPanes()).toBe('running');
+
+      vi.mocked(terminalPanelManager.isTerminalInitialized).mockImplementation(panelId => panelId === dockShell.id);
+      expect(await listPanes()).toBe(session.status);
+
+      vi.mocked(panelManager.getPanelsForSession).mockImplementation(sessionId => sessionId === session.id ? [dockShell] : []);
+      vi.mocked(terminalPanelManager.isTerminalInitialized).mockReturnValue(true);
+      expect(await listPanes()).toBe(session.status);
+    });
+  });
+
+  it.each([
+    ['sleep 600', 'sleep 600'],
+    ['agent-farm run greenfield/planner:claude', 'agent-farm run greenfield/planner:claude'],
+    ['agent-farm run greenfield/planner:claude --message "Read and follow the brief"', 'agent-farm run greenfield/planner:claude…'],
+    ['  pnpm   dev\n--watch', 'pnpm dev --watch'],
+  ])('titles a --tool-command tab from its command: %s', async (command, title) => {
+    const result = await createRegistry(createServices()).invoke('runpane:panes:create', [{
+      repo: 'active', dryRun: true, panes: [{ name: 'tool-pane', tool: { command } }],
+    }]);
+
+    expect(result).toMatchObject({ ok: true, items: [{ ok: true, tool: { title, command } }] });
   });
 
   it('reports pane costs with totals in the unscoped form', async () => {

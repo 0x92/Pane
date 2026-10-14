@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
+import { TerminalStateEmulator } from './terminalStateEmulator';
+import type { WorkspaceHeldInputScreen } from './workspaceHeldInput';
 import { WorkspaceJournal, workspaceFilterKey } from './workspaceJournal';
+
+/** A Claude screen as the live emulator reads it, with `composer` written into its composer box. */
+async function claudeScreen(composer: string): Promise<WorkspaceHeldInputScreen> {
+  const rule = '─'.repeat(30);
+  const emulator = new TerminalStateEmulator(60, 5);
+  emulator.write(['✻ Done', rule, `❯ ${composer}`, rule, '  ? for shortcuts'].join('\r\n'));
+  await emulator.waitForIdle();
+  const screen = { screenText: emulator.getScreenText(), typedText: emulator.getScreenText({ cells: 'typed' }) };
+  emulator.dispose();
+  return screen;
+}
 
 /** What the daemon knows about a panel's agent, before and after wrapper detection. */
 interface WrapperIdentity {
@@ -68,7 +81,7 @@ describe('WorkspaceJournal', () => {
         isCliPanel: true,
         agentType: 'codex',
         lastActivityAt: '2026-08-26T10:00:00.000Z',
-        screenText: 'output\n> ship it\n',
+        screen: { screenText: 'output\n› ship it\n', typedText: 'output\n› ship it\n' },
       }),
     });
     journal.send('session:created', { id: 'pane-1', name: 'Monitor', worktreePath: '/repo/monitor' });
@@ -110,13 +123,14 @@ describe('WorkspaceJournal', () => {
     ]);
   });
 
-  it('does not report the Claude Code prompt suggestion as held input', () => {
-    const screens = new Map<string, string>([
-      ['panel-suggestion', 'done\n> Try "fix the bug"\n'],
-      ['panel-real', 'done\n> please rerun tests\n'],
+  it('does not report the Claude Code prompt suggestion as held input', async () => {
+    const screens = new Map<string, WorkspaceHeldInputScreen>([
+      ['panel-suggestion', await claudeScreen('\x1b[2mok, keep going\x1b[22m')],
+      ['panel-grey-suggestion', await claudeScreen("\x1b[38;5;246mhow's it going?\x1b[39m")],
+      ['panel-real', await claudeScreen('please rerun tests')],
     ]);
     const journal = new WorkspaceJournal({
-      resolvePanel: panelId => ({ panelId, paneId: 'pane-1', isCliPanel: true, agentType: 'claude', screenText: screens.get(panelId) }),
+      resolvePanel: panelId => ({ panelId, paneId: 'pane-1', isCliPanel: true, agentType: 'claude', screen: screens.get(panelId) }),
     });
     journal.send('session:created', { id: 'pane-1', name: 'Monitor' });
     for (const panelId of screens.keys()) {
@@ -125,10 +139,12 @@ describe('WorkspaceJournal', () => {
     }
 
     const ready = journal.readAfter(0, { kinds: ['agent.ready'], includeHeldInput: true, includeHeldInputPresence: true }).entries;
-    expect(ready.map(entry => entry.panelId)).toEqual(['panel-suggestion', 'panel-real']);
-    expect(ready[0]).not.toHaveProperty('heldInput');
-    expect(ready[0]).not.toHaveProperty('heldInputPresent');
-    expect(ready[1]).toMatchObject({ heldInput: 'please rerun tests', heldInputPresent: true });
+    expect(ready.map(entry => entry.panelId)).toEqual(['panel-suggestion', 'panel-grey-suggestion', 'panel-real']);
+    for (const suggestion of ready.slice(0, 2)) {
+      expect(suggestion).not.toHaveProperty('heldInput');
+      expect(suggestion).not.toHaveProperty('heldInputPresent');
+    }
+    expect(ready[2]).toMatchObject({ heldInput: 'please rerun tests', heldInputPresent: true });
   });
 
   it('clears the ready clock when a panel becomes busy or exits', () => {
