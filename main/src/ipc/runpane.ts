@@ -110,6 +110,7 @@ import type {
   RunpanePaneAgentState,
   RunpaneAgentDetection,
   RunpanePanelBlockedState,
+  RunpaneReadinessReason,
   RunpaneDelivery,
   RunpanePanelCreateRequest,
   RunpanePanelCreateResult,
@@ -239,6 +240,9 @@ const DEFAULT_LAST_MESSAGE_LIMIT = 20_000;
 const LAST_MESSAGE_TRUNCATION_MARKER = '[earlier text truncated]\n';
 const DEFAULT_PANEL_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_PANEL_WAIT_INTERVAL_MS = 500;
+/** How much of a blocking prompt a blocked result quotes. */
+const BLOCKED_PROMPT_LINES = 12;
+const BLOCKED_PROMPT_CHARS = 1_500;
 const DEFAULT_COMPOSER_VERIFY_TIMEOUT_MS = 3_000;
 const DEFAULT_COMPOSER_VERIFY_INTERVAL_MS = 100;
 // The transcript settles a delivery the screen leaves open: polled this often, for this long after Enter.
@@ -916,7 +920,7 @@ export function registerRunpaneHandlers(
             readyTimeoutMs: normalized.readyTimeoutMs,
           });
           items.push({
-            ok: Boolean((!readiness || readiness.ok) && (!initialInput || initialInput.submitted)),
+            ok: Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness)),
             index,
             name: item.name,
             pinned: item.pinned !== false,
@@ -1056,7 +1060,7 @@ export function registerRunpaneHandlers(
       });
 
       return {
-        ok: Boolean((!readiness || readiness.ok) && (!initialInput || initialInput.submitted)),
+        ok: Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness)),
         paneId: pane.id,
         panelId: panel.id,
         title: panel.title,
@@ -1950,9 +1954,9 @@ async function createTerminalPanelForSession(
   );
   const launch = options.launch !== false;
   const waitReady = launch && options.waitReady;
+  // A waited create delivers its own typed message, to the declared agent or the one Pane detects.
   const shouldCreateSubmitInitialInput = Boolean(
     waitReady &&
-    tool.agent &&
     tool.initialInput &&
     !useArgumentDelivery,
   );
@@ -2007,9 +2011,44 @@ async function createTerminalPanelForSession(
     }))
     : undefined;
 
-  const initialInput = readiness ? await submitCreateInitialInput(panel, tool, useArgumentDelivery, readiness, session.worktreePath) : undefined;
+  const initialInput = readiness
+    ? await submitCreateInitialInput(panel, tool, useArgumentDelivery, readiness, session.worktreePath)
+    : unawaitedInitialInput(panel, tool, useArgumentDelivery);
 
   return { panel, readiness, initialInput, promptFile, warnings };
+}
+
+/**
+ * Whether a create's starting message counts as delivered for its `ok`:
+ * Claude and Codex need a verified submit, agents Pane cannot verify
+ * (Cursor, OpenCode) need it sent. An unawaited message never fails a create.
+ */
+function isInitialInputDelivered(initialInput: RunpaneInitialInputDeliveryResult | undefined, readiness: RunpanePaneReadiness | undefined): boolean {
+  if (!initialInput || !readiness) return true;
+  return initialInput.verifiedSubmitted === true || (initialInput.verification === 'unverifiable' && initialInput.submitted);
+}
+
+/** A starting message the create did not wait for: the terminal manager sends it once the agent is ready. */
+function unawaitedInitialInput(
+  panel: ToolPanel,
+  tool: RunpaneResolvedTool,
+  useArgumentDelivery: boolean,
+): RunpaneInitialInputDeliveryResult | undefined {
+  if (!tool.initialInput) return undefined;
+  return {
+    delivered: false,
+    submitted: false,
+    verifiedSubmitted: false,
+    inputBytes: Buffer.byteLength(tool.initialInput, 'utf8'),
+    delivery: {
+      state: 'unknown',
+      evidence: useArgumentDelivery ? 'argv' : 'screen',
+      message: useArgumentDelivery
+        ? 'The message goes to the agent as a launch argument; this call did not wait (--wait-ready), so delivery is not verified.'
+        : 'Pane sends the message once the agent\'s input box is ready; this call did not wait (--wait-ready), so delivery is not verified.',
+    },
+    nextCommand: panelWaitCommand(panel.id),
+  };
 }
 
 async function submitCreateInitialInput(
@@ -2031,9 +2070,12 @@ async function submitCreateInitialInput(
     const sentAt = optionalString(customState.initialInputSentAt);
     const deliveryError = optionalString(customState.initialInputError);
     const delivered = Boolean(sentAt) && !deliveryError;
-    const delivery: RunpaneDelivery = delivered && readiness?.ok === true
-      ? await argumentDelivery(panel, tool, cwd, sentAt)
-      : { state: 'unknown', evidence: 'argv' };
+    const verifiable = tool.agent === 'claude' || tool.agent === 'codex';
+    const delivery: RunpaneDelivery = !verifiable
+      ? { state: 'unknown', evidence: 'argv', message: unverifiableDeliveryMessage(tool.agent) }
+      : delivered && readiness?.ok === true
+        ? await argumentDelivery(panel, tool, cwd, sentAt)
+        : { state: 'unknown', evidence: 'argv' };
     const result: RunpaneInitialInputDeliveryResult = {
       delivered,
       submitted: delivered,
@@ -2041,6 +2083,7 @@ async function submitCreateInitialInput(
       strategy: 'argument',
       sequenceName: 'argument',
       verifiedSubmitted: delivery.state === 'taken' || delivery.state === 'queued',
+      verification: verifiable ? undefined : 'unverifiable',
       delivery,
       sentAt,
       nextCommand: readiness?.nextCommand ?? panelWaitCommand(panel.id),
@@ -2053,38 +2096,116 @@ async function submitCreateInitialInput(
     return result;
   }
 
-  if (!tool.agent || !readiness) {
+  if (!readiness) {
     return undefined;
   }
+  const inputBytes = Buffer.byteLength(tool.initialInput, 'utf8');
 
   if (!readiness.ok) {
-    await clearInitialInputSentPremark(panel);
-    terminalPanelManager.deliverPendingInitialInput(panel.id);
+    // A prompt the person can answer, or an agent still starting, gets the message once it is ready.
+    if (readiness.blocked || readiness.state.agentType) {
+      await clearInitialInputSentPremark(panel);
+      terminalPanelManager.deliverPendingInitialInput(panel.id);
+      return {
+        delivered: false,
+        submitted: false,
+        verifiedSubmitted: false,
+        inputBytes,
+        error: {
+          message: readiness.blocked
+            ? 'The panel is waiting at a prompt, so the starting message was not sent. Pane sends it once the prompt is answered and the agent\'s input box is ready.'
+            : 'The agent is not ready yet, so the starting message was not sent. Pane sends it once the agent\'s input box is ready.',
+        },
+        nextCommand: readiness.nextCommand ?? panelWaitCommand(panel.id),
+      };
+    }
+    // No agent to give it to: never type it into a shell or a wrapper.
+    const message = `${readiness.reason?.code === 'command-exited' ? 'The launch command exited' : 'No supported agent appeared'}, so the starting message was not sent. `
+      + 'Pane will not type it into the shell. Check the screen, then send it with runpane panels submit once an agent is running.';
+    await markInitialInputUndelivered(panel, message);
+    logStartingMessage(panel.id, 'not sent', { bytes: inputBytes, reason: readiness.reason?.code ?? 'not-ready' });
     return {
       delivered: false,
       submitted: false,
       verifiedSubmitted: false,
-      inputBytes: Buffer.byteLength(tool.initialInput, 'utf8'),
-      error: { message: 'The agent is not ready yet, so initial input is queued and sent once it is.' },
-      nextCommand: readiness.nextCommand ?? panelWaitCommand(panel.id),
+      inputBytes,
+      error: { message },
+      nextCommand: panelScreenCommand(panel.id),
     };
   }
 
-  if (tool.agent !== 'claude' && tool.agent !== 'codex') {
-    const paste = tool.agent === 'opencode' && isLongPrompt(tool.initialInput)
+  const agent = tool.agent ?? readiness.state.agentType;
+  if (!agent) {
+    // A plain terminal with no launch command: its bytes as typed, then Enter.
+    terminalPanelManager.writeToTerminal(panel.id, ensureSubmitEnter(tool.initialInput));
+    return { delivered: true, submitted: true, verifiedSubmitted: false, verification: 'unverifiable', inputBytes, nextCommand: panelScreenCommand(panel.id) };
+  }
+  // An agent's composer reads CR as Enter; a detected agent gets the same text a declared one would.
+  const text = tool.agent ? tool.initialInput : stripTrailingNewlines(normalizePromptNewlines(tool.initialInput));
+  const agentTool: RunpaneResolvedTool = { ...tool, agent, initialInput: text };
+  const detection = tool.agent ? 'declared' : panelAgentDetection(panel) ?? 'detected';
+
+  if (agent !== 'claude' && agent !== 'codex') {
+    const paste = agent === 'opencode' && isLongPrompt(text)
       && terminalPanelManager.isBracketedPasteEnabled(panel.id);
-    terminalPanelManager.writeToTerminal(panel.id, paste ? bracketedPaste(tool.initialInput) : tool.initialInput);
+    logStartingMessage(panel.id, 'writing', { agent, detection, bytes: Buffer.byteLength(text, 'utf8'), submit: 'enter' });
+    terminalPanelManager.writeToTerminal(panel.id, paste ? bracketedPaste(text) : text);
     await sleep(300);
     if (paste) await waitForPanelOutputQuiet(panel.id);
-    return submitCreateComposerInput(panel, tool, tool.initialInput);
+    const result = await submitCreateComposerInput(panel, agentTool, text);
+    const unverifiable: RunpaneInitialInputDeliveryResult = {
+      ...result,
+      verification: 'unverifiable',
+      delivery: { state: 'unknown', evidence: 'screen', message: unverifiableDeliveryMessage(agent) },
+    };
+    logStartingMessage(panel.id, 'sent', { agent, delivery: 'unknown', submitted: result.submitted });
+    return unverifiable;
   }
-  const staged = await stageComposerText(panel, tool.agent, tool.initialInput);
-  return submitCreateComposerInput(panel, tool, staged.evidenceText, composerDeliveryProbe(panel, cwd, tool.agent, tool.initialInput));
+  logStartingMessage(panel.id, 'writing', {
+    agent, detection, bytes: Buffer.byteLength(text, 'utf8'), submit: agent === 'codex' ? 'codex-ctrl-enter' : 'enter',
+  });
+  const staged = await stageComposerText(panel, agent, text);
+  const result = await submitCreateComposerInput(panel, agentTool, staged.evidenceText, composerDeliveryProbe(panel, cwd, agent, text));
+  logStartingMessage(panel.id, result.verifiedSubmitted ? 'confirmed' : 'unconfirmed', {
+    agent, delivery: result.delivery?.state ?? 'unknown', evidence: result.delivery?.evidence, attempts: result.attempts,
+  });
+  return result;
+}
+
+function unverifiableDeliveryMessage(agent: RunpaneAgentId | undefined): string {
+  const title = agent ? AGENT_TEMPLATES[agent].title : 'this agent';
+  return `Pane cannot verify that ${title} accepted the message; check its screen.`;
+}
+
+function panelAgentDetection(panel: ToolPanel): string | undefined {
+  const customState = (panelManager.getPanel(panel.id) ?? panel).state.customState;
+  return isRecord(customState) ? optionalString(customState.agentDetection) : undefined;
+}
+
+/**
+ * One log line when Pane writes a create's starting message and one when it
+ * confirms or gives up. Never the message text.
+ */
+function logStartingMessage(panelId: string, event: string, fields: Record<string, string | number | boolean | undefined>): void {
+  const detail = Object.entries(fields)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' ');
+  console.log(`[Runpane] Starting message ${event} for panel ${panelId}: ${detail}`);
+}
+
+/** Record that the create's starting message was not sent; the pre-mark stays so nothing types it later. */
+async function markInitialInputUndelivered(panel: ToolPanel, message: string): Promise<void> {
+  const currentPanel = panelManager.getPanel(panel.id) ?? panel;
+  const state = currentPanel.state ?? {};
+  const customState = isRecord(state.customState) ? state.customState : {};
+  await panelManager.updatePanel(panel.id, { state: { ...state, customState: { ...customState, initialInputError: message } } });
 }
 
 /**
  * Launch arguments prove routing, not acceptance. Verify the recorded turn or
- * a visible queue acknowledgement. One read: create has already waited for ready.
+ * a visible queue acknowledgement, giving the transcript the delivery window
+ * from launch to appear.
  */
 async function argumentDelivery(
   panel: ToolPanel,
@@ -2101,6 +2222,10 @@ async function argumentDelivery(
   const screen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
   if (probe && screenShowsQueuedMessage(screen.text, probe.agentType, tool.initialInput ?? '')) {
     return { state: 'queued', evidence: 'screen' };
+  }
+  if (probe && !Number.isNaN(sentAtMs)) {
+    const late = await waitForTranscriptDelivery({ ...probe, sentAtMs }, Math.max(TRANSCRIPT_POLL_INTERVAL_MS, TRANSCRIPT_DELIVERY_TIMEOUT_MS - (Date.now() - sentAtMs)));
+    if (late) return late;
   }
   return { state: 'unknown', evidence: 'argv' };
 }
@@ -2349,7 +2474,7 @@ async function createPaneItem(
       readyTimeoutMs: options.readyTimeoutMs,
     });
 
-    const itemOk = Boolean((!readiness || readiness.ok) && (!initialInput || initialInput.submitted));
+    const itemOk = Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness));
     return {
       ok: itemOk,
       index,
@@ -2431,7 +2556,7 @@ class RunpaneCodedError extends Error {
 }
 
 function isPaneCreateItemSuccessful(item: RunpanePaneCreateResultItem): boolean {
-  return item.ok && (!item.readiness || item.readiness.ok) && (!('initialInput' in item) || !item.initialInput || item.initialInput.submitted);
+  return item.ok && (!item.readiness || item.readiness.ok) && (!('initialInput' in item) || isInitialInputDelivered(item.initialInput, item.readiness));
 }
 
 /**
@@ -2485,6 +2610,7 @@ function toPaneReadiness(result: RunpanePanelWaitResult): RunpanePaneReadiness {
     elapsedMs: result.elapsedMs,
     state: result.state,
     blocked: result.blocked,
+    reason: result.reason,
     nextCommand: result.nextCommand,
   };
 }
@@ -2587,13 +2713,14 @@ async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest):
   let condition = request.condition ?? defaultWaitCondition(lastScreen.state);
   let requiresFirstEvaluation = true;
   let readyCandidate = false;
+  const launched = Boolean(panelLaunchCommand(panel));
 
   while (requiresFirstEvaluation || Date.now() - startedAt <= timeoutMs) {
     requiresFirstEvaluation = false;
     lastScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
     condition = request.condition ?? defaultWaitCondition(lastScreen.state);
     const blocked = detectPanelBlocker(lastScreen.text, lastScreen.state.agentType, panel.id);
-    const matched = isWaitConditionMatched(condition, lastScreen, request.contains, blocked);
+    const matched = isWaitConditionMatched(condition, lastScreen, request.contains, blocked, launched);
 
     // Codex briefly paints a usable-looking composer before its first-run menu.
     // Confirm CLI readiness on the next poll instead of accepting that boot frame.
@@ -2605,31 +2732,68 @@ async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest):
     if (blocked && condition !== 'text') {
       return panelWaitResult(panel, condition, false, false, startedAt, lastScreen, blocked);
     }
+    if (condition === 'ready' && launched && !lastScreen.state.agentType && terminalPanelManager.hasLaunchCommandExited(panel.id)) {
+      return panelWaitResult(panel, condition, false, false, startedAt, lastScreen, undefined, {
+        code: 'command-exited',
+        message: 'The launch command exited back to the shell without starting a supported agent, so the panel will not become ready. '
+          + 'Nothing was sent to it. Check the command on screen, or pass --agent if it runs an agent Pane should recognise.',
+      });
+    }
 
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) break;
     await sleep(Math.min(intervalMs, Math.max(1, timeoutMs / 2), remainingMs));
   }
 
-  return panelWaitResult(panel, condition, false, true, startedAt, lastScreen);
+  const reason = condition === 'ready' && launched ? readinessTimeoutReason(lastScreen.state, timeoutMs) : undefined;
+  return panelWaitResult(panel, condition, false, true, startedAt, lastScreen, undefined, reason);
+}
+
+/** The command a terminal panel launched in its shell, if it launched one. */
+function panelLaunchCommand(panel: ToolPanel): string | undefined {
+  const customState = (panelManager.getPanel(panel.id) ?? panel).state.customState;
+  return isRecord(customState) ? optionalString(customState.initialCommand) : undefined;
+}
+
+function readinessTimeoutReason(state: RunpanePanelStateSummary, timeoutMs: number): RunpaneReadinessReason {
+  const seconds = Math.round(timeoutMs / 100) / 10;
+  if (!state.agentType) {
+    return {
+      code: 'no-agent-detected',
+      message: `The command showed no supported agent within ${seconds} s, so it is not ready and nothing was sent to it. `
+        + 'Check the screen for a prompt it is waiting on, wait longer with --ready-timeout-ms, or pass --agent if it runs an agent Pane should recognise.',
+    };
+  }
+  return {
+    code: 'agent-not-ready',
+    message: `Pane detected ${AGENT_TEMPLATES[state.agentType].title}, but its input box was not ready within ${seconds} s. `
+      + 'Check the screen, then wait again.',
+  };
 }
 
 function defaultWaitCondition(state: RunpanePanelStateSummary): RunpanePanelWaitCondition {
   return state.isCliPanel ? 'ready' : 'idle';
 }
 
+/**
+ * `ready` for a launched command means an identified agent at its own input
+ * box: declared, or detected from the command, process or screen. A plain
+ * shell with no launch command is ready once it exists.
+ */
 function isWaitConditionMatched(
   condition: RunpanePanelWaitCondition,
   screen: RunpanePanelScreenResult,
   contains: string | undefined,
-  blocked?: RunpanePanelBlockedState,
+  blocked: RunpanePanelBlockedState | undefined,
+  launched: boolean,
 ): boolean {
   switch (condition) {
     case 'initialized':
       return screen.state.initialized;
     case 'ready':
       if (blocked || !screen.state.initialized) return false;
-      if (!screen.state.isCliPanel) return true;
+      if (!screen.state.isCliPanel && !launched) return true;
+      if (!screen.state.agentType) return false;
       if (screen.state.agentType === 'codex' && !hasConfiguredCodexScreen(screen.text)) return false;
       // A composer alone is enough for Claude; Codex also has a provisional one.
       return screen.state.isCliReady === true
@@ -2649,9 +2813,10 @@ function panelWaitResult(
   startedAt: number,
   screen: RunpanePanelScreenResult,
   blocked?: RunpanePanelBlockedState,
+  reason?: RunpaneReadinessReason,
 ): RunpanePanelWaitResult {
   return {
-    ok: matched && !timedOut && !blocked,
+    ok: matched && !timedOut && !blocked && !reason,
     panelId: panel.id,
     paneId: panel.sessionId,
     condition,
@@ -2660,12 +2825,13 @@ function panelWaitResult(
     elapsedMs: Date.now() - startedAt,
     state: screen.state,
     blocked,
+    reason,
     screen: {
       source: screen.source,
       text: screen.text,
       hasMore: screen.hasMore,
     },
-    nextCommand: blocked?.suggestedCommand ?? (matched ? panelScreenCommand(panel.id) : panelWaitCommand(panel.id, condition)),
+    nextCommand: blocked?.suggestedCommand ?? (matched || reason ? panelScreenCommand(panel.id) : panelWaitCommand(panel.id, condition)),
   };
 }
 
@@ -2677,7 +2843,7 @@ function detectPanelBlocker(
   if (!text) return undefined;
 
   const daemonChoice = text.match(/^\s*[›❯>]?\s*(\d+)\.\s*Run without daemon this time/im);
-  if (daemonChoice && /cannot use the background server/i.test(text)) {
+  if (daemonChoice && /cannot use the background server|background server has incompatible/i.test(text)) {
     return {
       kind: 'first-run-dialog',
       message: text.trim(),
@@ -2699,6 +2865,28 @@ function detectPanelBlocker(
     };
   }
 
+  // Agent Farm asks on stderr before it starts the agent; trust is the person's call.
+  if (/Trust this repository workspace\?\s*\[y\/N\]\s*$/i.test(lastNonEmptyLine(text))) {
+    return {
+      kind: 'first-run-dialog',
+      message: `${promptExcerpt(text)}\n\nAgent Farm is waiting for approval of this repository's workspace file, so the agent has not started. `
+        + 'Pane does not answer trust prompts. Review the workspace above, then answer in the panel, or approve it with '
+        + '`agent-farm workspace trust` in the Pane\'s worktree.',
+      suggestedCommand: panelScreenCommand(panelId),
+    };
+  }
+
+  // Codex 0.160 draws this over a live composer: a typed prompt would continue past it, a leading digit would choose.
+  if ((agentType === 'codex' || /codex/i.test(text)) && /^\s*[›❯>]?\s*\d+\.\s*Set up security\s*$/im.test(text) && /esc to dismiss/i.test(text)) {
+    // Quote the banner itself, not the composer under it.
+    const banner = text.slice(text.search(/^.*Set up security/im)).split(/(?<=esc to dismiss.*)\n/i)[0] ?? text;
+    return {
+      kind: 'agent-prompt',
+      message: promptExcerpt(banner),
+      suggestedCommand: `runpane panels input --panel ${panelId} --keys esc --yes --json`,
+    };
+  }
+
   if (
     (agentType === 'codex' || /codex/i.test(text)) &&
     /update available/i.test(text) &&
@@ -2714,15 +2902,32 @@ function detectPanelBlocker(
   // Scan the current screen as well as reading the published status, which lags it by up to one poll.
   const screenBlocked = detectAgentState(getManifestForAgent(agentType), { screen: text, oscTitle: '', oscProgress: '' })
     .state === 'blocked';
-  if (/press enter to continue/i.test(text) || screenBlocked || terminalPanelManager.getAgentStatus(panelId) === 'blocked') {
+  // Before a declared agent is on screen, its wrapper or the shell may be asking: read that with the generic rules.
+  const preAgentBlocked = agentType !== undefined
+    && !detectAgentFromScreen(text)
+    && !detectAgentComposer(text, agentType).isPresent
+    && detectAgentState(getManifestForAgent(undefined), { screen: text, oscTitle: '', oscProgress: '' }).state === 'blocked';
+  if (/press enter to continue/i.test(text) || screenBlocked || preAgentBlocked || terminalPanelManager.getAgentStatus(panelId) === 'blocked') {
     return {
       kind: 'agent-prompt',
-      message: 'The terminal is waiting at an interactive prompt.',
+      message: `The terminal is waiting at an interactive prompt:\n${promptExcerpt(text)}`,
       suggestedCommand: panelScreenCommand(panelId),
     };
   }
 
   return undefined;
+}
+
+function lastNonEmptyLine(text: string): string {
+  return text.split('\n').filter(line => line.trim()).at(-1) ?? '';
+}
+
+/** A prompt's own last lines, bounded, so a blocked result says what is being asked. */
+function promptExcerpt(text: string): string {
+  const lines = text.split('\n').map(line => line.trimEnd());
+  while (lines.length > 0 && !lines.at(-1)?.trim()) lines.pop();
+  const excerpt = lines.slice(-BLOCKED_PROMPT_LINES).join('\n').trim();
+  return excerpt.length > BLOCKED_PROMPT_CHARS ? excerpt.slice(-BLOCKED_PROMPT_CHARS) : excerpt;
 }
 
 function ensureSubmitEnter(input: string): string {

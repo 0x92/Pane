@@ -76,6 +76,15 @@ const INPUT_SETTLE_MAX_MS = 3000;
 const CLAUDE_INPUT_SETTLE_MIN_MS = 150;
 const CODEX_INPUT_SETTLE_MIN_MS = 500;
 const CODEX_SUBMIT_SEQUENCE = '\x1b[13;5u\r';
+// A launch command whose shell is back at its prompt this long after the
+// command was written has exited (or never started an agent).
+const LAUNCH_EXIT_GRACE_MS = 1500;
+const SHELL_PROMPT_LINE = /[$#%>]\s*$/;
+// Held starting message for a launch whose agent Pane has not identified:
+// given up (never typed) after this long without an agent or a blocking prompt.
+const HELD_INPUT_AGENT_WINDOW_MS = 30_000;
+// How long after the submit key the composer is read to log the outcome.
+const INPUT_OUTCOME_DELAY_MS = 1500;
 // Archive waits for the real OS exit of a session's PTY processes before its
 // worktree is removed. A shell leaves within milliseconds of its kill; the
 // grace covers an agent flushing its transcript, after which the tree is taken
@@ -98,7 +107,7 @@ import {
   resolveAgentTypeFromExecutablePath,
   resolveAgentTypeFromProcessName,
 } from './agents/agentIdentity';
-import { detectAgentFromScreen } from './agents/agentScreenSignature';
+import { detectAgentComposer, detectAgentFromScreen } from './agents/agentScreenSignature';
 import { readForegroundExecutablePath } from '../utils/foregroundProcess';
 import { buildCursorLaunchCommand, createCursorReadyDetector, extractCursorChatId } from './agents/cursorLaunch';
 import { resolveOpenCodeLaunchCommand } from './agents/opencodeLaunch';
@@ -299,6 +308,10 @@ interface TerminalProcess {
   lastStatusScan?: { screen: ScreenState; detection: AgentDetectionResult };
   /** The CLI came up with typed initial input still to send; the status poll sends it. */
   initialInputHeld?: boolean;
+  /** When Pane wrote the panel's launch command to its shell. */
+  launchCommandWrittenAt?: number;
+  /** While no agent is identified: when the held starting message last had a reason to keep waiting. */
+  initialInputHeldSince?: number;
   /** Set only for direct OpenCode launches; status detection calls it on the idle composer frame. */
   onOpenCodeReady?: () => void;
   /**
@@ -701,7 +714,13 @@ export class TerminalPanelManager extends EventEmitter {
         return;
       }
 
-      this.writeInitialInput(panelId, delivery.input, delivery.submitStrategy);
+      // A detected Codex submits with its own sequence, whatever was stored at create.
+      const submitStrategy = terminal.agentType === 'codex' ? 'codex-ctrl-enter' : delivery.submitStrategy;
+      console.log(`[TerminalPanelManager] Starting message writing for panel ${panelId}: ${this.startingMessageFields(terminal, {
+        bytes: Buffer.byteLength(delivery.input, 'utf8'),
+        submit: submitStrategy,
+      })}`);
+      this.writeInitialInput(panelId, delivery.input, submitStrategy);
     }).catch((error) => {
       if (this.terminals.get(panelId) !== terminal || terminal.destroying) return;
       console.warn(`[TerminalPanelManager] Failed to send initial input for panel ${panelId}:`, error);
@@ -715,29 +734,42 @@ export class TerminalPanelManager extends EventEmitter {
     }
     const currentPanel = panelManager.getPanel(panelId);
     if (!currentPanel) return;
-    const customState = terminalCustomState(currentPanel.state);
-    if (customState.isCliReady !== true) {
-      return;
-    }
-
     this.holdInitialInput(panelId);
   }
 
   /** Queue typed initial input for the status poll to send once the agent can take it. */
   private holdInitialInput(panelId: string): void {
     const terminal = this.terminals.get(panelId);
-    if (terminal) terminal.initialInputHeld = true;
+    if (!terminal) return;
+    terminal.initialInputHeld = true;
+    terminal.initialInputHeldSince = Date.now();
   }
 
   /**
-   * Send held initial input once a known agent's status is idle (ready at its
-   * composer), so it never lands in a trust or permission menu or a startup
-   * frame. Other CLIs take it as soon as they are not blocked.
+   * Send held initial input once an identified agent's status is idle (ready
+   * at its composer), so it never lands in a wrapper, a shell, a trust or
+   * permission menu, or a startup frame. With no agent identified it waits,
+   * restarting the wait while a prompt blocks, and gives up without typing
+   * after HELD_INPUT_AGENT_WINDOW_MS.
    */
-  private releaseHeldInitialInput(terminal: TerminalProcess, manifestId: string): void {
+  private releaseHeldInitialInput(terminal: TerminalProcess): void {
     if (!terminal.initialInputHeld) return;
     const status = this.agentStatusMonitor.getState(terminal.panelId);
-    if (status === 'blocked' || (manifestId !== 'generic' && status !== 'idle')) return;
+    if (!terminal.agentType) {
+      const now = Date.now();
+      if (status === 'blocked' || terminal.initialInputHeldSince === undefined) terminal.initialInputHeldSince = now;
+      if (now - terminal.initialInputHeldSince < HELD_INPUT_AGENT_WINDOW_MS) return;
+      terminal.initialInputHeld = false;
+      // A create that waits for readiness has claimed the message and reports it itself.
+      const panel = panelManager.getPanel(terminal.panelId);
+      if (!panel || terminalCustomState(panel.state).initialInputSentAt) return;
+      const message = `No supported agent appeared within ${HELD_INPUT_AGENT_WINDOW_MS / 1000} s, so the starting message was not sent. `
+        + 'Pane will not type it into the shell. Send it with runpane panels submit once an agent is running.';
+      console.warn(`[TerminalPanelManager] Starting message not sent for panel ${terminal.panelId}: no supported agent detected`);
+      this.markInitialInputError(terminal.panelId, message).catch(() => {});
+      return;
+    }
+    if (status !== 'idle') return;
     terminal.initialInputHeld = false;
     this.sendInitialInputOnce(terminal.panelId);
   }
@@ -776,6 +808,35 @@ export class TerminalPanelManager extends EventEmitter {
     await this.waitForInputSettle(terminal, generation, isCodex ? CODEX_INPUT_SETTLE_MIN_MS : CLAUDE_INPUT_SETTLE_MIN_MS);
     if (this.terminals.get(terminal.panelId) !== terminal || terminal.destroying) return;
     this.writeToTerminal(terminal.panelId, isCodex ? CODEX_SUBMIT_SEQUENCE : '\r');
+    await new Promise(resolve => setTimeout(resolve, INPUT_OUTCOME_DELAY_MS));
+    if (this.terminals.get(terminal.panelId) !== terminal || terminal.destroying) return;
+    const composer = detectAgentComposer(terminal.screenEmulator?.state.screenText ?? '', terminal.agentType, {
+      typedText: this.getInputScreenText(terminal.panelId),
+      ghostText: this.getGhostScreenText(terminal.panelId),
+    });
+    const outcome = !composer.isPresent ? 'unknown' : composer.hasUndeliveredText ? 'in-composer' : 'composer-cleared';
+    console.log(`[TerminalPanelManager] Starting message submitted for panel ${terminal.panelId}: ${this.startingMessageFields(terminal, { delivery: outcome })}`);
+  }
+
+  /** Fields for the starting-message log lines; never the message text. */
+  private startingMessageFields(terminal: TerminalProcess, extra: Record<string, string | number>): string {
+    const panel = panelManager.getPanel(terminal.panelId);
+    const customState = panel ? terminalCustomState(panel.state) : {};
+    const fields = {
+      agent: terminal.agentType ?? 'none',
+      detection: customState.agentDetection,
+      ...extra,
+      agentFarmSession: this.getLaunchSessionId(terminal.panelId),
+    };
+    return Object.entries(fields).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}=${value}`).join(' ');
+  }
+
+  /** The launch ID a wrapper such as Agent Farm printed as `PANE_AGENT_SESSION_ID=<id>`, if it did. */
+  getLaunchSessionId(panelId: string): string | undefined {
+    const terminal = this.terminals.get(panelId);
+    if (!terminal) return undefined;
+    if (terminal.capturedAgentSessionId) return terminal.capturedAgentSessionId;
+    return Array.from(terminal.scrollbackBuffer.slice(-20_000).matchAll(/(?:^|[\r\n])PANE_AGENT_SESSION_ID=([A-Za-z0-9][A-Za-z0-9._:-]{0,255})(?=[\r\n])/g)).at(-1)?.[1];
   }
 
   /** Resolve once the terminal has output since `generation` and then a quiet window, or after a bound. */
@@ -1620,6 +1681,7 @@ export class TerminalPanelManager extends EventEmitter {
         if (this.terminals.get(panelId) !== terminalProcess || terminalProcess.destroying) return;
         // The launch command goes ahead of anything typed while the shell started.
         this.releaseHeldInput(terminalProcess, commandToRun! + '\r');
+        terminalProcess.launchCommandWrittenAt = Date.now();
 
         // For CLI tool terminals, signal the frontend when the CLI responds
         if (isCliCommand) {
@@ -1693,9 +1755,8 @@ export class TerminalPanelManager extends EventEmitter {
           // Safety timeout: dismiss after 10s regardless
           setTimeout(() => signalCliReady(false), 10000);
         } else if (initialInput) {
-          setTimeout(() => {
-            if (this.terminals.get(panelId) === terminalProcess && !terminalProcess.destroying) this.sendInitialInputOnce(panelId);
-          }, 1000);
+          // A command Pane does not know yet may be a wrapper: its message waits for an identified agent.
+          this.holdInitialInput(panelId);
         }
       };
 
@@ -2385,7 +2446,7 @@ export class TerminalPanelManager extends EventEmitter {
         ) {
           terminal.onOpenCodeReady?.();
         }
-        this.releaseHeldInitialInput(terminal, manifest.id);
+        this.releaseHeldInitialInput(terminal);
       }
     } catch (error) {
       console.error('[TerminalPanelManager] agent status poll failed:', error);
@@ -2402,6 +2463,21 @@ export class TerminalPanelManager extends EventEmitter {
     const name = this.readForegroundProcessName(terminal);
     if (!name) return undefined;
     return { name, isShell: this.isInteractiveShellProcess(terminal, name) };
+  }
+
+  /**
+   * The panel's launch command ran and Pane's own shell is back at its prompt
+   * with no agent identified: the command exited, or ran no agent. False
+   * where the foreground process is unknown (Windows, WSL, ptyHost).
+   */
+  hasLaunchCommandExited(panelId: string): boolean {
+    const terminal = this.terminals.get(panelId);
+    if (!terminal || terminal.destroying || terminal.agentType || terminal.launchCommandWrittenAt === undefined) return false;
+    if (Date.now() - terminal.launchCommandWrittenAt < LAUNCH_EXIT_GRACE_MS) return false;
+    const name = this.readForegroundProcessName(terminal);
+    if (!name || !this.isInteractiveShellProcess(terminal, name)) return false;
+    const lines = (terminal.screenEmulator?.state.screenText ?? '').split('\n').filter(line => line.trim());
+    return SHELL_PROMPT_LINE.test(lines.at(-1) ?? '');
   }
 
   private readForegroundProcessName(terminal: TerminalProcess): string | undefined {

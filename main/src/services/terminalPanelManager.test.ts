@@ -993,9 +993,11 @@ describe('TerminalPanelManager hidden output delivery', () => {
   it('delivers pending ready initial input with the panel submit strategy', async () => {
     vi.useFakeTimers();
     const manager = testAccess<InitialInputAccess>(new TerminalPanelManager());
-    const terminal = createTerminal({ screenEmulator: inProcessEmulatorHost().createEmulator(40, 5) });
+    const terminal = createTerminal({ agentType: 'codex', screenEmulator: inProcessEmulatorHost().createEmulator(40, 5) });
     manager.terminals.set(terminal.panelId, terminal);
     manager.registerAgentStatusPanel(terminal);
+    // Held input goes only to an identified agent at idle, after its startup grace.
+    vi.setSystemTime(Date.now() + 11_000);
     vi.mocked(panelManager.getPanel).mockReturnValue({
       id: terminal.panelId,
       sessionId: terminal.sessionId,
@@ -1032,10 +1034,12 @@ describe('TerminalPanelManager hidden output delivery', () => {
   });
 
   it('delivers after a premark clear when the cliReady path already skipped', async () => {
+    vi.useFakeTimers();
     const manager = testAccess<InitialInputAccess>(new TerminalPanelManager());
-    const terminal = createTerminal({ screenEmulator: inProcessEmulatorHost().createEmulator(40, 5) });
+    const terminal = createTerminal({ agentType: 'claude', screenEmulator: inProcessEmulatorHost().createEmulator(40, 5) });
     manager.terminals.set(terminal.panelId, terminal);
     manager.registerAgentStatusPanel(terminal);
+    vi.setSystemTime(Date.now() + 11_000);
     const panel = {
       id: terminal.panelId,
       sessionId: terminal.sessionId,
@@ -1064,12 +1068,14 @@ describe('TerminalPanelManager hidden output delivery', () => {
     expect(terminal.pty.write).not.toHaveBeenCalled();
     delete panel.state.customState.initialInputSentAt;
 
+    echoStagedWrites(terminal);
     manager.deliverPendingInitialInput(terminal.panelId);
     manager.pollAgentStatus();
     await flushPromises();
+    await vi.advanceTimersByTimeAsync(500);
 
-    expect(terminal.pty.write).toHaveBeenCalledTimes(1);
-    expect(terminal.pty.write).toHaveBeenCalledWith('/do TM-x\r');
+    // An agent gets the text, then the submit key as its own write.
+    expect(terminal.pty.write.mock.calls).toEqual([['/do TM-x'], ['\r']]);
     disposeFlowControlRecord(terminal.flowControl);
   });
 
