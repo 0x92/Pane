@@ -49,7 +49,8 @@ interface HeadlessFileTreeProps {
   shortcutsActive?: boolean;
 }
 
-function HeadlessFileTree({
+/** @public Mounted directly by tests/fixtures/file-tree-selection.tsx. */
+export function HeadlessFileTree({
   sessionId,
   onFileSelect,
   onFileOpen,
@@ -967,8 +968,8 @@ function HeadlessFileTree({
                 if (element) itemElementRefs.current.set(data.path, element);
                 else itemElementRefs.current.delete(data.path);
               }}
-              className={`flex items-center px-2 py-1 hover:bg-surface-hover cursor-default group ${
-                isItemSelected ? 'bg-interactive' : ''
+              className={`flex items-center px-2 py-1 cursor-default group ${
+                isItemSelected ? 'bg-interactive' : 'hover:bg-surface-hover'
               } ${
                 isOpenFile && !isItemSelected ? 'bg-surface-hover/60' : ''
               } ${
@@ -998,17 +999,14 @@ function HeadlessFileTree({
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                if (e.metaKey || e.ctrlKey) {
-                  item.toggleSelect();
-                } else if (e.shiftKey) {
-                  item.selectUpTo(false);
-                } else {
-                  item.select();
-                }
-                if (isFolder) {
-                  if (isExpanded) item.collapse();
-                  else item.expand();
-                } else {
+                // headless-tree writes the selection: plain click replaces it,
+                // cmd/ctrl toggles, shift ranges from the last plain click. It
+                // also expands or collapses a folder on a plain click.
+                treeItemProps.onClick?.(e);
+                // Opening a file moves the active editor path, whose effect above
+                // resets the selection, so only a plain click opens.
+                if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+                if (!isFolder) {
                   onFileSelect(data, { clickCount: e.detail });
                 }
               }}
@@ -1030,23 +1028,23 @@ function HeadlessFileTree({
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                if (!item.isSelected()) item.select();
+                if (!item.isSelected()) tree.setSelectedItems([item.getId()]);
                 setContextMenu({ x: e.clientX, y: e.clientY, file: data });
               }}
             >
               {isFolder ? (
                 <>
                   {isExpanded ? (
-                    <ChevronDown className="w-4 h-4 mr-1 text-text-tertiary" />
+                    <ChevronDown className={`w-4 h-4 mr-1 ${isItemSelected ? 'text-text-on-interactive' : 'text-text-tertiary'}`} />
                   ) : (
-                    <ChevronRight className="w-4 h-4 mr-1 text-text-tertiary" />
+                    <ChevronRight className={`w-4 h-4 mr-1 ${isItemSelected ? 'text-text-on-interactive' : 'text-text-tertiary'}`} />
                   )}
-                  <Folder className="w-4 h-4 mr-2 text-interactive" />
+                  <Folder className={`w-4 h-4 mr-2 ${isItemSelected ? 'text-text-on-interactive' : 'text-interactive'}`} />
                 </>
               ) : (
                 <>
                   <div className="w-4 h-4 mr-1" />
-                  <File className="w-4 h-4 mr-2 text-text-tertiary" />
+                  <File className={`w-4 h-4 mr-2 ${isItemSelected ? 'text-text-on-interactive' : 'text-text-tertiary'}`} />
                 </>
               )}
               {renamingPath === data.path ? (
@@ -1075,7 +1073,7 @@ function HeadlessFileTree({
                   className="flex-1 min-w-0 px-1 py-0.5 bg-surface-primary border border-interactive rounded text-sm text-text-primary focus:outline-none"
                 />
               ) : (
-                <span className="flex-1 text-sm truncate text-text-primary">{data.name}</span>
+                <span className={`flex-1 text-sm truncate ${isItemSelected ? 'text-text-on-interactive' : 'text-text-primary'}`}>{data.name}</span>
               )}
               {isFolder && (
                 <button
