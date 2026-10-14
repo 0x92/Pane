@@ -4,6 +4,7 @@ import { terminalPanelManager } from './terminalPanelManager';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 import type { AgentState } from '../../../shared/types/agentStatus';
 import { extractWorkspaceHeldInput } from './workspaceHeldInput';
+import { isAgentFarmLaunchCommand } from '../../../shared/types/customCommandResume';
 import type {
   RunpaneWorkspaceEntry,
   RunpaneWorkspaceEntryKind,
@@ -113,9 +114,14 @@ export class WorkspaceStateReader {
         const customState = decodeBoundary(panel.state.customState ?? {}, boundary.object({
           isCliPanel: boundary.optional(boundary.boolean),
           agentType: boundary.optional(boundary.string),
+          initialCommand: boundary.optional(boundary.string),
         }));
         const snapshot = terminalPanelManager.getTerminalSnapshot(panel.id);
-        if ((snapshot?.isCliPanel ?? customState.isCliPanel) !== true) continue;
+        // An Agent Farm panel is an agent panel before its first launch flags it as one,
+        // so a panel stopped before then is still listed and can be resumed.
+        const isAgentPanel = (snapshot?.isCliPanel ?? customState.isCliPanel) === true
+          || isAgentFarmLaunchCommand(customState.initialCommand);
+        if (!isAgentPanel) continue;
         result.push({
           panelId: panel.id,
           paneId: session.id,

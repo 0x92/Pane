@@ -504,7 +504,9 @@ reported once as `panel.stopped` (`STOPPED <pane-name> pane <pane-id> panel
 with the same panel ID and its conversation, using `runpane panels resume
 --panel <panel-id> --wait-ready --yes --json`, or every stopped agent panel of
 the Session at once with `runpane panels resume --session <session-id>
---wait-ready --yes --json`. The bulk form restarts `--concurrency` panels at a
+--wait-ready --yes --json`. A worker started with `agent-farm run <profile>`
+resumes with `--resume` and the launch ID Agent Farm printed, the same rule a
+restart uses (see "Agent Farm" above). The bulk form restarts `--concurrency` panels at a
 time (default 3), leaves running panels alone, waits on the resumed panels
 together, and returns one result per panel with its readiness, blocker, or
 error; `--all-stopped` does the same for every Pane. It relaunches finished

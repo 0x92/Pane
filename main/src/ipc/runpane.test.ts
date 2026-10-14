@@ -3628,6 +3628,27 @@ describe('runpane IPC handlers', () => {
       });
     });
 
+    it('also resumes a stopped Agent Farm panel that never reported an agent', async () => {
+      const agentFarm: ToolPanel = {
+        ...terminalPanel,
+        id: 'panel-agent-farm',
+        title: 'Agent Farm',
+        state: { isActive: false, customState: { initialCommand: 'agent-farm run greenfield/reviewer:codex', launchMode: 'wrapped' } },
+      };
+      panels.push(agentFarm);
+      try {
+        const registry = createRegistry(bulkServices());
+
+        const result = await registry.invoke('runpane:panels:resume-many', [{ allStopped: true }]);
+
+        expect(vi.mocked(terminalPanelManager.initializeTerminal).mock.calls.map(([panel]) => panel.id))
+          .toContain('panel-agent-farm');
+        expect(result).toMatchObject({ ok: true, resumed: 3 });
+      } finally {
+        panels.pop();
+      }
+    });
+
     it('resumes every stopped agent panel with --all-stopped and skips running panels and plain shells', async () => {
       const registry = createRegistry(bulkServices());
 
@@ -3790,6 +3811,35 @@ describe('runpane IPC handlers', () => {
         paneId: session.id,
         action: 'resumed',
         panel: { panelId: terminalPanel.id, running: true },
+      });
+    });
+
+    it('reports the Agent Farm launch ID a wrapper panel resumes with', async () => {
+      const agentFarmPanel: ToolPanel = {
+        ...terminalPanel,
+        title: 'Agent Farm',
+        state: { isActive: false, customState: {
+          initialCommand: 'agent-farm run greenfield/implementer:opus',
+          launchMode: 'wrapped',
+          agentSessionId: 'af-launch-7',
+          customResumeStarted: true,
+        } },
+      };
+      vi.mocked(panelManager.getPanel).mockReturnValue(agentFarmPanel);
+      vi.mocked(terminalPanelManager.isTerminalInitialized).mockReturnValue(false);
+      vi.mocked(terminalPanelManager.initializeTerminal).mockImplementation(async () => {
+        vi.mocked(terminalPanelManager.isTerminalInitialized).mockReturnValue(true);
+      });
+      const registry = createRegistry();
+
+      const result = await registry.invoke('runpane:panels:resume', [{ panelId: agentFarmPanel.id }]);
+
+      expect(result).toMatchObject({
+        ok: true,
+        action: 'resumed',
+        agentSessionId: 'af-launch-7',
+        message: "Relaunched the panel's Agent Farm command with --resume af-launch-7.",
+        panel: { resumeId: 'af-launch-7', resumeSource: 'agent-farm' },
       });
     });
 

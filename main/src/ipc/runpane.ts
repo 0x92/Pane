@@ -2669,7 +2669,6 @@ function panelResumeResult(
   readiness?: RunpanePaneReadiness,
 ): RunpanePanelResumeResult {
   const summary = panelToSummary(panel);
-  const customState = isRecord(panel.state.customState) ? panel.state.customState : {};
   return {
     ok: readiness?.ok ?? true,
     panelId: panel.id,
@@ -2677,7 +2676,7 @@ function panelResumeResult(
     action,
     message,
     agentType: summary.agentType,
-    agentSessionId: summary.agentType ? optionalString(customState.agentSessionId) : undefined,
+    agentSessionId: summary.resumeId,
     panel: summary,
     readiness,
     nextCommand: readiness?.nextCommand ?? (action === 'resumed' ? panelWaitCommand(panel.id) : panelScreenCommand(panel.id)),
@@ -2686,11 +2685,13 @@ function panelResumeResult(
 
 function resumeMessage(panel: ToolPanel): string {
   const customState = isRecord(panel.state.customState) ? panel.state.customState : {};
-  if (!optionalString(customState.initialCommand)) return 'Started a new shell in the panel.';
-  const agentSessionId = optionalString(customState.agentSessionId);
-  return agentSessionId
-    ? `Relaunched the panel's agent, resuming conversation ${agentSessionId}.`
-    : "Relaunched the panel's command.";
+  const initialCommand = optionalString(customState.initialCommand);
+  if (!initialCommand) return 'Started a new shell in the panel.';
+  const { resumeId, resumeSource } = panelResumeSummary(customState, initialCommand);
+  if (!resumeId) return "Relaunched the panel's command.";
+  return resumeSource === 'agent-farm'
+    ? `Relaunched the panel's Agent Farm command with --resume ${resumeId}.`
+    : `Relaunched the panel's agent, resuming conversation ${resumeId}.`;
 }
 
 function toPaneReadiness(result: RunpanePanelWaitResult): RunpanePaneReadiness {
