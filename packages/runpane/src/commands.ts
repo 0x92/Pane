@@ -76,6 +76,8 @@ export interface ParsedArgs {
   watchExcludePaneIds?: string[];
   nameContains?: string;
   follow?: boolean;
+  /** Watch only: wait across daemon calls for the first matching event, print it, and exit 0. */
+  untilEvent?: boolean;
   agentsOnly?: boolean;
   ackNow?: boolean;
   includeHeldInput?: boolean;
@@ -244,6 +246,7 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
   if (parsed.command === 'watch' && parsed.follow && parsed.timeoutMs === 0) {
     throw new Error('--timeout-ms must be greater than 0 with --follow.');
   }
+  if (parsed.command === 'watch' && parsed.untilEvent) validateUntilEventArgs(parsed);
   if (parsed.command === 'watch' && parsed.sessionId !== undefined && parsed.watchPaneIds?.length) {
     throw new Error('runpane watch accepts either --session or --pane, not both; --session already follows every Pane in the Session.');
   }
@@ -268,6 +271,18 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
   }
   if (parsed.command === 'report') validateReportArgs(parsed);
   return parsed;
+}
+
+function validateUntilEventArgs(parsed: ParsedArgs): void {
+  if (parsed.follow) {
+    throw new Error('runpane watch accepts either --until-event or --follow, not both. Use --until-event to exit on the first event, or --follow to stream until interrupted.');
+  }
+  if (parsed.selfTest) {
+    throw new Error('runpane watch accepts either --until-event or --self-test, not both. Run --self-test on its own to probe the watch path.');
+  }
+  if (parsed.timeoutMs === 0) {
+    throw new Error('--timeout-ms must be greater than 0 with --until-event; it is the total deadline. Leave it out to wait as long as it takes.');
+  }
 }
 
 const WORKSPACE_VERBS = new Set(['read', 'write', 'exec']);
@@ -510,6 +525,10 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
   }
   if (flag === '--follow') {
     parsed.follow = true;
+    return;
+  }
+  if (flag === '--until-event') {
+    parsed.untilEvent = true;
     return;
   }
   if (flag === '--idle-backoff') {
