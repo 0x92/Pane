@@ -3556,7 +3556,7 @@ describe('runpane IPC handlers', () => {
       .toMatchObject({ ok: false, timedOut: false, blocked: {
         kind: 'agent-prompt',
         message: expect.stringContaining('Set up security for Daybreak mode'),
-        suggestedCommand: `runpane panels input --panel ${terminalPanel.id} --keys esc --yes --json`,
+        suggestedCommand: `runpane panels input --panel ${terminalPanel.id} --keys escape --yes --json`,
       } });
   });
 

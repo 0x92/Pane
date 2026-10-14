@@ -2883,7 +2883,7 @@ function detectPanelBlocker(
     return {
       kind: 'agent-prompt',
       message: promptExcerpt(banner),
-      suggestedCommand: `runpane panels input --panel ${panelId} --keys esc --yes --json`,
+      suggestedCommand: `runpane panels input --panel ${panelId} --keys escape --yes --json`,
     };
   }
 
