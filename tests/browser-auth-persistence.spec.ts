@@ -119,8 +119,13 @@ test('Clear browser data signs out of every site and removes the old per-project
   }
   let { app, page, site } = await launch(paneDir, baseURL);
   try {
-    await setTabs(page, [{ id: 'tab-a', sessionId: 'session-in-project-a', label: 'Project A', url: `${site}/login` }]);
+    await setTabs(page, [
+      { id: 'tab-a', sessionId: 'session-in-project-a', label: 'Project A', url: `${site}/login` },
+      { id: 'tab-basic', sessionId: 'session-in-project-b', label: 'Password site', url: `${site}/basic-login` },
+    ]);
     await expect.poll(() => status(page, 'tab-a')).toBe('Signed in');
+    // HTTP Basic sign-ins live in the auth cache, which clearing cookies and storage doesn't touch.
+    await expect.poll(() => status(page, 'tab-basic')).toBe('Password signed in');
 
     // Cancel leaves everything as it was.
     await page.getByRole('button', { name: 'Clear browser data' }).click();
@@ -139,6 +144,7 @@ test('Clear browser data signs out of every site and removes the old per-project
     await expect(page.getByText("Browser data cleared. You're signed out of every site in Pane's browser.")).toBeVisible();
     await expect.poll(() => status(page, 'tab-a')).toBe('Signed out');
     expect(await guest(page, 'tab-a', 'document.getElementById("detail").textContent')).toContain('cookie: no, localStorage: no');
+    await expect.poll(() => status(page, 'tab-basic')).toBe('Password signed out');
     await evidence(page, testInfo, 'j5-cleared-and-signed-out');
 
     // After a restart the tab is still signed out and only the stores Pane uses remain.

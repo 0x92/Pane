@@ -14,6 +14,8 @@ app.setPath('userData', path.join(process.env.PANE_DIR, 'electron'));
 
 const page = (body, script = '') => `<!doctype html><title>Login fixture</title><body style="font:20px system-ui;padding:32px;margin:0;min-height:100vh;box-sizing:border-box;background:#f6f7f4;color:#1d2a22">${body}<script>${script}</script></body>`;
 
+const BASIC_CREDENTIALS = `Basic ${Buffer.from('pane:fixture-password').toString('base64')}`;
+
 // One site on two origins (127.0.0.1 and localhost) so the popup is cross-origin.
 function startSite() {
   const server = http.createServer((request, response) => {
@@ -29,6 +31,27 @@ function startSite() {
         document.getElementById('sign-in').onclick = () => {
           if (!window.open('http://localhost:${port}/popup', 'sign-in', 'width=420,height=520')) document.getElementById('status').textContent = 'Popup blocked';
         };`));
+    } else if (pathname === '/basic-api') {
+      // HTTP Basic auth: the browser keeps these credentials in its auth cache, not in cookies or storage.
+      response.setHeader('Cache-Control', 'no-store');
+      if (request.headers.authorization === BASIC_CREDENTIALS) {
+        response.end('authenticated');
+      } else {
+        response.statusCode = 401;
+        response.setHeader('WWW-Authenticate', 'Basic realm="fixture"');
+        response.end('unauthorized');
+      }
+    } else if (pathname === '/basic-login') {
+      response.end(page('Signing in with a password…', `
+        const request = new XMLHttpRequest();
+        request.open('GET', '/basic-api', true, 'pane', 'fixture-password');
+        request.onload = () => location.replace('/basic');
+        request.send();`));
+    } else if (pathname === '/basic') {
+      response.end(page('<p id="status"></p>', `
+        fetch('/basic-api', { cache: 'no-store' }).then(r => {
+          document.getElementById('status').textContent = r.ok ? 'Password signed in' : 'Password signed out';
+        });`));
     } else if (pathname === '/popup') {
       response.setHeader('Set-Cookie', 'pane_popup=1; Max-Age=86400; Path=/');
       response.end(page('Popup signed in', "window.opener.postMessage('popup-signed-in', '*');"));

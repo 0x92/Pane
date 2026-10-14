@@ -24,6 +24,8 @@ function createSharedSession() {
   return {
     clearStorageData: vi.fn(() => Promise.resolve()),
     clearCache: vi.fn(() => Promise.resolve()),
+    clearAuthCache: vi.fn(() => Promise.resolve()),
+    closeAllConnections: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -95,5 +97,58 @@ describe('clearBrowserData', () => {
     await clearBrowserData({ userDataPath: userData, sharedSession, reloadBrowserTabs });
 
     expect(await partitionsOf(userData)).toEqual(['pane-browser', 'pane-docs']);
+  });
+
+  it('forgets saved HTTP sign-ins and drops open connections before reloading tabs', async () => {
+    const userData = await seedProfile();
+    const order: string[] = [];
+    const sharedSession = {
+      ...createSharedSession(),
+      clearAuthCache: vi.fn(async () => { order.push('auth-cache-cleared'); }),
+      closeAllConnections: vi.fn(async () => { order.push('connections-closed'); }),
+    };
+
+    await clearBrowserData({ userDataPath: userData, sharedSession, reloadBrowserTabs: () => order.push('tabs-reloaded') });
+
+    expect(order).toEqual(['auth-cache-cleared', 'connections-closed', 'tabs-reloaded']);
+  });
+
+  it('reports saved HTTP sign-ins it could not forget after reloading tabs', async () => {
+    const userData = await seedProfile();
+    const sharedSession = { ...createSharedSession(), clearAuthCache: vi.fn(() => Promise.reject(new Error('network service crashed'))) };
+    const reloadBrowserTabs = vi.fn();
+
+    const run = clearBrowserData({ userDataPath: userData, sharedSession, reloadBrowserTabs });
+
+    await expect(run).rejects.toMatchObject({
+      code: 'browser-data-clear-incomplete',
+      message: "Pane cleared cookies and site data but couldn't clear saved site passwords: network service crashed. Sites that use them may still be signed in.",
+      next: 'Run Clear browser data again. If it fails again, quit and reopen Pane, then run it once more.',
+    });
+    expect(reloadBrowserTabs).toHaveBeenCalledTimes(1);
+    expect(await partitionsOf(userData)).toEqual(['pane-browser', 'pane-docs']);
+  });
+
+  it('finishes the cleanup and reloads tabs when the cache cannot be cleared, then succeeds on a retry', async () => {
+    const userData = await seedProfile();
+    const sharedSession = createSharedSession();
+    sharedSession.clearCache.mockRejectedValueOnce(new Error('cache is busy'));
+    const reloadBrowserTabs = vi.fn();
+
+    const run = clearBrowserData({ userDataPath: userData, sharedSession, reloadBrowserTabs });
+
+    await expect(run).rejects.toBeInstanceOf(PaneError);
+    await expect(run).rejects.toMatchObject({
+      code: 'browser-data-clear-incomplete',
+      message: "Pane cleared your logins but couldn't clear the browser cache: cache is busy. Pages may still show copies saved before you cleared.",
+      next: 'Run Clear browser data again. If it fails again, quit and reopen Pane, then run it once more.',
+    });
+    expect(sharedSession.clearAuthCache).toHaveBeenCalledTimes(1);
+    expect(sharedSession.closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(reloadBrowserTabs).toHaveBeenCalledTimes(1);
+    expect(await partitionsOf(userData)).toEqual(['pane-browser', 'pane-docs']);
+
+    await expect(clearBrowserData({ userDataPath: userData, sharedSession, reloadBrowserTabs })).resolves.toBeUndefined();
+    expect(sharedSession.clearCache).toHaveBeenCalledTimes(2);
   });
 });
