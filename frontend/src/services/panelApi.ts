@@ -32,7 +32,7 @@ export const panelApi = {
     return response.data;
   },
   
-  /** The host opens a worktree HTML file in a new browser tab; a file URL is a host-made grant. */
+  /** The host shows a worktree HTML file in the tab already showing it, or a new browser tab; a file URL is a host-made grant. */
   async openHtmlFile(sessionId: string, filePath: string): Promise<ToolPanel> {
     const response = await window.electronAPI.invoke('panels:open-html-file', { sessionId, filePath });
     if (!response.success || !response.data) {

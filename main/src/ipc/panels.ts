@@ -12,7 +12,7 @@ import { panelManager } from '../services/panelManager';
 import { terminalPanelManager } from '../services/terminalPanelManager';
 import { getMobilePushSender } from '../daemon/mobilePushSender';
 import { databaseService } from '../services/database';
-import { CreatePanelRequest, PanelEventType, SessionPanelLayout, ToolPanel, decodeSessionPanelLayout } from '../../../shared/types/panels';
+import { BrowserPanelState, CreatePanelRequest, PanelEventType, SessionPanelLayout, ToolPanel, decodeSessionPanelLayout } from '../../../shared/types/panels';
 import type { AppServices } from './types';
 import type { PanelAgentStatusEvent } from '../../../shared/types/agentStatus';
 import { PANE_CHAT_SESSION_ID } from '../../../shared/types/paneChat';
@@ -426,10 +426,11 @@ const worktreePathResultSchema = boundary.object({
 });
 
 /**
- * Open a worktree HTML file in a new browser tab. The host resolves the file
- * inside the Session's worktree (the `file:getPath` boundary) and makes the
- * file:// grant itself, so a remote desktop can preview worktree pages while
- * its own panels:create/panels:update still cannot point a tab at a file.
+ * Show a worktree HTML file in a browser tab: the tab already showing it, or
+ * else a new one. A tab showing anything else is never retargeted. The host
+ * resolves the file inside the Session's worktree (the `file:getPath` boundary)
+ * and makes the file:// grant itself, so a remote desktop can preview worktree
+ * pages while its own panels:create/panels:update still cannot point a tab at a file.
  */
 async function openHtmlFileInBrowserPanel(commandRegistry: PaneCommandRegistry, raw: PaneCommandValue): Promise<ToolPanel> {
   const { sessionId, filePath } = decodeBoundary(raw, openHtmlFileRequestSchema);
@@ -463,12 +464,17 @@ async function openHtmlFileInBrowserPanel(commandRegistry: PaneCommandRegistry, 
       'Choose an HTML file inside the worktree.',
     );
   }
+  const currentUrl = pathToFileURL(fullPath).href;
+  const open = panelManager.getPanelsForSession(sessionId).find((panel) =>
+    // SAFETY: The browser panel type discriminator establishes BrowserPanelState.
+    panel.type === 'browser' && (panel.state.customState as BrowserPanelState | undefined)?.currentUrl === currentUrl);
+  if (open) return open;
   // A client's own new tab moves no other client, as with panels:create.
   return panelManager.createPanel({
     sessionId,
     type: 'browser',
     title: path.basename(fullPath),
-    initialState: { customState: { currentUrl: pathToFileURL(fullPath).href } },
+    initialState: { customState: { currentUrl } },
     announceActivation: false,
   }, { hostFileGrant: true });
 }

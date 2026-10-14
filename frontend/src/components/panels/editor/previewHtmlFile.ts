@@ -1,5 +1,6 @@
 /**
- * Opens an HTML file rendered in a new browser tab. It never retargets an open tab.
+ * Shows an HTML file rendered in a browser tab: the tab already showing it, or a new
+ * one. It never retargets a tab showing something else.
  */
 import { panelApi } from '../../../services/panelApi';
 import { usePanelStore } from '../../../stores/panelStore';
