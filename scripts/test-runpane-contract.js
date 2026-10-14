@@ -484,6 +484,37 @@ async function checkPanesAdoptCliParity() {
   assert.deepStrictEqual(frames.pip, frames.npm, 'Python and Node panes adopt sent different daemon requests');
 }
 
+async function checkPanesCreateBaseNotice() {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-create-base-'));
+  const notice = 'Could not refresh origin/main before creating this Pane (git fetch timed out after 10s). '
+    + 'It starts from the local origin/main at b08541d, which may be behind the remote. '
+    + 'Check the network or credentials, then run `git pull --rebase origin main` in the Pane if it needs newer commits.';
+  const item = {
+    ok: true, index: 0, name: 'worker', pinned: false, sessionId: 'session-1', paneId: 'session-1',
+    base: { ref: 'origin/main', commit: 'b08541d7', refresh: 'failed', notice },
+  };
+  const daemonResult = { ok: true, repo: { id: 1, name: 'Pane', path: '/repo', active: true, sessionCount: 1 }, items: [item] };
+  // A field this CLI doesn't know yet is dropped, not rejected: that is how an
+  // older CLI reads `base`.
+  const futureResult = { ...daemonResult, items: [{ ...item, fromAFutureDaemon: { anything: true } }] };
+  try {
+    for (const runtime of ['npm', 'pip']) {
+      const run = (args) => withFakeDaemon(paneDir, () => ({ result: futureResult }), () => runCliOnce(runtime, args, paneDir));
+      const human = await run(['panes', 'create', '--repo', 'active', '--name', 'worker', '--agent', 'claude', '--yes']);
+      assert.strictEqual(human.code, 0, `${runtime} panes create exited ${human.code}. stdout=${human.stdout} stderr=${human.stderr}`);
+      assertIncludes(human.stdout.replace(/\r\n/g, '\n'), `\n  ! ${notice}\n`);
+      const json = await run(['panes', 'create', '--repo', 'active', '--name', 'worker', '--agent', 'claude', '--yes', '--json']);
+      assert.strictEqual(json.code, 0, `${runtime} panes create --json exited ${json.code}. stderr=${json.stderr}`);
+      assert.deepStrictEqual(JSON.parse(json.stdout).items[0].base, item.base, `${runtime} panes create --json lost base`);
+      if (runtime === 'npm') {
+        assert.deepStrictEqual(JSON.parse(json.stdout), daemonResult, 'npm panes create --json kept an unknown field');
+      }
+    }
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+}
+
 async function checkWatchStreamParity() {
   for (const runtime of ['npm', 'pip']) {
     const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), `runpane-watch-${runtime}-`));
@@ -4363,6 +4394,7 @@ async function runChecks() {
   await checkSessionPayloadErrors();
   await checkSessionPinCommands();
   await checkPanesAdoptCliParity();
+  await checkPanesCreateBaseNotice();
   checkContractDocListsEveryCommand();
   await checkAgentTemplateParity();
   checkHelpOutput();

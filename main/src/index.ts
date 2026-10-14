@@ -1449,10 +1449,8 @@ if (launchRemoteSetup) {
       if (activeProject?.path) {
         const ctx = sessionManager.getProjectContextByProjectId(activeProject.id);
         if (ctx) {
-          const mainBranch = await worktreeManager.getProjectMainBranch(activeProject.path, ctx.commandRunner).catch(() => 'HEAD');
-          worktreePoolManager.createReserve(
+          worktreeManager.seedReserve(
             activeProject.path,
-            mainBranch,
             activeProject.worktree_folder ?? undefined,
             ctx.pathResolver,
             ctx.commandRunner

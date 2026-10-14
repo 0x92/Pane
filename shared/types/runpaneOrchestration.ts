@@ -497,6 +497,25 @@ export interface RunpanePromptWarning {
   message: string;
 }
 
+/**
+ * How Pane brought a remote-tracking base up to date before creating the
+ * worktree: `fetched` ran `git fetch` for it, `recent` reused a fetch from the
+ * last few seconds, `skipped` means the base is not a remote-tracking branch,
+ * and `failed` means the Pane started from the local ref (see `notice`).
+ */
+export type RunpaneBaseRefreshStatus = 'fetched' | 'recent' | 'skipped' | 'failed';
+
+/** The base a new worktree Pane started from. */
+export interface RunpanePaneBase {
+  /** The ref the worktree was created from, such as `origin/main`. */
+  ref: string;
+  /** The commit the Pane started on. */
+  commit?: string;
+  refresh: RunpaneBaseRefreshStatus;
+  /** Set when `refresh` is `failed`: what happened, what it means and the next step. */
+  notice?: string;
+}
+
 export interface RunpanePaneCreateSuccessItem {
   ok: boolean;
   index: number;
@@ -522,6 +541,8 @@ export interface RunpanePaneCreateSuccessItem {
   association?: RunpanePaneAssociationOutcome;
   /** Set when the Pane's setup waits for a slot; its agent starts after setup, so there is no panel yet. */
   setupQueue?: { position: number; message: string };
+  /** Set for a Pane with its own worktree: the base it started from and whether that base was refreshed. */
+  base?: RunpanePaneBase;
 }
 
 /** Automatic Session association for a created or adopted Pane; failure never undoes the Pane. */

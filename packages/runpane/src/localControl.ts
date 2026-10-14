@@ -282,6 +282,15 @@ interface PaneCreateSuccessItem {
   warnings?: PromptWarning[];
   /** Set when setup waits for a slot; the agent starts after setup, so there is no panel yet. */
   setupQueue?: { position: number; message: string };
+  /** The base a worktree Pane started from; `notice` says when it could not be refreshed from the remote. */
+  base?: PaneBase;
+}
+
+interface PaneBase {
+  ref: string;
+  commit?: string;
+  refresh: 'fetched' | 'recent' | 'skipped' | 'failed';
+  notice?: string;
 }
 
 interface PaneCreateFailureItem {
@@ -1388,6 +1397,12 @@ export const paneCreateResultSchema: BoundarySchema<PaneCreateResult> = boundary
       setupQueue: boundary.optional(boundary.object({
         position: boundary.number,
         message: boundary.string,
+      })),
+      base: boundary.optional(boundary.object({
+        ref: boundary.string,
+        commit: boundary.optional(boundary.string),
+        refresh: boundary.enumeration('fetched', 'recent', 'skipped', 'failed'),
+        notice: boundary.optional(boundary.string),
       })),
     }),
     boundary.object({
@@ -3473,6 +3488,9 @@ function printPaneCreateResult(result: PaneCreateResult, dryRun = false, action:
           : `  Not associated with Session ${item.association.sessionId}: ${item.association.error ?? 'unknown error'}`);
       }
       printPromptNotes(item, '  ');
+      if (item.base?.notice) {
+        console.log(`  ! ${item.base.notice}`);
+      }
       if (item.setupQueue) {
         console.log(`  ${item.setupQueue.message}`);
       }

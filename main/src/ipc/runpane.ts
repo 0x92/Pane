@@ -2491,6 +2491,7 @@ async function createPaneItem(
           message: `${queuedSetupMessage(setupPosition)}. Its agent starts after setup.`,
         },
         association,
+        base: sessionResult.base,
       };
     }
     await taskQueue.waitForSetup(session.id, Math.max(0, createDeadline - Date.now()));
@@ -2520,6 +2521,7 @@ async function createPaneItem(
       association,
       promptFile,
       warnings,
+      base: sessionResult.base,
     };
   } catch (error) {
     // Two creates for one branch can both pass the early check; name the Pane that won.
