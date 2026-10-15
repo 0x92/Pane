@@ -7101,6 +7101,43 @@ describe('runpane IPC handlers', () => {
       await expect(otherKinds).resolves.toMatchObject({ timedOut: true, entries: [] });
     });
 
+    it('arms an expected report on submit and puts the missing report in the Session inbox', async () => {
+      // A plain shell takes the submission without waiting for an agent composer.
+      stored = structuredClone(terminalPanel);
+      vi.mocked(terminalPanelManager.getForegroundProcess).mockReturnValue({ name: 'zsh', isShell: true });
+      // SAFETY: Only the Session lookups the inbox handlers reach are used, and they are stubbed below.
+      const orchestrationSessionManager = Object.create(OrchestrationSessionManager.prototype) as OrchestrationSessionManager;
+      vi.spyOn(orchestrationSessionManager, 'memberSessionIds').mockReturnValue(['session-a']);
+      vi.spyOn(orchestrationSessionManager, 'get').mockResolvedValue(
+        // SAFETY: The inbox handlers read only the record's id and name.
+        { id: 'session-a', name: 'Release' } as Awaited<ReturnType<OrchestrationSessionManager['get']>>,
+      );
+      const services = createServices({ orchestrationSessionManager, workspaceJournal: new WorkspaceJournal() });
+      const registry = createRegistry(services);
+
+      const submitted = await registry.invoke('runpane:panels:submit', [{ panelId: terminalPanel.id, input: 'ship it', expectReport: true }]);
+      expect(submitted.expectedReport).toEqual({ since: expect.any(String) });
+      expect(stored.state.customState).toMatchObject({ expectedReport: submitted.expectedReport });
+
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot('Opened PR #12.\n$ ', 'idle'));
+      services.workspaceJournal?.appendPaneEntry(session.id, { kind: 'agent.ready', panelId: terminalPanel.id, agentType: 'claude', source: 'agent' });
+      const waited = await registry.invoke('runpane:workspace:wait', [{ since: 0, timeoutMs: 1_000, kinds: ['agent.report.missing'] }]);
+      expect(waited.entries).toEqual([expect.objectContaining({
+        kind: 'agent.report.missing',
+        panelId: terminalPanel.id,
+        reason: 'ready',
+        expectedSince: submitted.expectedReport.since,
+      })]);
+      expect(stored.state.customState).not.toHaveProperty('expectedReport');
+
+      const inbox = await registry.invoke('runpane:inbox:list', [{ session: 'Release' }]);
+      expect(inbox).toMatchObject({ ok: true, session: { id: 'session-a', name: 'Release' }, items: [{ kind: 'report.missing', panelId: terminalPanel.id }] });
+      const id = inbox.items[0].id;
+      expect(await registry.invoke('runpane:inbox:ack', [{ ids: [id, 'in-gone'] }])).toEqual({ ok: true, acknowledged: [id], unknown: ['in-gone'] });
+      expect((await registry.invoke('runpane:inbox:list', [{ session: 'session-a' }])).items).toEqual([]);
+      await expect(registry.invoke('runpane:inbox:ack', [{ all: true }])).rejects.toThrow('needs a Session');
+    });
+
     it('refuses a blocked report without a question, a bad head, and a panel from another Pane', async () => {
       const registry = createRegistry();
       await expect(registry.invoke('runpane:report', [{ panelId: terminalPanel.id, state: 'blocked' }]))
