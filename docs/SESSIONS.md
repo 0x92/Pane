@@ -817,7 +817,70 @@ process exits (Claude Code background Bash, Codex), waits for a report with
 `runpane watch --pane <pane-id> --as <name> --until-event --json --kinds
 agent.report,agent.blocked,panel.exited,pane.gone`, run as a background task and run again after each
 event. `--until-event` exits 0 on the first event; a `RESET` and the caller's
-own panel never end the wait.
+own panel never end the wait. Add `agent.report.missing` to `--kinds` to
+wake on a MISSING REPORT too.
+
+### Expected reports
+
+`runpane panels create`, `panes create`, and `panels submit` take
+`--expect-report`: the sender waits for a `runpane report` from that panel.
+Pane stores `expectedReport: { since }` in the panel's custom state (results
+echo it as `expectedReport`). When the agent then goes ready (`agent.ready`)
+or its panel exits without a report made at or after `since`, Pane journals
+one `agent.report.missing` entry (`MISSING REPORT <pane-name> pane <pane-id>
+panel <panel-id> ready|exited`) and clears the expectation. The entry's
+`lastOutput` is the agent's last reply from its transcript, or else the last
+20 lines on its screen (`lastOutputSource: transcript|screen`), cut to 2,000
+characters with the end kept. A report clears the expectation. Like
+`agent.report`, the kind reaches only watchers that list it in `--kinds` (a
+Session scope alone does not deliver it), and it skips the `--min-interval`
+batch. The tracker is `main/src/services/expectedReports.ts`.
+
+### Questions on screen
+
+Pane's status detection (`main/src/services/agentStatus/manifests.ts`)
+classifies a panel as blocked when its screen shows a live prompt waiting on
+input: Claude's AskUserQuestion picker, permission prompts, folder trust, the
+"Allow external CLAUDE.md file imports?" dialog, Codex's trust prompt,
+approval prompts and "Update available" screen. The journal records
+`agent.blocked` only once a panel has stayed blocked for 2 seconds
+(`BLOCKED_DEBOUNCE_MS` in `workspaceJournal.ts`), so a prompt-like line that
+flashes past in normal output never becomes BLOCKED. The entry carries
+`screenLines`: up to 20 non-empty lines of the screen region the prompt was
+matched in. The agent does not need to report anything for this.
+
+### Session inbox
+
+Pane keeps, per Session, what its orchestrator has not acknowledged:
+reports (`agent.report`), missing reports (`agent.report.missing`), and
+questions on screen (`agent.blocked`, with `screenLines`). It is fed from the
+journal for every Pane associated with the Session (`main/src/services/sessionInbox.ts`)
+and saved in `session-inbox.json` below `PANE_DIR`, so a dead or never-armed
+watcher cannot hide a finished worker. A newer report replaces the panel's
+older report or missing report; a blocked item goes once its panel moves on
+(busy, ready, exited, or reported). Each Session keeps at most 200 items.
+
+```text
+runpane inbox --session <id|name> [--json]       # defaults to $PANE_ORCHESTRATION_SESSION_ID
+runpane inbox ack <item-id>... [--session <id|name>]
+runpane inbox ack --all --session <id|name>
+```
+
+Claude Session orchestrators launched with Pane's default command start with
+`--settings <PANE_DIR>/skills/pane-chat/claude-session-settings.json`, a
+`UserPromptSubmit` hook that runs `runpane inbox --hook`. On every user
+message it adds the unacknowledged items (at most 10, newest last) to the
+orchestrator's context; it prints nothing when the inbox is empty, outside a
+Session, or when Pane is unreachable, and it always exits 0. Pane installs it
+automatically because the settings file belongs to Pane, merges over the
+person's own Claude settings without editing them, and costs nothing while the
+inbox is empty. A Session with its own launch command, a Windows or WSL
+Session, and Codex or Cursor orchestrators don't get it; add the same hook to
+your Claude settings by hand if you want it there:
+
+```json
+{ "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "runpane inbox --hook", "timeout": 10 }] }] } }
+```
 
 ## Skill contract
 

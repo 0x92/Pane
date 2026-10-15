@@ -641,8 +641,20 @@ process.stdout.write(JSON.stringify(payload) + '\\n');
     }
     if (process.platform !== 'win32') {
       expect(manager.launchCommand('codex')).toContain(`agents.explorer.config_file=${JSON.stringify(path.join(manager.codexProjectAgentsRoot, 'explorer.toml'))}`);
-      expect(manager.launchCommand('claude')).toBe('claude --dangerously-skip-permissions');
+      expect(manager.launchCommand('claude')).toBe(`claude --dangerously-skip-permissions --settings ${manager.claudeSessionSettingsPath}`);
     }
+  });
+
+  it('gives Claude Session orchestrators the inbox UserPromptSubmit hook', async () => {
+    const manager = new SkillCacheManager();
+    if (process.platform !== 'win32') expect(manager.launchCommand('claude')).toBe('claude --dangerously-skip-permissions');
+
+    await manager.start();
+
+    const settings = JSON.parse(await fs.readFile(manager.claudeSessionSettingsPath, 'utf8'));
+    expect(settings.hooks.UserPromptSubmit).toEqual([{
+      hooks: [{ type: 'command', command: expect.stringMatching(/^"\$\{PANE_RUNPANE_BIN:-runpane\}" inbox --hook --pane-dir /), timeout: 10 }],
+    }]);
   });
 
   it('removes old sync folders and points the old guide path at the entry skill', async () => {

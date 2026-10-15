@@ -106,8 +106,12 @@ record an output baseline (cursor or hash) and a timestamp. Put the prompt in a
 file and submit it:
 
 ```bash
-runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --yes --json
+runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --expect-report --yes --json
 ```
+
+`--expect-report` (also on `panels create` and `panes create`) tells Pane you
+wait for a `runpane report`. If the worker goes ready or exits without one,
+Pane emits MISSING REPORT (`agent.report.missing`) with its last reply.
 
 Prefer `--as-file-pointer` for long prompts. Pane writes a private copy under
 `<pane-dir>/prompts/` and submits the single line `Read and follow <path>`
@@ -275,7 +279,8 @@ A worker's `runpane report` is its hand-back, like a background subagent's
 result. Watch for it by adding `agent.report` to `--kinds`; watchers that
 don't list it never receive it, except a Session watch. A report arrives from
 any tab, a shell tab or a wrapper launch whose agent isn't detected yet
-included. Each REPORT line
+included. Add `agent.report.missing` the same way to hear when work sent
+with `--expect-report` ended without a report. Each REPORT line
 (`REPORT <pane> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`, or
 `... blocked: <question>`) arrives at once, skipping the `--min-interval`
 batch.
@@ -286,7 +291,7 @@ run this as a background task. It exits with the event's line; act on it, then
 run it again. The named cursor means nothing is missed between runs:
 
 ```bash
-runpane watch --pane <pane-id> --as <your-name> --until-event --json --kinds agent.report,agent.blocked,panel.exited,pane.gone
+runpane watch --pane <pane-id> --as <your-name> --until-event --json --kinds agent.report,agent.report.missing,agent.blocked,panel.exited,pane.gone
 ```
 
 Run `--follow` through a monitor that delivers each output line to the agent; merely backgrounding it is insufficient when the harness only notifies on process exit.
@@ -303,6 +308,16 @@ whether anyone received it (`Delivered to 1 waiting watcher.`).
   advance the workstream: the PR, head, and checks must match.
 - `blocked` carries the worker's question; answer it or take it to the user.
   `failed` means the worker gave up; read its summary before retrying.
+- A MISSING REPORT means the worker went ready or exited without reporting
+  after work sent with `--expect-report`. Its `lastOutput` is the worker's
+  last reply; check the work, then ask it to run `runpane report`.
+- A BLOCKED carries the prompt on the worker's screen in `screenLines` (an
+  AskUserQuestion picker, a permission or trust prompt, an update screen),
+  even when the worker never reported.
+- `runpane inbox --json` lists every report, missing report, and on-screen
+  question this Session has not acknowledged, whether or not a watcher saw
+  it; Claude orchestrators get the same list with each user message. Clear
+  what you handled with `runpane inbox ack <id>...`.
 - A READY without a report means look, and maybe nudge. Read the worker's last
   reply with `runpane panels last-message --panel <panel-id> --json` (from its
   transcript; `transcript-unavailable` means fall back to `panels screen`),
