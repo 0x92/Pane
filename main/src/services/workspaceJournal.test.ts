@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TerminalStateEmulator } from './terminalStateEmulator';
 import type { WorkspaceHeldInputScreen } from './workspaceHeldInput';
-import { WorkspaceJournal, presentStoppedPanel, workspaceFilterKey } from './workspaceJournal';
+import { BLOCKED_DEBOUNCE_MS, WorkspaceJournal, presentStoppedPanel, workspaceFilterKey } from './workspaceJournal';
 
 /** A Claude screen as the live emulator reads it, with `composer` written into its composer box. */
 async function claudeScreen(composer: string): Promise<WorkspaceHeldInputScreen> {
@@ -21,6 +21,75 @@ interface WrapperIdentity {
 }
 
 describe('WorkspaceJournal', () => {
+  describe('blocked debounce', () => {
+    const blockedJournal = () => new WorkspaceJournal({
+      resolvePane: paneId => ({ paneId, paneName: 'Worker' }),
+      resolvePanel: panelId => ({ panelId, paneId: 'pane-1', isCliPanel: true, agentType: 'claude' }),
+    });
+    const status = (state: string, extra: { reason?: string; screenLines?: string[] } = {}) =>
+      ({ panelId: 'panel-1', sessionId: 'pane-1', state, ...extra });
+    const kinds = (journal: WorkspaceJournal) => journal.readAfter(0, { kinds: ['agent.busy', 'agent.blocked', 'agent.ready'] })
+      .entries.map(entry => entry.kind);
+
+    it('journals agent.blocked with its prompt lines once the panel stays blocked', () => {
+      vi.useFakeTimers();
+      try {
+        const journal = blockedJournal();
+        journal.send('panel:agentStatus', status('working'));
+        journal.send('panel:agentStatus', status('blocked', { reason: 'live_blocked_form', screenLines: ['Which base?', '❯ 1. main'] }));
+        expect(kinds(journal)).toEqual(['agent.busy']);
+
+        vi.advanceTimersByTime(BLOCKED_DEBOUNCE_MS);
+        const [blocked] = journal.readAfter(0, { kinds: ['agent.blocked'] }).entries;
+        expect(blocked).toMatchObject({ kind: 'agent.blocked', from: 'working', reason: 'live_blocked_form', screenLines: ['Which base?', '❯ 1. main'] });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('drops a blocked flash that clears inside the debounce', () => {
+      vi.useFakeTimers();
+      try {
+        const journal = blockedJournal();
+        journal.send('panel:agentStatus', status('working'));
+        journal.send('panel:agentStatus', status('blocked'));
+        vi.advanceTimersByTime(BLOCKED_DEBOUNCE_MS - 1);
+        journal.send('panel:agentStatus', status('working'));
+        vi.advanceTimersByTime(BLOCKED_DEBOUNCE_MS);
+        journal.send('panel:agentStatus', status('idle'));
+
+        expect(kinds(journal)).toEqual(['agent.busy', 'agent.ready']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it('tells subscribers about every append until they unsubscribe', () => {
+    const journal = new WorkspaceJournal();
+    const seen: string[] = [];
+    const unsubscribe = journal.subscribe(entry => seen.push(entry.kind));
+    journal.subscribe(() => { throw new Error('a broken listener'); });
+    journal.append({ kind: 'pane.created', paneId: 'one', paneName: 'One', source: 'session' });
+    unsubscribe();
+    journal.append({ kind: 'pane.gone', paneId: 'one', paneName: 'One', source: 'session' });
+
+    expect(seen).toEqual(['pane.created']);
+    expect(journal.generation).toBe(2);
+  });
+
+  it('delivers agent.report.missing only to readers that list it', () => {
+    const journal = new WorkspaceJournal({
+      resolveSessionMembership: () => ({ panes: new Map([['one', []]]), ownPaneIds: new Set(), ownPanelIds: new Set() }),
+    });
+    journal.append({ kind: 'agent.report.missing', paneId: 'one', paneName: 'One', panelId: 'p1', agentType: 'claude', source: 'agent' });
+
+    expect(journal.readAfter(0).entries).toEqual([]);
+    expect(journal.readAfter(0, { sessionId: 'session-1' }).entries).toEqual([]);
+    expect(journal.readAfter(0, { kinds: ['agent.report', 'agent.report.missing'] }).entries.map(entry => entry.kind))
+      .toEqual(['agent.report.missing']);
+  });
+
   it('appends gapless entries and filters reads', () => {
     let now = 1000;
     const journal = new WorkspaceJournal({ now: () => now });
@@ -105,6 +174,7 @@ describe('WorkspaceJournal', () => {
     const journal = new WorkspaceJournal({
       resolvePane: paneId => ({ paneId, paneName: 'Farm' }),
       resolvePanel: panelId => ({ panelId, paneId: 'pane-1', ...wrapper }),
+      blockedDebounceMs: 0,
     });
     journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'working' });
     journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'idle' });

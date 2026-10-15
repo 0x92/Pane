@@ -259,3 +259,25 @@ export function detectAgentState(
     matchedRuleId: winner.id,
   };
 }
+
+/** At most this many lines describe the prompt a blocked agent waits on. */
+const MAX_BLOCKED_SCREEN_LINES = 20;
+
+/**
+ * The screen lines of the prompt a blocked panel waits on: the non-empty tail of the region the
+ * winning rule matched, or of the whole screen when the rule matched the OSC title.
+ */
+export function blockedScreenLines(
+  manifest: AgentManifest,
+  ruleId: string | null,
+  input: AgentDetectionInput,
+): string[] {
+  const rule = manifest.rules.find(candidate => candidate.id === ruleId);
+  const region = rule && !rule.region.startsWith('osc_') ? extractRegion(input, rule.region) : '';
+  const text = region.trim() ? region : input.screen;
+  return text
+    .split('\n')
+    .map(line => line.trimEnd())
+    .filter(line => line.trim().length > 0)
+    .slice(-MAX_BLOCKED_SCREEN_LINES);
+}
