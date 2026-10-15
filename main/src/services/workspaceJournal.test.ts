@@ -47,6 +47,26 @@ describe('WorkspaceJournal', () => {
       }
     });
 
+    it('journals a new prompt that replaces the one a panel was blocked on', () => {
+      vi.useFakeTimers();
+      try {
+        const journal = blockedJournal();
+        journal.send('panel:agentStatus', status('working'));
+        journal.send('panel:agentStatus', status('blocked', { reason: 'startup_prompt', screenLines: ['Update available'] }));
+        vi.advanceTimersByTime(BLOCKED_DEBOUNCE_MS);
+        journal.send('panel:agentStatus', status('blocked', { reason: 'live_strong_blocker', screenLines: ['Trust this folder?'] }));
+        vi.advanceTimersByTime(BLOCKED_DEBOUNCE_MS);
+
+        const blocked = journal.readAfter(0, { kinds: ['agent.blocked'] }).entries;
+        expect(blocked.map(entry => [entry.from, entry.reason, entry.screenLines])).toEqual([
+          ['working', 'startup_prompt', ['Update available']],
+          ['blocked', 'live_strong_blocker', ['Trust this folder?']],
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('drops a blocked flash that clears inside the debounce', () => {
       vi.useFakeTimers();
       try {

@@ -166,6 +166,8 @@ export class WorkspaceJournal implements PaneEventSink {
   private readonly listeners = new Set<WorkspaceJournalListener>();
   /** Blocked statuses waiting out the debounce before they are journalled. */
   private readonly pendingBlocked = new Map<string, ReturnType<typeof setTimeout>>();
+  /** The rule behind each journalled block, so a different prompt while blocked is journalled too. */
+  private readonly blockedReasonByPanel = new Map<string, string | null>();
   private readonly blockedDebounceMs: number;
   private readonly capacity: number;
   private readonly now: () => number;
@@ -449,6 +451,7 @@ export class WorkspaceJournal implements PaneEventSink {
       this.exitedPanels.delete(panelId);
       this.stateByPanel.delete(panelId);
       this.readySinceByPanel.delete(panelId);
+      this.blockedReasonByPanel.delete(panelId);
       return;
     }
     // Ending the process is not a completed agent turn. terminal:exit records
@@ -456,11 +459,12 @@ export class WorkspaceJournal implements PaneEventSink {
     if (payload.reason === 'exit' || payload.reason === 'destroyed') {
       this.stateByPanel.delete(panelId);
       this.readySinceByPanel.delete(panelId);
+      this.blockedReasonByPanel.delete(panelId);
       return;
     }
     if (!this.resolvePanel?.(panelId)?.isCliPanel) return;
 
-    if (state === 'blocked' && this.stateByPanel.get(panelId) !== 'blocked' && this.blockedDebounceMs > 0) {
+    if (state === 'blocked' && this.isNewBlock(payload) && this.blockedDebounceMs > 0) {
       const timer = setTimeout(() => {
         this.pendingBlocked.delete(panelId);
         this.publishAgentState(payload);
@@ -472,17 +476,27 @@ export class WorkspaceJournal implements PaneEventSink {
     this.publishAgentState(payload);
   }
 
-  /** Journals a CLI panel's settled agent state when it differs from the last one journalled. */
+  /** A blocked status for a panel not yet journalled as blocked, or blocked on a different prompt. */
+  private isNewBlock(payload: AgentStatusPayload): boolean {
+    return this.stateByPanel.get(payload.panelId) !== 'blocked'
+      || this.blockedReasonByPanel.get(payload.panelId) !== (payload.reason ?? null);
+  }
+
+  /**
+   * Journals a CLI panel's settled agent state when it differs from the last one journalled, and a
+   * blocked panel again when a different prompt replaced the one it was blocked on.
+   */
   private publishAgentState(payload: AgentStatusPayload): void {
     const { panelId, sessionId: paneId, state } = payload;
     const panel = this.resolvePanel?.(panelId);
     if (!panel?.isCliPanel) return;
 
     const previous = this.stateByPanel.get(panelId);
-    if (previous === state) return;
+    const newPrompt = state === 'blocked' && previous === 'blocked' && this.isNewBlock(payload);
+    if (previous === state && !newPrompt) return;
 
     const kind = agentEntryKind(state, previous);
-    if (!kind) { this.stateByPanel.set(panelId, state); return; }
+    if (!kind) { this.rememberState(payload); return; }
     const pane = this.lookupPane(paneId);
     if (!pane) return;
     const now = this.now();
@@ -507,9 +521,16 @@ export class WorkspaceJournal implements PaneEventSink {
     if (kind === 'agent.blocked' && payload.screenLines?.length) entry.screenLines = payload.screenLines;
     this.append(entry);
     this.exitedPanels.delete(panelId);
-    this.stateByPanel.set(panelId, state);
+    this.rememberState(payload);
     if (state !== 'idle') this.readySinceByPanel.delete(panelId);
     if (kind === 'agent.ready') this.readySinceByPanel.set(panelId, now);
+  }
+
+  /** The last journalled state, and for a blocked panel the prompt it was blocked on. */
+  private rememberState(payload: AgentStatusPayload): void {
+    this.stateByPanel.set(payload.panelId, payload.state);
+    if (payload.state === 'blocked') this.blockedReasonByPanel.set(payload.panelId, payload.reason ?? null);
+    else this.blockedReasonByPanel.delete(payload.panelId);
   }
 
   private lookupPane(paneId: string): WorkspacePaneMetadata | undefined {
