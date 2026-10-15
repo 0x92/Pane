@@ -3090,7 +3090,8 @@ function isWaitConditionMatched(
       return screen.state.isCliReady === true
         && (screen.composer.isPresent || (screen.state.agentType !== 'claude' && screen.state.agentType !== 'codex'));
     case 'idle':
-      return screen.state.initialized && screen.state.activityStatus === 'idle';
+      // Like `ready`: an idle shell left behind by an exited launch is a stopped panel, not an idle agent.
+      return screen.state.running && screen.state.activityStatus === 'idle';
     case 'text':
       return Boolean(contains && screen.text.includes(contains));
   }

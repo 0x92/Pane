@@ -4056,6 +4056,20 @@ describe('runpane IPC handlers', () => {
         });
       });
 
+      it('does not count its idle shell as an idle agent, and points the wait at panels resume', async () => {
+        const registry = createRegistry();
+
+        const result = await registry.invoke('runpane:panels:wait', [{ panelId: exitedPanel.id, condition: 'idle', timeoutMs: 1, intervalMs: 1 }]);
+
+        expect(result).toMatchObject({
+          ok: false,
+          matched: false,
+          stopped: true,
+          state: { initialized: true, running: false },
+          nextCommand: `runpane panels resume --panel ${exitedPanel.id} --wait-ready --yes --json`,
+        });
+      });
+
       it('relaunches the saved command in the same shell instead of reporting already-running', async () => {
         vi.mocked(terminalPanelManager.relaunchInShell).mockImplementation(async () => {
           vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockResolvedValue(false);
