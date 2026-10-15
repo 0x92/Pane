@@ -169,6 +169,8 @@ interface ElectronAPI {
     create: (input: OrchestrationSessionCreateInput) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     get: (selector: OrchestrationSessionSelector) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     update: (selector: OrchestrationSessionSelector, input: OrchestrationSessionUpdateInput) => Promise<IPCResponse<OrchestrationSessionRecord>>;
+    /** Saves the order of the listed Sessions among the places they hold; leaves every Session record unchanged. */
+    reorder: (sessionIds: string[]) => Promise<IPCResponse<OrchestrationSessionListResult>>;
     setAgent: (selector: OrchestrationSessionSelector, agent: PaneChatAgent) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     associate: (selector: OrchestrationSessionSelector, association: OrchestrationAssociationInput) => Promise<IPCResponse<OrchestrationSessionRecord>>;
     detach: (selector: OrchestrationSessionSelector, paneId?: string) => Promise<IPCResponse<OrchestrationSessionRecord>>;
@@ -422,7 +424,7 @@ interface ElectronAPI {
       repositoriesSectionExpanded: boolean;
       sshHostsSectionExpanded: boolean;
       sessionsSectionExpanded: boolean;
-      collapsedSessions: string[];
+      expandedSessions: string[];
       archivedSectionExpanded: boolean;
       expandedArchivedProjects: number[];
     }>>;
@@ -431,7 +433,7 @@ interface ElectronAPI {
     saveExpandedFolders: (folderIds: string[]) => Promise<IPCResponse>;
     saveSessionSortAscending: (ascending: boolean) => Promise<IPCResponse>;
     saveSidebarSectionExpanded: (section: 'pinned' | 'repositories' | 'sshHosts' | 'sessions' | 'archived', expanded: boolean) => Promise<IPCResponse>;
-    saveCollapsedSessions: (sessionIds: string[]) => Promise<IPCResponse>;
+    saveExpandedSessions: (sessionIds: string[]) => Promise<IPCResponse>;
     saveExpandedArchivedProjects: (projectIds: number[]) => Promise<IPCResponse>;
     getNavigationMemory: (hostId: string | null) => Promise<IPCResponse<HostNavigationMemory | null>>;
     saveNavigationMemory: (hostId: string | null, memory: HostNavigationMemory) => Promise<IPCResponse>;

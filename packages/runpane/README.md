@@ -176,6 +176,14 @@ runpane watch --session <session-id> --follow --quiet --json --kinds agent.ready
 After a `RESET`, JSON baseline entries carry `replay: true`. They restate
 current state, so a replayed `agent.ready` is never `READY`.
 
+After a Pane restart, an agent panel whose process is not running reads as
+`running: false` in `panels list`, `panels screen`, and `panels wait`, and
+never as `agent.ready`. Add `panel.stopped` to `--kinds` to get a `STOPPED`
+line for it; other watchers see `agent.unknown`. `runpane panels resume --panel <panel-id> --wait-ready --yes
+--json` restarts it in the same panel and resumes the agent's conversation;
+`--session <id|name>` or `--all-stopped` in place of `--panel` resumes every
+stopped agent panel in that scope and reports each one.
+
 - `--kinds` drops `agent.busy`; `BUSY` carries no action.
 - `--settle <ms>` emits `READY` only after the panel stays idle that long. A
   `BUSY` inside the window cancels it silently, which removes the idle/working
@@ -199,7 +207,20 @@ Workers can hand back a structured report with `runpane report --state
 ready|blocked|failed|done [--pr <n>] [--head <sha>] [--summary-file <path>]
 [--question <text>]`. Watchers receive it as `agent.report`
 (`REPORT <pane> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`) only
-when `--kinds` lists it, and it skips the `--min-interval` batch.
+when `--kinds` lists it (or they watch a Session), from any panel, and it skips
+the `--min-interval` batch. The command prints how many watches were waiting
+and received it (`Delivered to 1 waiting watcher.`).
+
+`--follow` never exits on its own, so don't pipe it into `grep -m1` or `head`
+to wait. A harness that wakes an agent when a process exits (Claude Code
+background Bash, Codex) waits with `--until-event`, which exits 0 on the first
+matching event, and runs it again after acting on it:
+
+```bash
+runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone
+```
+
+`--timeout-ms` is then the total deadline (exit 124, `WATCH TIMEOUT`).
 `runpane panels last-message --panel <panel-id>` reads an agent's last reply
 from its transcript.
 
@@ -215,6 +236,12 @@ the agent in a new Pane there, branched from yours. It reports back to you.
 runpane handoff --template > ~/handoff.md
 runpane handoff "claude opus on parsas-macbook-pro" --note-file ~/handoff.md --push
 ```
+
+From a Session's terminal (its folder is outside git), handoff moves the Session:
+it skips git, writes the note to the other machine, and creates a Session there
+with the same name (numbered if taken), goal and agent, whose next action is to
+read the note. It refuses this machine before sending, and `--json` reports
+`receiver.route: "session"` and the new `session`.
 
 `--dry-run` checks destination daemon reachability and resolves its saved repository
 (name, path, environment and OS) without committing, pushing, fetching, writing a

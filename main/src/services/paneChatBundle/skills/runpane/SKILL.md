@@ -273,10 +273,25 @@ working while a review is pending.
 
 A worker's `runpane report` is its hand-back, like a background subagent's
 result. Watch for it by adding `agent.report` to `--kinds`; watchers that
-don't list it never receive it. Each REPORT line
+don't list it never receive it, except a Session watch. A report arrives from
+any tab, a shell tab or a wrapper launch whose agent isn't detected yet
+included. Each REPORT line
 (`REPORT <pane> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`, or
 `... blocked: <question>`) arrives at once, skipping the `--min-interval`
 batch.
+
+To wait for a report outside the Session watch (a Pane with no Session, or a
+harness that wakes only when a process exits, such as a background Bash task),
+run this as a background task. It exits with the event's line; act on it, then
+run it again. The named cursor means nothing is missed between runs:
+
+```bash
+runpane watch --pane <pane-id> --as <your-name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone
+```
+
+Never pipe `runpane watch --follow` into `grep -m1` or `head` to wait:
+`--follow` never exits on its own. The worker's `runpane report` output says
+whether anyone received it (`Delivered to 1 waiting watcher.`).
 
 - Treat a REPORT as the completion signal. Read the whole report (state, PR,
   head, summary up to 16,000 characters, `summaryPath`, question) with

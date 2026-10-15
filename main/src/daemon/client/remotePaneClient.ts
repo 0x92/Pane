@@ -720,7 +720,12 @@ export class RemotePaneClientController extends EventEmitter {
     if (channel === PORTS_LIST_CHANNEL) {
       result = await this.listTunnelledPorts(client);
     } else {
-      result = await client.invoke(channel, args);
+      try {
+        result = await client.invoke(channel, args);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes(UNKNOWN_COMMAND_MESSAGE)) throw hostOutdatedError(client.profile.label, channel);
+        throw error;
+      }
     }
     if (!this.remoteRuntimeUsageTracked) {
       this.remoteRuntimeUsageTracked = true;
@@ -1233,6 +1238,15 @@ async function readResponseBody(response: IncomingMessage): Promise<string> {
   }
 
   return Buffer.concat(chunks).toString('utf8');
+}
+
+/** The host's own refusal says to update "Pane", which reads as this desktop; name the host instead. */
+function hostOutdatedError(hostLabel: string, channel: string): PaneError {
+  return new PaneError(
+    'ERR_HOST_OUTDATED',
+    `${hostLabel} runs an older Pane that does not have this command (${channel}). Nothing was changed.`,
+    `Update Pane on ${hostLabel} (run \`runpane update\` there), then try again.`,
+  );
 }
 
 function parseJsonResponse<Value>(

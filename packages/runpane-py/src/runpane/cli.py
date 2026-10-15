@@ -40,6 +40,7 @@ from .local_control import (
     run_panels_submit_composer,
     run_panels_wait,
     run_panes_adopt,
+    run_panels_resume,
     run_panes_archive,
     run_panes_create,
     run_panes_focus,
@@ -176,6 +177,7 @@ class ParsedArgs:
     watch_exclude_pane_ids: List[str] = field(default_factory=list)
     name_contains: Optional[str] = None
     follow: bool = False
+    until_event: bool = False
     agents_only: bool = False
     ack_now: bool = False
     include_held_input: bool = False
@@ -187,6 +189,7 @@ class ParsedArgs:
     min_interval_ms: Optional[int] = None
     idle_backoff: bool = False
     all_managed: bool = False
+    all_stopped: bool = False
     include_shells: bool = False
     no_held_input: bool = False
     self_test: bool = False
@@ -447,6 +450,8 @@ def parse_args(argv: List[str]) -> ParsedArgs:
         validate_panes_archive_args(parsed)
     if parsed.command == "watch" and parsed.follow and parsed.timeout_ms == 0:
         raise ValueError("--timeout-ms must be greater than 0 with --follow.")
+    if parsed.command == "watch" and parsed.until_event:
+        validate_until_event_args(parsed)
     if parsed.command == "watch" and parsed.session_id is not None and parsed.watch_pane_ids:
         raise ValueError(
             "runpane watch accepts either --session or --pane, not both; "
@@ -468,6 +473,24 @@ def parse_args(argv: List[str]) -> ParsedArgs:
     if parsed.command == "report":
         validate_report_args(parsed)
     return parsed
+
+
+def validate_until_event_args(parsed: ParsedArgs) -> None:
+    if parsed.follow:
+        raise ValueError(
+            "runpane watch accepts either --until-event or --follow, not both. "
+            "Use --until-event to exit on the first event, or --follow to stream until interrupted."
+        )
+    if parsed.self_test:
+        raise ValueError(
+            "runpane watch accepts either --until-event or --self-test, not both. "
+            "Run --self-test on its own to probe the watch path."
+        )
+    if parsed.timeout_ms == 0:
+        raise ValueError(
+            "--timeout-ms must be greater than 0 with --until-event; it is the total deadline. "
+            "Leave it out to wait as long as it takes."
+        )
 
 
 def validate_report_args(parsed: ParsedArgs) -> None:
@@ -649,6 +672,9 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
     if flag == "--follow":
         parsed.follow = True
         return
+    if flag == "--until-event":
+        parsed.until_event = True
+        return
     if flag == "--idle-backoff":
         parsed.idle_backoff = True
         return
@@ -663,6 +689,9 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
         return
     if flag == "--all-managed":
         parsed.all_managed = True
+        return
+    if flag == "--all-stopped":
+        parsed.all_stopped = True
         return
     if flag == "--include-shells":
         parsed.include_shells = True
@@ -1202,6 +1231,7 @@ COMMAND_HANDLERS: Dict[str, Callable[[ParsedArgs, WrapperTelemetryContext], int]
     "panels submit": lambda parsed, context: run_panels_submit(parsed),
     "panels submit-composer": lambda parsed, context: run_panels_submit_composer(parsed),
     "panels wait": lambda parsed, context: run_panels_wait(parsed),
+    "panels resume": lambda parsed, context: run_panels_resume(parsed),
     "panels last-message": lambda parsed, context: run_panels_last_message(parsed),
     "report": lambda parsed, context: run_report(parsed),
     "agents doctor": lambda parsed, context: run_agents_doctor(parsed),

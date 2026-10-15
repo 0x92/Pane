@@ -13,6 +13,8 @@ import { PaneRemoteHttpApiServer } from '../httpApiServer';
 
 interface TestRemoteServer {
   baseUrl: string;
+  /** Answer this channel the way a host without the command does. */
+  refuseChannel(channel: string): void;
   close(): Promise<void>;
   closeEventStream(): void;
   emitDaemonEvent(payload: JsonValue): void;
@@ -401,6 +403,30 @@ describe('RemotePaneClientController', () => {
     await controller.switchToLocalMode();
   });
 
+  it('says which host to update when the host does not have a command', async () => {
+    const server = await createTestRemoteServer();
+    activeServers.push(server);
+    server.refuseChannel('orchestration-sessions:reorder');
+    const remoteConfig = createDefaultRemoteDaemonConfig();
+    remoteConfig.client = {
+      profiles: [{ id: 'profile-mini', label: 'Mac Mini', baseUrl: server.baseUrl, token: 'secret-token', transport: 'http+sse' }],
+      activeProfileId: 'profile-mini',
+      mode: 'remote',
+    };
+    const controller = new RemotePaneClientController();
+    controller.initialize({ configManager: createConfigManagerStub(remoteConfig), rendererEventSink: { send() {} } });
+    await waitFor(() => controller.getConnectionState().status === 'connected');
+
+    const refusal = controller.invoke('orchestration-sessions:reorder', [{ sessionIds: [] }], async () => undefined);
+
+    await expect(refusal).rejects.toMatchObject({
+      code: 'ERR_HOST_OUTDATED',
+      message: expect.stringContaining('Mac Mini runs an older Pane'),
+      next: 'Update Pane on Mac Mini (run `runpane update` there), then try again.',
+    });
+    await controller.switchToLocalMode();
+  });
+
   it('keeps retrying after an initial remote connection failure', async () => {
     const server = await createTestRemoteServer();
     activeServers.push(server);
@@ -661,6 +687,7 @@ async function createTestRemoteServer(host = '127.0.0.1', basePath = ''): Promis
   let eventRequestCount = 0;
   let eventsReady = true;
   let emitReadyEvent = true;
+  const refusedChannels = new Set<string>();
   const normalizedBasePath = normalizeTestBasePath(basePath);
   const invokePath = `${normalizedBasePath}/invoke`;
   const eventsPath = `${normalizedBasePath}/events`;
@@ -675,6 +702,18 @@ async function createTestRemoteServer(host = '127.0.0.1', basePath = ''): Promis
         channel: boundary.string,
         args: boundary.array(boundary.json),
       }));
+      if (refusedChannels.has(parsed.channel)) {
+        response.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({
+          ok: false,
+          error: {
+            code: 'ERR_UNKNOWN_CHANNEL',
+            message: `No Pane daemon command registered for channel "${parsed.channel}". This Pane does not have that command, usually because it is older than the runpane CLI or app that asked. Nothing was changed.`,
+            next: 'Update Pane with `runpane update`, then restart it.',
+          },
+        }));
+        return;
+      }
       response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({
         ok: true,
@@ -732,6 +771,9 @@ async function createTestRemoteServer(host = '127.0.0.1', basePath = ''): Promis
 
   return {
     baseUrl: `http://${host.includes(':') ? `[${host}]` : host}:${address.port}${normalizedBasePath}`,
+    refuseChannel(channel: string) {
+      refusedChannels.add(channel);
+    },
     closeEventStream() {
       if (streamResponse && !streamResponse.destroyed) {
         streamResponse.destroy();
