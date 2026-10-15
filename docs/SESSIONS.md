@@ -824,8 +824,9 @@ wake on a MISSING REPORT too.
 
 `runpane panels create`, `panes create`, and `panels submit` take
 `--expect-report`: the sender waits for a `runpane report` from that panel.
-Pane stores `expectedReport: { since }` in the panel's custom state (results
-echo it as `expectedReport`). When the agent then goes ready (`agent.ready`)
+Pane saves `{ since }` per panel in `expected-reports.json` below `PANE_DIR`
+(results echo it as `expectedReport`); only the tracker writes that file, so
+panel-state writes cannot bring back a cleared expectation. When the agent then goes ready (`agent.ready`)
 or its panel exits without a report made at or after `since`, Pane journals
 one `agent.report.missing` entry (`MISSING REPORT <pane-name> pane <pane-id>
 panel <panel-id> ready|exited`) and clears the expectation. The entry's
@@ -841,8 +842,8 @@ batch. The tracker is `main/src/services/expectedReports.ts`.
 Pane's status detection (`main/src/services/agentStatus/manifests.ts`)
 classifies a panel as blocked when its screen shows a live prompt waiting on
 input: Claude's AskUserQuestion picker, permission prompts, folder trust, the
-"Allow external CLAUDE.md file imports?" dialog, Codex's trust prompt,
-approval prompts and "Update available" screen. The journal records
+"Allow external CLAUDE.md file imports?" dialog, and Codex's folder-trust,
+sign-in, approval and "Update available" screens. The journal records
 `agent.blocked` only once a panel has stayed blocked for 2 seconds
 (`BLOCKED_DEBOUNCE_MS` in `workspaceJournal.ts`), so a prompt-like line that
 flashes past in normal output never becomes BLOCKED. The entry carries

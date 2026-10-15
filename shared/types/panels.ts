@@ -33,7 +33,7 @@ export type TerminalAgentDetection = 'declared' | 'command' | 'process' | 'scree
 /** What a worker says about its task when it runs `runpane report`. */
 export type TerminalAgentReportState = 'ready' | 'blocked' | 'failed' | 'done';
 
-/** A report the sender of a panel's work is waiting for (`--expect-report`). */
+/** A report the sender of a panel's work is waiting for (`--expect-report`); kept in `expected-reports.json`. */
 export interface TerminalExpectedReport {
   /** When the work was sent; a report at or after this time fulfils it. */
   since: string;
@@ -114,8 +114,6 @@ export interface TerminalPanelState {
   agentSessionId?: string;           // Agent-generated session ID for resuming conversations
   /** Latest `runpane report` from this panel's agent. */
   agentReport?: TerminalAgentReport;
-  /** Work was sent with `--expect-report`: Pane journals `agent.report.missing` if the agent goes ready or exits without reporting. */
-  expectedReport?: TerminalExpectedReport;
   /** Stable orchestration identity for resumed Session terminals. */
   orchestrationSessionId?: string;
   /** Session-owned working directory, also used by legacy shared terminal owners. */

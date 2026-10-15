@@ -7117,7 +7117,7 @@ describe('runpane IPC handlers', () => {
 
       const submitted = await registry.invoke('runpane:panels:submit', [{ panelId: terminalPanel.id, input: 'ship it', expectReport: true }]);
       expect(submitted.expectedReport).toEqual({ since: expect.any(String) });
-      expect(stored.state.customState).toMatchObject({ expectedReport: submitted.expectedReport });
+      expect(services.expectedReportTracker?.expectation(terminalPanel.id)).toEqual(submitted.expectedReport);
 
       vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue(terminalSnapshot('Opened PR #12.\n$ ', 'idle'));
       services.workspaceJournal?.appendPaneEntry(session.id, { kind: 'agent.ready', panelId: terminalPanel.id, agentType: 'claude', source: 'agent' });
@@ -7128,7 +7128,7 @@ describe('runpane IPC handlers', () => {
         reason: 'ready',
         expectedSince: submitted.expectedReport.since,
       })]);
-      expect(stored.state.customState).not.toHaveProperty('expectedReport');
+      expect(services.expectedReportTracker?.expectation(terminalPanel.id)).toBeUndefined();
 
       const inbox = await registry.invoke('runpane:inbox:list', [{ session: 'Release' }]);
       expect(inbox).toMatchObject({ ok: true, session: { id: 'session-a', name: 'Release' }, items: [{ kind: 'report.missing', panelId: terminalPanel.id }] });

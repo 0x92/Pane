@@ -40,7 +40,6 @@ import {
   journalAgentReport,
   normalizeAgentReport,
   readPanelAgentReport,
-  readPanelExpectedReport,
 } from '../services/agentReport';
 import { resolveAgentTypeFromCommand } from '../services/agents/agentIdentity';
 import { assertDirectOpenCodeLaunchCommand, isValidOpenCodeSessionId } from '../services/agents/opencodeLaunch';
@@ -415,8 +414,8 @@ export function registerRunpaneHandlers(
     services.sessionInbox = sessionInbox;
     services.expectedReportTracker = new ExpectedReportTracker({
       journal: workspaceJournal,
-      readExpectation: panelId => readPanelExpectedReport(panelManager.getPanel(panelId)),
-      clearExpectation: clearExpectedReport,
+      filePath: path.join(getAppDirectory(), 'expected-reports.json'),
+      panelExists: panelId => panelManager.getPanel(panelId) !== undefined,
       lastReportAt: panelId => readPanelAgentReport(panelManager.getPanel(panelId))?.reportedAt,
       lastOutput: panelId => readPanelLastOutput(panelId, sessionManager),
       log: (message, error) => console.warn(message, error),
@@ -1103,7 +1102,7 @@ export function registerRunpaneHandlers(
         waitReady: normalized.waitReady,
         readyTimeoutMs: normalized.readyTimeoutMs,
       });
-      const expectedReport = normalized.expectReport ? await armExpectedReport(panel.id, since) : undefined;
+      const expectedReport = normalized.expectReport ? armExpectedReport(services, panel.id, since) : undefined;
 
       return {
         ok: Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness)),
@@ -1378,7 +1377,7 @@ export function registerRunpaneHandlers(
       const since = new Date().toISOString();
       const result = await submitToPanel(normalized, panel);
       // Armed only when something was sent: a refused submission leaves no work to report on.
-      if (normalized.expectReport && result.inputBytes > 0) result.expectedReport = await armExpectedReport(panel.id, since);
+      if (normalized.expectReport && result.inputBytes > 0) result.expectedReport = armExpectedReport(services, panel.id, since);
       return result;
     }, result => ({
       paneId: result.paneId,
@@ -2048,23 +2047,8 @@ async function readPanelLastOutput(panelId: string, sessionManager: AppServices[
 }
 
 /** Records that the sender of a panel's work waits for a `runpane report` from it. */
-async function armExpectedReport(panelId: string, since: string): Promise<TerminalExpectedReport> {
-  const expectedReport: TerminalExpectedReport = { since };
-  const current = panelManager.getPanel(panelId);
-  if (!current) return expectedReport;
-  const state = current.state ?? { isActive: false };
-  const customState = isRecord(state.customState) ? state.customState : {};
-  await panelManager.updatePanel(panelId, { state: { ...state, customState: { ...customState, expectedReport } } });
-  return expectedReport;
-}
-
-async function clearExpectedReport(panelId: string): Promise<void> {
-  const current = panelManager.getPanel(panelId);
-  if (!current || !readPanelExpectedReport(current)) return;
-  const state = current.state ?? { isActive: false };
-  const customState = isRecord(state.customState) ? { ...state.customState } : {};
-  delete customState.expectedReport;
-  await panelManager.updatePanel(panelId, { state: { ...state, customState } });
+function armExpectedReport(services: AppServices, panelId: string, since: string): TerminalExpectedReport | undefined {
+  return services.expectedReportTracker?.arm(panelId, since);
 }
 
 /**
@@ -2702,7 +2686,7 @@ async function createPaneItem(
         .then(async () => {
           const since = new Date().toISOString();
           const { panel } = await createTerminalPanelForSession(services, session, tool, { activate: options.activate });
-          if (options.expectReport) await armExpectedReport(panel.id, since);
+          if (options.expectReport) armExpectedReport(services, panel.id, since);
         })
         .catch(error => console.error(`[Runpane] Pane ${session.id} did not launch after queued setup:`, error));
       return {
@@ -2731,7 +2715,7 @@ async function createPaneItem(
       waitReady: options.waitReady,
       readyTimeoutMs: options.readyTimeoutMs,
     });
-    const expectedReport = options.expectReport ? await armExpectedReport(panel.id, since) : undefined;
+    const expectedReport = options.expectReport ? armExpectedReport(services, panel.id, since) : undefined;
 
     const itemOk = Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness));
     return {

@@ -1,5 +1,5 @@
 import { boundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
-import type { TerminalAgentReport, TerminalAgentReportState, TerminalExpectedReport, ToolPanel } from '../../../shared/types/panels';
+import type { TerminalAgentReport, TerminalAgentReportState, ToolPanel } from '../../../shared/types/panels';
 
 /**
  * Worker reports (`runpane report`): a worker's structured hand-back of its
@@ -83,15 +83,6 @@ const panelReportSchema = boundary.object({ agentReport: agentReportSchema });
 /** The panel's latest report, or undefined when it has none (or an unreadable one). */
 export function readPanelAgentReport(panel: Pick<ToolPanel, 'state'> | undefined): TerminalAgentReport | undefined {
   return decodeOptionalBoundary(panel?.state?.customState, panelReportSchema)?.agentReport;
-}
-
-const panelExpectedReportSchema = boundary.object({
-  expectedReport: boundary.object({ since: boundary.nonEmptyString }),
-});
-
-/** The report the sender of the panel's work waits for (`--expect-report`), or undefined. */
-export function readPanelExpectedReport(panel: Pick<ToolPanel, 'state'> | undefined): TerminalExpectedReport | undefined {
-  return decodeOptionalBoundary(panel?.state?.customState, panelExpectedReportSchema)?.expectedReport;
 }
 
 interface BoundedSummary {

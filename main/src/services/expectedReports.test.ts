@@ -1,19 +1,24 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { ExpectedReportTracker, MAX_MISSING_REPORT_OUTPUT_LENGTH, type PanelLastOutput } from './expectedReports';
 import { WorkspaceJournal } from './workspaceJournal';
 import type { TerminalExpectedReport } from '../../../shared/types/panels';
 
-function setup(lastOutput: PanelLastOutput | undefined = { text: 'All done, PR #12 is open.', source: 'transcript' }) {
+function setup(lastOutput: PanelLastOutput | undefined = { text: 'All done, PR #12 is open.', source: 'transcript' }, filePath?: string) {
   const journal = new WorkspaceJournal({ resolvePane: paneId => ({ paneId, paneName: 'Worker' }), blockedDebounceMs: 0 });
-  const expectations = new Map<string, TerminalExpectedReport>();
   const reports = new Map<string, string>();
   const tracker = new ExpectedReportTracker({
     journal,
-    readExpectation: panelId => expectations.get(panelId),
-    clearExpectation: async panelId => { expectations.delete(panelId); },
+    filePath,
     lastReportAt: panelId => reports.get(panelId),
     lastOutput: async () => lastOutput,
   });
+  const expectations = {
+    set: (panelId: string, expected: TerminalExpectedReport) => tracker.arm(panelId, expected.since),
+    has: (panelId: string) => tracker.expectation(panelId) !== undefined,
+  };
   const ready = () => journal.append({ kind: 'agent.ready', paneId: 'pane-1', paneName: 'Worker', panelId: 'panel-1', agentType: 'claude', source: 'agent' });
   const missing = () => journal.readAfter(0, { kinds: ['agent.report.missing'] }).entries;
   const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -84,6 +89,27 @@ describe('ExpectedReportTracker', () => {
     const [entry] = missing();
     expect(entry.lastOutput).toHaveLength(MAX_MISSING_REPORT_OUTPUT_LENGTH);
     expect(entry.lastOutput?.endsWith('THE END')).toBe(true);
+  });
+
+  it('keeps expectations across a restart and forgets them once raised', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-expected-'));
+    try {
+      const filePath = path.join(directory, 'expected-reports.json');
+      setup(undefined, filePath).tracker.arm('panel-1', '2026-10-15T10:00:00.000Z');
+
+      const restarted = setup(undefined, filePath);
+      expect(restarted.tracker.expectation('panel-1')).toEqual({ since: '2026-10-15T10:00:00.000Z' });
+      restarted.ready();
+      await restarted.settle();
+      expect(restarted.missing()).toHaveLength(1);
+
+      const again = setup(undefined, filePath);
+      again.ready();
+      await again.settle();
+      expect(again.missing()).toEqual([]);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('ignores panels nobody expects a report from', async () => {
