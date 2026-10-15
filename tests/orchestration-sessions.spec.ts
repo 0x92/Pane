@@ -3291,7 +3291,8 @@ test('Move to host… lists only machines that can take the Session and asks its
     tailnetMachines: { ok: true, tailnet: 'example.github', domain: 'tail1234.ts.net', machines: [
       tailnetMachine('tylers-mac-mini'),
       tailnetMachine('tylers-mac-mini-1', { state: 'offline' }),
-      tailnetMachine('sams-laptop', { mine: false, ownerLogin: 'sam@github' }),
+      tailnetMachine('sams-laptop', { mine: false, ownerLogin: 'sam@github', visibility: 'tailnet' }),
+      tailnetMachine('sams-desktop', { mine: false, ownerLogin: 'sam@github', state: 'refused' }),
     ] },
   });
   const submissions = await recordAgentSubmissions(page);
@@ -3301,12 +3302,15 @@ test('Move to host… lists only machines that can take the Session and asks its
   await page.getByRole('menuitem', { name: 'Move to host…' }).click();
 
   const dialog = page.getByRole('dialog', { name: 'Move Session to another host' });
-  await expect(dialog.getByRole('radio')).toHaveCount(3);
+  await expect(dialog.getByRole('radio')).toHaveCount(4);
   await expect(dialog.getByRole('radio', { name: 'tylers-mac-mini', exact: true })).toBeEnabled();
   await expect(dialog.getByRole('radio', { name: 'tylers-mac-mini-1' })).toBeDisabled();
   await expect(dialog.getByTestId('move-session-target-tylers-mac-mini-1')).toContainText('Offline');
-  await expect(dialog.getByRole('radio', { name: 'sams-laptop' })).toBeDisabled();
-  await expect(dialog.getByTestId('move-session-target-sams-laptop')).toContainText('sam@github');
+  // A teammate's machine that lets this login in (Everyone on tailnet) is a target, named with its owner.
+  await expect(dialog.getByRole('radio', { name: 'sams-laptop' })).toBeEnabled();
+  await expect(dialog.getByTestId('move-session-target-sams-laptop')).toContainText('sams-laptop · sam@github');
+  await expect(dialog.getByRole('radio', { name: 'sams-desktop' })).toBeDisabled();
+  await expect(dialog.getByTestId('move-session-target-sams-desktop')).toContainText('Accepts only its owner\'s Tailscale login; they can set Who can connect → Everyone on tailnet');
   // This computer runs the Session, and discovery never lists it.
   await expect(dialog.getByRole('radio', { name: 'devbox' })).toHaveCount(0);
   await page.screenshot({ path: 'tmp/verify/session-move-host/02-dialog.png' });
@@ -3348,7 +3352,7 @@ test('Move to host… with nothing reachable says why, names the fix, and sends 
   await page.getByTestId('orchestration-session-alpha').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Move to host…' }).click();
   const dialog = page.getByRole('dialog', { name: 'Move Session to another host' });
-  await expect(dialog).toContainText('None of your other machines can take this Session right now. Open Pane on the machine you want');
+  await expect(dialog).toContainText('No other machine can take this Session right now. Open Pane on the machine you want');
   await page.screenshot({ path: 'tmp/verify/session-move-host/03-nothing-reachable.png' });
   await expect(dialog.getByRole('button', { name: 'Move Session' })).toBeDisabled();
   expect(await submissions()).toEqual([]);
