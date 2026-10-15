@@ -1147,10 +1147,7 @@ def run_panels_resume(parsed: Any) -> int:
         print(f"{verb} panel {result.get('panelId')} in pane {result.get('paneId')}. {result.get('message')}")
         readiness = result.get("readiness")
         if readiness:
-            status = "yes" if readiness.get("ok") else "timed out" if readiness.get("timedOut") else "blocked"
-            print(f"Ready: {status} after {readiness.get('elapsedMs')}ms")
-            if readiness.get("blocked"):
-                print(f"Blocked: {readiness['blocked'].get('message')}")
+            print_readiness(readiness)
         print(f"Next: {result.get('nextCommand')}")
     return 0 if result.get("ok") else 1
 
@@ -1182,10 +1179,8 @@ def run_panels_resume_many(parsed: Any) -> int:
             readiness = item.get("readiness") or {}
             if item.get("error"):
                 status = f"failed: {item.get('error')}"
-            elif readiness.get("blocked"):
-                status = f"blocked: {readiness['blocked'].get('message')}"
             elif readiness and not readiness.get("ok"):
-                status = "not ready"
+                status = not_ready_summary(readiness)
             else:
                 status = item.get("action") or "resumed"
             print(f"{'OK' if item.get('ok') else 'FAIL'} {item.get('paneName')} panel {item.get('panelId')}: {status}")
@@ -1916,6 +1911,16 @@ def print_panel_create_result(result: Dict[str, Any]) -> None:
     print_prompt_notes(result)
     if result.get("nextCommand"):
         print(f"Next: {result.get('nextCommand')}")
+
+
+def not_ready_summary(readiness: Dict[str, Any]) -> str:
+    """One-line status for a bulk resume item that resumed but did not become ready."""
+    blocked = readiness.get("blocked")
+    if blocked:
+        return f"blocked: {blocked.get('message')}"
+    reason = readiness.get("reason") or {}
+    state = "command exited" if reason.get("code") == "command-exited" else "not ready"
+    return f"{state}: {reason.get('message')}" if reason else state
 
 
 def print_readiness(readiness: Dict[str, Any], prefix: str = "") -> None:

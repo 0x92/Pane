@@ -2061,6 +2061,82 @@ async function checkPaneCreateBlockedReadiness() {
   assert.ok(stdout.some(line => line.includes('Ready: blocked')), stdout.join('\n'));
 }
 
+async function checkPanelResumeCommandExitedReadiness() {
+  const exitedReadiness = {
+    ok: false,
+    condition: 'ready',
+    matched: false,
+    timedOut: false,
+    elapsedMs: 40,
+    state: { initialized: true, isCliPanel: true, running: false, agentType: 'claude' },
+    reason: { code: 'command-exited', message: 'The command exited with code 127 before it became ready: claude: command not found' },
+  };
+  const single = {
+    ok: false,
+    panelId: 'panel-1',
+    paneId: 'session-1',
+    action: 'resumed',
+    message: 'Relaunched claude.',
+    panel: { id: 'panel-1', panelId: 'panel-1', paneId: 'session-1', type: 'terminal', title: 'Claude', active: true },
+    readiness: exitedReadiness,
+    nextCommand: 'runpane panels screen --panel panel-1',
+  };
+  const many = {
+    ok: false,
+    scope: { kind: 'all-stopped' },
+    resumed: 1,
+    alreadyRunning: 0,
+    failed: 0,
+    notReady: 1,
+    concurrency: 4,
+    items: [{ ok: false, panelId: 'panel-1', paneId: 'session-1', paneName: 'worker', action: 'resumed', readiness: exitedReadiness }],
+  };
+  const expectedSingle = ['Ready: command exited after 40ms', `Why: ${exitedReadiness.reason.message}`];
+  const expectedMany = `FAIL worker panel panel-1: command exited: ${exitedReadiness.reason.message}`;
+
+  const daemonClient = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'daemonClient.js'));
+  const { parseRunpaneArgs } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'commands.js'));
+  const { runPanelsResume } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'localControl.js'));
+  const originalInvokeDaemon = daemonClient.invokeDaemon;
+  const originalConsoleLog = console.log;
+  const stdout = [];
+  daemonClient.invokeDaemon = async (channel) => channel === 'runpane:panels:resume-many' ? many : single;
+  console.log = (line) => stdout.push(String(line));
+  try {
+    await runPanelsResume(parseRunpaneArgs(['panels', 'resume', '--panel', 'panel-1', '--wait-ready', '--yes']));
+    await runPanelsResume(parseRunpaneArgs(['panels', 'resume', '--all-stopped', '--wait-ready', '--yes']));
+  } finally {
+    daemonClient.invokeDaemon = originalInvokeDaemon;
+    console.log = originalConsoleLog;
+  }
+
+  const pythonStdout = runPythonSnippet(`
+import contextlib
+import io
+import json
+import sys
+import runpane.local_control as local_control
+from runpane.cli import parse_args
+
+results = json.load(sys.stdin)
+local_control.invoke_daemon = lambda channel, args, **kwargs: results[channel]
+stdout = io.StringIO()
+with contextlib.redirect_stdout(stdout):
+    local_control.run_panels_resume(parse_args(["panels", "resume", "--panel", "panel-1", "--wait-ready", "--yes"]))
+    local_control.run_panels_resume(parse_args(["panels", "resume", "--all-stopped", "--wait-ready", "--yes"]))
+print(json.dumps(stdout.getvalue().splitlines()))
+`, JSON.stringify({ 'runpane:panels:resume': single, 'runpane:panels:resume-many': many }));
+
+  for (const [runtime, lines] of [['npm', stdout], ['pip', JSON.parse(pythonStdout)]]) {
+    const text = lines.join('\n');
+    for (const line of expectedSingle) {
+      assert.ok(lines.includes(line), `${runtime} resume output is missing "${line}":\n${text}`);
+    }
+    assert.ok(!lines.some(line => line.startsWith('Ready: blocked')), `${runtime} resume calls an exited command blocked:\n${text}`);
+    assert.ok(lines.includes(expectedMany), `${runtime} bulk resume output is missing "${expectedMany}":\n${text}`);
+  }
+}
+
 async function checkPanePinParity() {
   const daemonClient = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'daemonClient.js'));
   const { parseRunpaneArgs } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'commands.js'));
@@ -4386,6 +4462,7 @@ async function runChecks() {
   await checkReportParity();
   await checkReportDeliveryLine();
   await checkPaneCreateBlockedReadiness();
+  await checkPanelResumeCommandExitedReadiness();
   await checkSessionChildPinDefaults();
   await checkPanesCostParity();
   await checkPaneRenameParity();

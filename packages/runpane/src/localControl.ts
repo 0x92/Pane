@@ -3722,6 +3722,13 @@ function printPanelCreateResult(result: PanelCreateResult): void {
   }
 }
 
+/** One-line status for a bulk resume item that resumed but did not become ready. */
+function notReadySummary(readiness: PanelReadiness): string {
+  if (readiness.blocked) return `blocked: ${readiness.blocked.message}`;
+  const state = readiness.reason?.code === 'command-exited' ? 'command exited' : 'not ready';
+  return readiness.reason ? `${state}: ${readiness.reason.message}` : state;
+}
+
 function printReadiness(readiness: PanelReadiness, prefix = ''): void {
   const state = readiness.ok ? 'yes'
     : readiness.blocked ? 'blocked'
@@ -3780,9 +3787,9 @@ async function runPanelsResumeMany(parsed: ParsedArgs): Promise<number> {
     for (const item of result.items) {
       const status = item.error
         ? `failed: ${item.error}`
-        : item.readiness?.blocked
-          ? `blocked: ${item.readiness.blocked.message}`
-          : item.readiness && !item.readiness.ok ? 'not ready' : item.action ?? 'resumed';
+        : item.readiness && !item.readiness.ok
+          ? notReadySummary(item.readiness)
+          : item.action ?? 'resumed';
       console.log(`${item.ok ? 'OK' : 'FAIL'} ${item.paneName} panel ${item.panelId}: ${status}`);
     }
   }
@@ -3791,12 +3798,7 @@ async function runPanelsResumeMany(parsed: ParsedArgs): Promise<number> {
 
 function printPanelResumeResult(result: PanelResumeResult): void {
   console.log(`${result.action === 'resumed' ? 'Resumed' : 'Already running:'} panel ${result.panelId} in pane ${result.paneId}. ${result.message}`);
-  if (result.readiness) {
-    console.log(`Ready: ${result.readiness.ok ? 'yes' : result.readiness.timedOut ? 'timed out' : 'blocked'} after ${result.readiness.elapsedMs}ms`);
-    if (result.readiness.blocked) {
-      console.log(`Blocked: ${result.readiness.blocked.message}`);
-    }
-  }
+  if (result.readiness) printReadiness(result.readiness);
   console.log(`Next: ${result.nextCommand}`);
 }
 
