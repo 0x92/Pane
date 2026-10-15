@@ -48,6 +48,8 @@ interface SessionContextMenuState {
   y: number;
   /** The ⋯ button that opened the menu; focus moves into the menu and returns here on Escape. */
   trigger?: HTMLElement;
+  /** Where a dialog opened from the menu returns focus: the trigger, or the row right-clicked. */
+  returnFocusTo?: HTMLElement;
 }
 
 type SessionRowPlacement = 'pinned' | 'sessions';
@@ -219,7 +221,13 @@ export function OrchestrationSessionNav({
     });
   }, [toggleStoredSessionExpanded]);
 
-  const openSessionMenu = useCallback((session: OrchestrationSessionRecord, x: number, y: number, trigger?: HTMLElement) => {
+  const openSessionMenu = useCallback((
+    session: OrchestrationSessionRecord,
+    x: number,
+    y: number,
+    trigger?: HTMLElement,
+    returnFocusTo = trigger,
+  ) => {
     setSessionMenu({
       sessionId: session.id,
       sessionName: session.name || 'Pane Chat',
@@ -227,13 +235,15 @@ export function OrchestrationSessionNav({
       x,
       y,
       trigger,
+      returnFocusTo,
     });
   }, []);
 
   const handleSessionContextMenu = useCallback((event: ReactMouseEvent<HTMLElement>, session: OrchestrationSessionRecord) => {
     event.preventDefault();
     event.stopPropagation();
-    openSessionMenu(session, event.clientX, event.clientY);
+    // Not a trigger: a right-click leaves focus where it was, but a dialog closes back to this row.
+    openSessionMenu(session, event.clientX, event.clientY, undefined, event.currentTarget);
   }, [openSessionMenu]);
 
   const listSessions = useCallback((list: SessionOrderList) => (
@@ -765,7 +775,7 @@ function SessionContextMenu({ menu, onClose, onArchive, onPin, onMoveToHost }: S
           onClick={() => {
             if (moveBlockedReason) return;
             // The dialog returns focus to whatever had it when it opened; make that the row, not this closing item.
-            menu?.trigger?.focus();
+            menu?.returnFocusTo?.focus();
             onMoveToHost();
           }}
         >

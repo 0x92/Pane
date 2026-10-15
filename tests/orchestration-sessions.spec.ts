@@ -3269,6 +3269,15 @@ test('Move to host… sits between Rename and Archive in the Session menu, by mo
   await expect(page.getByRole('dialog', { name: 'Move Session to another host' })).toBeHidden();
   await expect(row).toBeFocused();
 
+  // The same from a mouse right-click, which never focused the row.
+  await page.getByRole('button', { name: 'New Session' }).first().focus();
+  await row.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Move to host…' }).click();
+  await expect(page.getByRole('dialog', { name: 'Move Session to another host' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Move Session to another host' })).toBeHidden();
+  await expect(row).toBeFocused();
+
   await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
   await page.getByTestId('compact-orchestration-session-alpha').click({ button: 'right' });
   await expect(menu.getByRole('menuitem')).toHaveText(['Pin Session', 'Rename Session…', 'Move to host…', 'Archive Session']);
