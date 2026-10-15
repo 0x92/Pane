@@ -35,6 +35,8 @@ export function sessionHostFor(config: Pick<RemoteDaemonConfig, 'client'> | unde
 export interface MoveTarget {
   name: string;
   os?: TailnetMachine['os'];
+  /** The owner's Tailscale login, set only for a teammate's machine. */
+  owner?: string;
   available: boolean;
   /** Why the Session can't move there; set only when unavailable. */
   reason?: string;
@@ -44,9 +46,11 @@ export type MoveTargetList =
   | { ok: true; targets: MoveTarget[]; noneReachable: boolean }
   | { ok: false; reason: string; fix: string };
 
-/** What `runpane handoff` can reach from the Session's host: your own machines with Pane answering. */
+/**
+ * What `runpane handoff` can reach from the Session's host: machines with Pane answering. A
+ * teammate's machine is listed only when its Pane accepts this login (Everyone on tailnet).
+ */
 function unavailableReason(machine: TailnetMachine): string | undefined {
-  if (!machine.mine) return `Belongs to ${machine.ownerLogin}; Sessions move only to your own machines`;
   switch (machine.state) {
     case 'available': return undefined;
     case 'offline': return 'Offline';
@@ -71,6 +75,7 @@ export function moveTargets({ machines, sessionHost, thisComputer }: {
     .filter(machine => machine.name.toLowerCase() !== host)
     .map(machine => {
       const target: MoveTarget = { name: machine.name, os: machine.os, available: true };
+      if (!machine.mine) target.owner = machine.ownerLogin;
       const reason = unavailableReason(machine);
       if (reason) {
         target.available = false;

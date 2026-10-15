@@ -114,7 +114,7 @@ export function MoveSessionToHostDialog({ sessionId, onClose, onMoved }: MoveSes
               <legend className="sr-only">Destination machine</legend>
               {targets.noneReachable && (
                 <p className="text-sm text-text-secondary">
-                  None of your other machines can take this Session right now. Open Pane on the machine you want, check it is signed in to Tailscale, then try again.
+                  No other machine can take this Session right now. Open Pane on the machine you want, check it is signed in to Tailscale, then try again.
                 </p>
               )}
               {targets.targets.map(option => (
@@ -139,7 +139,10 @@ export function MoveSessionToHostDialog({ sessionId, onClose, onMoved }: MoveSes
                     onChange={() => setSelected(option.name)}
                     className="sr-only"
                   />
-                  <span className="truncate font-medium">{option.name}</span>
+                  <span className="truncate font-medium">
+                    {option.name}
+                    {option.owner && <span className="font-normal text-text-tertiary"> · {option.owner}</span>}
+                  </span>
                   {option.reason && <span id={`move-session-target-reason-${option.name}`} className="text-xs text-text-tertiary">{option.reason}</span>}
                 </label>
               ))}

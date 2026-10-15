@@ -74,7 +74,7 @@ describe('moveTargets', () => {
         machine('closed-pane', { state: 'unreachable' }),
         machine('locked', { state: 'password-required' }),
         machine('old', { state: 'outdated' }),
-        machine('teammate', { mine: false, ownerLogin: 'sam@github' }),
+        machine('teammate-offline', { mine: false, ownerLogin: 'sam@github', state: 'offline' }),
       ),
       sessionHost: { kind: 'local' },
     });
@@ -85,9 +85,29 @@ describe('moveTargets', () => {
       ['closed-pane', false, expect.stringMatching(/Pane is not open/)],
       ['locked', false, expect.stringMatching(/password/)],
       ['old', false, expect.stringMatching(/older Pane/)],
-      ['teammate', false, expect.stringMatching(/sam@github/)],
+      ['teammate-offline', false, 'Offline'],
     ]);
     expect(result.noneReachable).toBe(false);
+  });
+
+  it('offers a teammate\'s machine that accepts this login, with its owner', () => {
+    const result = moveTargets({
+      machines: list(machine('tylers-mac-mini'), machine('parsa-devbox', { mine: false, ownerLogin: 'parsakhaz@github', visibility: 'tailnet' })),
+      sessionHost: { kind: 'local' },
+    });
+    if (!result.ok) throw new Error('expected targets');
+    expect(result.targets).toEqual([
+      { name: 'tylers-mac-mini', os: 'macOS', available: true },
+      { name: 'parsa-devbox', os: 'macOS', owner: 'parsakhaz@github', available: true },
+    ]);
+  });
+
+  it('lets a teammate\'s machine be the only reachable target', () => {
+    const result = moveTargets({
+      machines: list(machine('parsa-devbox', { mine: false, ownerLogin: 'parsakhaz@github' })),
+      sessionHost: { kind: 'local' },
+    });
+    expect(result.ok && result.noneReachable).toBe(false);
   });
 
   it('says so, with the fix, when no machine can take the Session', () => {
