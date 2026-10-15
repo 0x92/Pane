@@ -672,6 +672,36 @@ function emitOpenCodeIdleFrame(handle: FakePtyHandle, transparent = false): void
     }
   });
 
+  it.each([
+    ['an Agent Farm wrapper', { initialCommand: 'agent-farm run greenfield/implementer:opus', launchMode: 'wrapped' as const, agentType: 'claude' as const }],
+    ['Claude', { initialCommand: 'claude', agentType: 'claude' as const }],
+  ])('marks %s ready again after it is relaunched in the same shell', async (_name, customState) => {
+    vi.useFakeTimers();
+    try {
+      const panel = { ...makePanel(`relaunch-ready-${customState.initialCommand.length}`), state: { isActive: false, hasBeenViewed: true, customState: { ...customState, isCliPanel: true } } };
+      const { manager, handle } = await startTerminal(panel);
+      const cliReadyEvents = () => events.filter(event => event.channel === 'terminal:cliReady').length;
+      handle.emit('$ ');
+      await vi.advanceTimersByTimeAsync(500);
+      handle.emit('Agent starting...\r\n');
+      await vi.advanceTimersByTimeAsync(400);
+      expect(cliReadyEvents()).toBe(1);
+
+      // The agent exited back to the shell; resume runs its command there again.
+      handle.emit('$ ');
+      await manager.relaunchInShell(panel.id);
+      expect(manager.getTerminalSnapshot(panel.id)?.isCliReady).toBe(false);
+      handle.emit('Agent starting again...\r\n');
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(cliReadyEvents()).toBe(2);
+      expect(manager.getTerminalSnapshot(panel.id)?.isCliReady).toBe(true);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it('waits for the fixture-backed idle composer after shell and startup output', async () => {
     vi.useFakeTimers();
     try {
