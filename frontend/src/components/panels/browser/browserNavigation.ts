@@ -60,14 +60,18 @@ export function worktreeFileOf(pageUrl: string | undefined, worktreePath: string
   try {
     const parsed = new URL(pageUrl);
     if (parsed.protocol !== 'file:') return null;
-    filePath = decodeURIComponent(parsed.pathname);
+    // A UNC path (\\wsl.localhost\Ubuntu\repo) becomes file://wsl.localhost/Ubuntu/repo:
+    // its host is part of the path.
+    const host = parsed.hostname ? `//${parsed.hostname}` : '';
+    filePath = host + decodeURIComponent(parsed.pathname);
   } catch {
     return null;
   }
   // file:///C:/repo/a.html has the pathname /C:/repo/a.html.
   if (/^\/[A-Za-z]:\//.test(filePath)) filePath = filePath.slice(1);
   const root = worktreePath.replace(/\\/g, '/').replace(/\/+$/, '');
-  const caseInsensitive = /^[A-Za-z]:\//.test(root);
+  // Windows paths, drive or UNC, ignore case; the URL also lowercases a UNC host.
+  const caseInsensitive = /^([A-Za-z]:|\/\/[^/])/.test(root);
   const inside = caseInsensitive ? filePath.toLowerCase().startsWith(`${root.toLowerCase()}/`) : filePath.startsWith(`${root}/`);
   return inside ? filePath.slice(root.length + 1) : null;
 }

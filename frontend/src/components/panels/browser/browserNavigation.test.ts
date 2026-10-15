@@ -62,6 +62,11 @@ describe('worktreeFileOf', () => {
     expect(worktreeFileOf('file:///C:/Repo/wt/site/index.html', 'c:\\repo\\wt\\')).toBe('site/index.html');
   });
 
+  it('handles Windows UNC paths such as a WSL worktree, keeping the host', () => {
+    expect(worktreeFileOf('file://wsl.localhost/Ubuntu/home/user/repo/site/index.html', '\\\\wsl.localhost\\Ubuntu\\home\\user\\repo')).toBe('site/index.html');
+    expect(worktreeFileOf('file://other-host/Ubuntu/home/user/repo/index.html', '\\\\wsl.localhost\\Ubuntu\\home\\user\\repo')).toBeNull();
+  });
+
   it.each([
     ['https://example.com/index.html', '/repo/wt'],
     ['file:///repo/wt-other/index.html', '/repo/wt'],
