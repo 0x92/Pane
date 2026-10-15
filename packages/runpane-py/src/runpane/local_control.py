@@ -287,8 +287,7 @@ def read_session_payload(parsed: Any, command: str) -> Dict[str, Any]:
         raise ValueError(f"runpane sessions {command} received invalid JSON: {error}") from error
     if not isinstance(value, dict):
         raise ValueError(f"runpane sessions {command} JSON input must be an object.")
-    if command == "create" and not isinstance(value.get("name"), str):
-        raise ValueError("runpane sessions create JSON input requires a string name.")
+    # The daemon checks the fields and names every problem in one ERR_SESSION_PAYLOAD_INVALID.
     return value
 
 

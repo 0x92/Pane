@@ -424,6 +424,23 @@ describe('runpane IPC handlers', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('names a missing Session name with every other create payload problem, as the CLIs expect', async () => {
+    const create = vi.fn();
+    // SAFETY: This command only reaches create, which must not be called for an invalid payload.
+    const registry = createRegistry(createServices({ orchestrationSessionManager: { create } as never }));
+
+    // The Python CLI forwards this payload unchanged; scripts/test-runpane-python-parity.js expects this wording.
+    const failure = registry.invoke('runpane:sessions:create', [{ outputs: [{ label: 'result' }] }]);
+
+    await expect(failure).rejects.toMatchObject({
+      code: 'ERR_SESSION_PAYLOAD_INVALID',
+      message: 'The Session create payload has 3 problems: name: missing; '
+        + 'outputs[0].url: missing; outputs[0].addedAt: missing. Nothing was changed.',
+      next: expect.stringContaining('runpane agent-context --command "sessions create"'),
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('passes a well-formed Session update payload through unchanged', async () => {
     const update = vi.fn(async () => ({ id: 'coordinator', revision: 2 }));
     // SAFETY: This command only reaches update; the stub returns the minimal Session the handler forwards.
