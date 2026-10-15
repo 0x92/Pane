@@ -1344,7 +1344,7 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   async stageInitialCommand(panelId: string, initialCommand: string): Promise<void> {
-    this.writeToTerminal(panelId, await this.resolveLaunchInShell(panelId, initialCommand));
+    this.writeToTerminal(panelId, (await this.resolveLaunchInShell(panelId, initialCommand)).commandToRun);
   }
 
   /**
@@ -1359,16 +1359,97 @@ export class TerminalPanelManager extends EventEmitter {
     if (!terminal || terminal.destroying || !initialCommand) {
       throw new Error(`Panel ${panelId} has no live shell with a launch command to run again`);
     }
-    const commandToRun = await this.resolveLaunchInShell(panelId, initialCommand);
+    const launch = await this.resolveLaunchInShell(panelId, initialCommand);
     if (this.terminals.get(panelId) !== terminal || terminal.destroying) {
       throw new Error(`Panel ${panelId} closed before its launch command could run again`);
     }
-    this.writeToTerminal(panelId, `${commandToRun}\r`);
+    this.writeToTerminal(panelId, `${launch.commandToRun}\r`);
     terminal.launchCommandWrittenAt = Date.now();
+    // The saved state now says not ready; the relaunched agent must say ready again.
+    if (launch.isCliCommand) this.armCliReadySignal(terminal, launch.customState.agentType);
   }
 
-  /** Resolve and persist a launch command for a panel's live shell; returns the text to type. */
-  private async resolveLaunchInShell(panelId: string, initialCommand: string): Promise<string> {
+  /**
+   * Mark a CLI launch ready (`isCliReady`, the renderer's `terminal:cliReady`)
+   * once the agent first draws, or after 10 s regardless. Armed for every
+   * launch of the command, including a relaunch in the same shell.
+   */
+  private armCliReadySignal(terminalProcess: TerminalProcess, agentType: CliAgentType | undefined): void {
+    const panelId = terminalProcess.panelId;
+    const ptyProcess = terminalProcess.pty;
+    let cliReadySignaled = false;
+    let cliActuallyReady = false;
+    let actualReadyTimer: ReturnType<typeof setTimeout> | undefined;
+    // Declare before signalCliReady so the closure can reference it
+    let onCliOutput: ReturnType<typeof ptyProcess.onData> | null = null;
+    const isOpenCode = agentType === 'opencode';
+
+    const signalCliReady = (actualReady: boolean) => {
+      if (this.terminals.get(panelId) !== terminalProcess || terminalProcess.destroying) return;
+      if (!actualReady && isOpenCode) return;
+      if (actualReady) {
+        if (cliActuallyReady) return;
+        cliActuallyReady = true;
+        if (onCliOutput) onCliOutput.dispose();
+        onCliOutput = null;
+      } else if (cliReadySignaled) {
+        return;
+      }
+
+      if (!cliReadySignaled) {
+        cliReadySignaled = true;
+
+        // Persist isCliReady on panel state (best-effort, fire-and-forget)
+        const currentPanel = panelManager.getPanel(panelId);
+        if (currentPanel) {
+          const ps = currentPanel.state;
+          const cs2 = terminalCustomState(ps);
+          cs2.isCliReady = true;
+          ps.customState = cs2;
+          panelManager.updatePanel(panelId, { state: ps }); // async, not awaited
+        }
+
+        // Emit to renderer
+        this.sendRendererEvent('terminal:cliReady', { panelId });
+        if (agentType !== 'opencode') {
+          this.holdInitialInput(panelId);
+        }
+      }
+
+      if (actualReady && agentType === 'opencode') {
+        // OpenCode's actual output is the prompt-delivery boundary; its
+        // UI timeout must not consume input before the TUI is ready.
+        this.sendInitialInputOnce(panelId);
+      }
+    };
+
+    // Listen for CLI output after command injection. Cursor launches are
+    // preceded by the create-chat compound's shell traffic, so ready is
+    // gated on the TUI's own first render signal; other agents keep the
+    // first-byte trigger. Either way, fire a single delayed signal.
+    const cursorReady = agentType === 'cursor'
+      ? createCursorReadyDetector()
+      : null;
+    if (isOpenCode) {
+      terminalProcess.onOpenCodeReady = () => signalCliReady(true);
+    } else {
+      onCliOutput = ptyProcess.onData((chunk: string) => {
+        if (cursorReady && !cursorReady(chunk)) return;
+        if (actualReadyTimer) return;
+        // Small delay to let the CLI render its first frame
+        actualReadyTimer = setTimeout(() => {
+          actualReadyTimer = undefined;
+          signalCliReady(true);
+        }, 300);
+      });
+    }
+
+    // Safety timeout: dismiss after 10s regardless
+    setTimeout(() => signalCliReady(false), 10000);
+  }
+
+  /** Resolve and persist a launch command for a panel's live shell. */
+  private async resolveLaunchInShell(panelId: string, initialCommand: string): Promise<CliLaunchResolution> {
     const panel = panelManager.getPanel(panelId);
     if (!panel) throw new Error(`Panel ${panelId} not found`);
     const state = terminalCustomState(panel.state);
@@ -1392,7 +1473,7 @@ export class TerminalPanelManager extends EventEmitter {
       terminal.reportedSessionIdLocked = undefined;
       terminal.agentSessionScrapeBuffer = '';
     }
-    return launch.commandToRun;
+    return launch;
   }
 
   private async persistOpenCodeLaunchState(
@@ -1788,75 +1869,7 @@ export class TerminalPanelManager extends EventEmitter {
 
         // For CLI tool terminals, signal the frontend when the CLI responds
         if (isCliCommand) {
-          let cliReadySignaled = false;
-          let cliActuallyReady = false;
-          let actualReadyTimer: ReturnType<typeof setTimeout> | undefined;
-          // Declare before signalCliReady so the closure can reference it
-          let onCliOutput: ReturnType<typeof ptyProcess.onData> | null = null;
-          const isOpenCode = launchResolution.customState.agentType === 'opencode';
-
-          const signalCliReady = (actualReady: boolean) => {
-            if (this.terminals.get(panelId) !== terminalProcess || terminalProcess.destroying) return;
-            if (!actualReady && isOpenCode) return;
-            if (actualReady) {
-              if (cliActuallyReady) return;
-              cliActuallyReady = true;
-              if (onCliOutput) onCliOutput.dispose();
-              onCliOutput = null;
-            } else if (cliReadySignaled) {
-              return;
-            }
-
-            if (!cliReadySignaled) {
-              cliReadySignaled = true;
-
-              // Persist isCliReady on panel state (best-effort, fire-and-forget)
-              const currentPanel = panelManager.getPanel(panelId);
-              if (currentPanel) {
-                const ps = currentPanel.state;
-                const cs2 = terminalCustomState(ps);
-                cs2.isCliReady = true;
-                ps.customState = cs2;
-                panelManager.updatePanel(panelId, { state: ps }); // async, not awaited
-              }
-
-              // Emit to renderer
-              this.sendRendererEvent('terminal:cliReady', { panelId });
-              if (launchResolution.customState.agentType !== 'opencode') {
-                this.holdInitialInput(panelId);
-              }
-            }
-
-            if (actualReady && launchResolution.customState.agentType === 'opencode') {
-              // OpenCode's actual output is the prompt-delivery boundary; its
-              // UI timeout must not consume input before the TUI is ready.
-              this.sendInitialInputOnce(panelId);
-            }
-          };
-
-          // Listen for CLI output after command injection. Cursor launches are
-          // preceded by the create-chat compound's shell traffic, so ready is
-          // gated on the TUI's own first render signal; other agents keep the
-          // first-byte trigger. Either way, fire a single delayed signal.
-          const cursorReady = launchResolution.customState.agentType === 'cursor'
-            ? createCursorReadyDetector()
-            : null;
-          if (isOpenCode) {
-            terminalProcess.onOpenCodeReady = () => signalCliReady(true);
-          } else {
-            onCliOutput = ptyProcess.onData((chunk: string) => {
-              if (cursorReady && !cursorReady(chunk)) return;
-              if (actualReadyTimer) return;
-              // Small delay to let the CLI render its first frame
-              actualReadyTimer = setTimeout(() => {
-                actualReadyTimer = undefined;
-                signalCliReady(true);
-              }, 300);
-            });
-          }
-
-          // Safety timeout: dismiss after 10s regardless
-          setTimeout(() => signalCliReady(false), 10000);
+          this.armCliReadySignal(terminalProcess, launchResolution.customState.agentType);
         } else if (initialInput) {
           // A command Pane does not know yet may be a wrapper: its message waits for an identified agent.
           this.holdInitialInput(panelId);
