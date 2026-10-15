@@ -3755,6 +3755,22 @@ describe('runpane IPC handlers', () => {
       expect(result).toMatchObject({ resumed: 3, alreadyRunning: 0 });
     });
 
+    it('runs the command again once when a panel resume overlaps a resume of every stopped panel', async () => {
+      vi.mocked(terminalPanelManager.hasLaunchCommandExited).mockImplementation(async (id: string) => id === runningCodex.id);
+      // Resolving the launch takes a while, as it does when the resume command is looked up.
+      vi.mocked(terminalPanelManager.relaunchInShell).mockImplementation(() => new Promise(resolve => setTimeout(resolve, 20)));
+      const registry = createRegistry(bulkServices());
+
+      const [single, bulk] = await Promise.all([
+        registry.invoke('runpane:panels:resume', [{ panelId: runningCodex.id }]),
+        registry.invoke('runpane:panels:resume-many', [{ allStopped: true }]),
+      ]);
+
+      expect(terminalPanelManager.relaunchInShell).toHaveBeenCalledTimes(1);
+      expect(single).toMatchObject({ ok: true, action: 'resumed' });
+      expect(bulk).toMatchObject({ failed: 0 });
+    });
+
     it('also resumes a stopped Agent Farm panel that never reported an agent', async () => {
       const agentFarm: ToolPanel = {
         ...terminalPanel,

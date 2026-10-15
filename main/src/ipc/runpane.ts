@@ -2764,9 +2764,8 @@ async function resumeTerminalPanel(
     }))
     : undefined;
   if (terminalPanelManager.isTerminalInitialized(panel.id)) {
-    if (await terminalPanelManager.hasLaunchCommandExited(panel.id)) {
-      // The agent exited back to Pane's shell: run its saved command there again.
-      await terminalPanelManager.relaunchInShell(panel.id);
+    // The agent exited back to Pane's shell: run its saved command there again, once for overlapping resumes.
+    if (await terminalPanelManager.relaunchIfExited(panel.id)) {
       const relaunched = panelManager.getPanel(panel.id) ?? panel;
       return panelResumeResult(relaunched, 'resumed', resumeMessage(relaunched), await waitIfAsked(relaunched));
     }

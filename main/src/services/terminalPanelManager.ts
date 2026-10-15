@@ -385,6 +385,8 @@ export class TerminalPanelManager extends EventEmitter {
   private spawnQueue: Array<{ resolve: () => void; priority: number }> = [];
   /** One initialization owner per panel; callers joining it observe the same outcome. */
   private readonly terminalInitializations = new Map<string, Promise<void>>();
+  /** One in-place relaunch per panel; callers joining it observe the same outcome. */
+  private readonly shellRelaunches = new Map<string, Promise<boolean>>();
 
   // At-a-glance agent status (blocked/working/done) for AI/CLI panels.
   private readonly agentStatusMonitor = new AgentStatusMonitor();
@@ -1345,6 +1347,25 @@ export class TerminalPanelManager extends EventEmitter {
 
   async stageInitialCommand(panelId: string, initialCommand: string): Promise<void> {
     this.writeToTerminal(panelId, (await this.resolveLaunchInShell(panelId, initialCommand)).commandToRun);
+  }
+
+  /**
+   * Run the panel's saved launch command again in its live shell if it
+   * exited (hasLaunchCommandExited). A caller that arrives while a relaunch is
+   * in flight joins it instead of writing the command a second time. Resolves
+   * true when the command was run again.
+   */
+  relaunchIfExited(panelId: string): Promise<boolean> {
+    const inFlight = this.shellRelaunches.get(panelId);
+    if (inFlight) return inFlight;
+    // Claimed before the first await, so the exit check runs once per relaunch.
+    const relaunch = (async () => {
+      if (!await this.hasLaunchCommandExited(panelId)) return false;
+      await this.relaunchInShell(panelId);
+      return true;
+    })().finally(() => this.shellRelaunches.delete(panelId));
+    this.shellRelaunches.set(panelId, relaunch);
+    return relaunch;
   }
 
   /**
