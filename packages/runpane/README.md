@@ -245,6 +245,16 @@ when blocked. READY alone is activity evidence. Read the full report with
 `runpane agents status --panel <id> --json`. Resume stopped workers in the same
 panel with `runpane panels resume --panel <id> --wait-ready --yes --json`.
 
+Add `--expect-report` to `panels create`, `panes create`, or `panels submit`
+when you wait for that report. If the agent goes ready or exits without one,
+watchers that list `agent.report.missing` get `MISSING REPORT <pane> pane
+<pane-id> panel <panel-id> ready` with its last reply; add it to `--kinds`, for
+example `--until-event --kinds
+agent.report,agent.report.missing,agent.blocked,panel.exited,pane.gone`.
+`runpane inbox [--session <id|name>]` lists the reports, missing reports, and
+on-screen questions a Session has not acknowledged, and `runpane inbox ack
+<id>...` clears them.
+
 Do not pipe follow through `head` or `grep -m1` to wait. Run `--until-event` as
 a supported background task, act on its events, then re-arm with its cursor.
 Never sleep-poll your own background task output. WATCH ERROR/nonzero exit

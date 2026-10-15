@@ -115,6 +115,14 @@ export interface ParsedArgs {
   summary?: string;
   summaryFile?: string;
   question?: string;
+  /** panels create|submit, panes create: the sender waits for a `runpane report`. */
+  expectReport?: boolean;
+  /** inbox: print Claude Code UserPromptSubmit hook output. */
+  hook?: boolean;
+  /** inbox ack: clear every item of the Session. */
+  all?: boolean;
+  /** inbox ack: the item ids to clear. */
+  inboxIds?: string[];
   lockTtlMs?: number;
   lockWaitMs?: number;
   note?: string;
@@ -301,6 +309,12 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
   }
   if (parsed.command === 'watch') applyWatchDefaults(parsed);
   if (parsed.command === 'report') validateReportArgs(parsed);
+  if (parsed.command === 'inbox ack' && !parsed.all && !parsed.inboxIds?.length) {
+    throw new Error('runpane inbox ack needs the item ids to clear, or --all --session <id|name>.');
+  }
+  if (parsed.command === 'inbox ack' && parsed.all && parsed.inboxIds?.length) {
+    throw new Error('runpane inbox ack accepts either item ids or --all, not both.');
+  }
   return parsed;
 }
 
@@ -364,8 +378,13 @@ function takeWorkspaceMachine(args: string[]): string | undefined {
   return args.splice(1, 1)[0];
 }
 
-/** `--` takes the rest of the line for exec; read and write take one path. */
-function takeWorkspaceVerbArgs(command: string, args: string[]): Pick<ParsedArgs, 'workspacePath' | 'execCommand' | 'handoffDestination'> {
+/** `--` takes the rest of the line for exec; read and write take one path; inbox ack takes item ids. */
+function takeWorkspaceVerbArgs(command: string, args: string[]): Pick<ParsedArgs, 'workspacePath' | 'execCommand' | 'handoffDestination' | 'inboxIds'> {
+  if (command === 'inbox ack') {
+    const ids: string[] = [];
+    while (args[0] !== undefined && !args[0].startsWith('-')) ids.push(args.shift() ?? '');
+    return ids.length ? { inboxIds: ids } : {};
+  }
   if (command === 'handoff') {
     const words: string[] = [];
     while (args[0] !== undefined && !args[0].startsWith('-')) words.push(args.shift() ?? '');
@@ -662,6 +681,18 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
   }
   if (flag === '--template') {
     parsed.handoffTemplate = true;
+    return;
+  }
+  if (flag === '--expect-report') {
+    parsed.expectReport = true;
+    return;
+  }
+  if (flag === '--hook') {
+    parsed.hook = true;
+    return;
+  }
+  if (flag === '--all') {
+    parsed.all = true;
     return;
   }
   if (flag === '--push') {

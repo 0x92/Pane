@@ -52,6 +52,8 @@ from .local_control import (
     run_repos_add,
     run_repos_list,
     run_report,
+    run_inbox,
+    run_inbox_ack,
     run_sessions_associate,
     run_sessions_create,
     run_sessions_detach,
@@ -217,6 +219,10 @@ class ParsedArgs:
     summary: Optional[str] = None
     summary_file: Optional[str] = None
     question: Optional[str] = None
+    expect_report: bool = False
+    hook: bool = False
+    all: bool = False
+    inbox_ids: List[str] = field(default_factory=list)
     lock_ttl_ms: Optional[int] = None
     lock_wait_ms: Optional[int] = None
     note: Optional[str] = None
@@ -442,6 +448,9 @@ def parse_args(argv: List[str]) -> ParsedArgs:
     del args[:len(tokens)]
 
     parsed = ParsedArgs(command=command)
+    if parsed.command == "inbox ack":
+        while args and not args[0].startswith("-"):
+            parsed.inbox_ids.append(args.pop(0))
     if parsed.command == "install" and args and not args[0].startswith("-"):
         target = args.pop(0)
         if target not in TARGETS:
@@ -483,6 +492,10 @@ def parse_args(argv: List[str]) -> ParsedArgs:
         apply_watch_defaults(parsed)
     if parsed.command == "report":
         validate_report_args(parsed)
+    if parsed.command == "inbox ack" and not parsed.all and not parsed.inbox_ids:
+        raise ValueError("runpane inbox ack needs the item ids to clear, or --all --session <id|name>.")
+    if parsed.command == "inbox ack" and parsed.all and parsed.inbox_ids:
+        raise ValueError("runpane inbox ack accepts either item ids or --all, not both.")
     return parsed
 
 
@@ -787,6 +800,15 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
         return
     if flag == "--read-only":
         parsed.read_only = True
+        return
+    if flag == "--expect-report":
+        parsed.expect_report = True
+        return
+    if flag == "--hook":
+        parsed.hook = True
+        return
+    if flag == "--all":
+        parsed.all = True
         return
     raise ValueError(f"Unknown option for {parsed.command}: {flag}")
 
@@ -1325,6 +1347,8 @@ COMMAND_HANDLERS: Dict[str, Callable[[ParsedArgs, WrapperTelemetryContext], int]
     "panels resume": lambda parsed, context: run_panels_resume(parsed),
     "panels last-message": lambda parsed, context: run_panels_last_message(parsed),
     "report": lambda parsed, context: run_report(parsed),
+    "inbox": lambda parsed, context: run_inbox(parsed),
+    "inbox ack": lambda parsed, context: run_inbox_ack(parsed),
     "agents doctor": lambda parsed, context: run_agents_doctor(parsed),
     "panes adopt": lambda parsed, context: run_panes_adopt(parsed),
     "help": lambda parsed, context: print_help(parsed),

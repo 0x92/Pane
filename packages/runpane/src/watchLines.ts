@@ -25,6 +25,7 @@ interface WatchEntry {
   idleMs?: number;
   idleCount?: number;
   report?: WatchReport;
+  reason?: string | null;
 }
 
 /** The fields of a worker report a REPORT line shows. */
@@ -87,6 +88,7 @@ function formatEntryLine(entry: WatchEntry): string | undefined {
     case 'github.unavailable': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} GITHUB UNAVAILABLE${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
     case 'github.recovered': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} GITHUB RECOVERED${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
     case 'agent.report': return `REPORT ${name} ${pane}${panel} ${entry.report ? describeReport(entry.report) : 'unknown'}`;
+    case 'agent.report.missing': return `MISSING REPORT ${name} ${pane}${panel} ${sanitizeName(entry.reason ?? 'ready')}`;
     default: return `UNKNOWN ${name} ${pane}${panel}`;
   }
 }

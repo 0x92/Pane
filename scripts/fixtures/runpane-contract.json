@@ -939,6 +939,67 @@
       "42",
       "--epoch",
       "test-epoch"
+    ],
+    [
+      "panels",
+      "submit",
+      "--panel",
+      "panel-1",
+      "--text",
+      "go",
+      "--expect-report",
+      "--yes",
+      "--json"
+    ],
+    [
+      "panels",
+      "create",
+      "--pane",
+      "pane-1",
+      "--agent",
+      "claude",
+      "--expect-report",
+      "--yes"
+    ],
+    [
+      "panes",
+      "create",
+      "--repo",
+      "active",
+      "--name",
+      "feat",
+      "--agent",
+      "codex",
+      "--expect-report",
+      "--yes"
+    ],
+    [
+      "inbox",
+      "--session",
+      "Release",
+      "--json"
+    ],
+    [
+      "inbox",
+      "--hook",
+      "--pane-dir",
+      "/tmp/pane"
+    ],
+    [
+      "inbox",
+      "ack",
+      "in-1a2b3c4d",
+      "in-5e6f7a8b",
+      "--session",
+      "Release",
+      "--json"
+    ],
+    [
+      "inbox",
+      "ack",
+      "--all",
+      "--session",
+      "Release"
     ]
   ],
   "help": {
