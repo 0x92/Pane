@@ -2,7 +2,7 @@
 
 `runpane workspace` lets your Macs, Windows PCs, and Linux machines read files, write files, run commands, and drive each other's Pane over the Tailscale network you already use. There is no SSH, no keys, and no pairing code: each request is trusted because Tailscale says which login it comes from. Your own login is always let in; a teammate's machine lets you in when its owner shares it with everyone on the tailnet.
 
-The same listener powers codeless desktop remote mode: Settings → Remote Access → **Your computers** lists the machines on your tailnet with Pane open, and **Connect** switches the desktop app to that machine with no `pane-remote://` code. `runpane workspace` reaches the same machines. Who may connect is set under **Access to this computer** → **Who can connect** (see [Who is trusted](#who-is-trusted)).
+The same listener powers codeless desktop remote mode: Settings → Remote Access → **Your computers** lists the machines on your tailnet with Pane open (a teammate's machine that accepts only its owner shows as "Owner only" and can't be connected to), and **Connect** switches the desktop app to that machine with no `pane-remote://` code. `runpane workspace` reaches the same machines. Who may connect is set under **Access to this computer** → **Who can connect** (see [Who is trusted](#who-is-trusted)).
 
 ```
 runpane workspace list

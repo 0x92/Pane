@@ -270,10 +270,11 @@ replace an unrelated selection.
 
 Right-click a Session, or use its ⋯ button, and choose **Move to host…** to
 continue it on another machine. The dialog lists your Tailscale machines
-running Pane, except the one the Session is on, plus a teammate's machine when
-its owner set Who can connect to Everyone on tailnet, shown with the owner's
-login after its name. Machines Pane can't
-reach are shown disabled with the reason. If none can be reached, it says so:
+running Pane, except the one the Session is on, and your teammates' machines
+running Pane, shown with the owner's login after the name. A teammate's machine
+is a target only when its owner set Who can connect to Everyone on tailnet.
+Machines Pane can't reach, or that accept only their owner, are shown disabled
+with the reason. If none can be reached, it says so:
 open Pane on the other machine, or sign in to Tailscale. While you view a host
 connected with a pairing code rather than over Tailscale, the item is disabled,
 because Pane can't tell which machine that is. Choosing a machine

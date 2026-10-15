@@ -57,6 +57,8 @@ function unavailableReason(machine: TailnetMachine): string | undefined {
     case 'unreachable': return 'Pane is not open there, or its remote access is off';
     case 'password-required': return 'Asks for a password, which handoff cannot send';
     case 'outdated': return 'Runs an older Pane; update Pane there first';
+    // The owner's login is shown next to the name.
+    case 'refused': return 'Accepts only its owner\'s Tailscale login; they can set Who can connect → Everyone on tailnet';
   }
 }
 

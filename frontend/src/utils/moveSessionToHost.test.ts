@@ -75,6 +75,7 @@ describe('moveTargets', () => {
         machine('locked', { state: 'password-required' }),
         machine('old', { state: 'outdated' }),
         machine('teammate-offline', { mine: false, ownerLogin: 'sam@github', state: 'offline' }),
+        machine('teammate-private', { mine: false, ownerLogin: 'sam@github', state: 'refused' }),
       ),
       sessionHost: { kind: 'local' },
     });
@@ -86,6 +87,7 @@ describe('moveTargets', () => {
       ['locked', false, expect.stringMatching(/password/)],
       ['old', false, expect.stringMatching(/older Pane/)],
       ['teammate-offline', false, 'Offline'],
+      ['teammate-private', false, 'Accepts only its owner\'s Tailscale login; they can set Who can connect → Everyone on tailnet'],
     ]);
     expect(result.noneReachable).toBe(false);
   });
