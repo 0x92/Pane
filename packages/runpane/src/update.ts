@@ -82,7 +82,13 @@ export async function runUpdate(parsed: ParsedArgs): Promise<number> {
     if (!readUpdateJournal(file).helperPid) throw new RunpaneError('ERR_UPDATE_HELPER_NOT_READY', 'The supervisor did not acknowledge startup. Pane was not shut down.', `Inspect ${directory} and retry after resolving the supervisor error.`);
   } catch (error) {
     // A queued task must not wake later and shut down a host after its caller
-    // reported failure. The terminal journal is committed before unregistering.
+    // reported failure. Fence independently of the mutable journal: a helper
+    // may be publishing its acknowledgment concurrently with this failure.
+    writeUpdateJson(path.join(directory, 'canceled.json'), { id, reason: error instanceof Error ? error.message : String(error) });
+    // A supervisor command can fail after launching its task. Once the helper
+    // acknowledged, it owns reconciliation and any post-shutdown locks; never
+    // overwrite its progress or release those locks from the requesting CLI.
+    if (readUpdateJournal(file).helperPid) return presentUpdate(file, parsed);
     writeUpdateJson(file, { ...readUpdateJournal(file), phase: 'failed', error: error instanceof Error ? error.message : String(error) });
     try { removeUpdateSupervisor(id); } catch { /* the operation is durably failed */ }
     for (const lock of [preflight.lockDirectory, ...preflight.additionalLockDirectories]) releaseUpdateLock(lock, id);

@@ -124,5 +124,20 @@ describe('durable update operation', () => {
     expect(seen).toEqual(['stage']);
     expect(result.phase).toBe('failed');
   });
+  it('honors immutable handoff cancellation even if a concurrent acknowledgment overwrites the journal', async () => {
+    const { file, directory } = fixture();
+    const seen: string[] = [];
+    const result = await executeUpdate(file, { run: async step => {
+      seen.push(step);
+      if (step === 'stage') {
+        writeUpdateJson(path.join(directory, 'canceled.json'), { id: 'test', reason: 'Supervisor startup timed out' });
+        writeUpdateJson(file, { ...readUpdateJournal(file), phase: 'accepted' });
+      }
+      return {};
+    } });
+    expect(result.phase).toBe('failed');
+    expect(seen).toEqual(['stage']);
+    expect(result.appUpdated).toBe(false);
+  });
 
 });
