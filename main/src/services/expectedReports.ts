@@ -12,6 +12,10 @@ import type { TerminalExpectedReport } from '../../../shared/types/panels';
  * `agent.report.missing` entry carrying what the agent said last, so a worker that finished silently
  * still reaches its orchestrator.
  *
+ * An agent that went ready while its screen shows background work (a Claude shell or subagent, a
+ * Codex background terminal) has not finished: the tracker waits, re-reading the screen every
+ * `recheckMs` while the panel stays ready, and raises once nothing runs or the panel exits.
+ *
  * Expectations live in their own file (`expected-reports.json`), written only here. Panel state is
  * rewritten from snapshots elsewhere, so a cleared expectation kept there could come back.
  */
@@ -19,6 +23,11 @@ import type { TerminalExpectedReport } from '../../../shared/types/panels';
 /** An `agent.report.missing` entry carries at most this much of the agent's last output. */
 export const MAX_MISSING_REPORT_OUTPUT_LENGTH = 2_000;
 const TRUNCATION_MARKER = '[earlier output cut]\n';
+/** How often a ready panel with background work is looked at again. */
+const BACKGROUND_RECHECK_MS = 10_000;
+const STATE_CHANGES: ReadonlySet<RunpaneWorkspaceEntry['kind']> = new Set([
+  'agent.ready', 'agent.busy', 'agent.blocked', 'agent.unknown', 'agent.report', 'panel.exited', 'panel.stopped',
+]);
 
 const expectationsFileSchema = boundary.object({
   version: boundary.literal(1),
@@ -39,6 +48,9 @@ export interface ExpectedReportTrackerOptions {
   lastReportAt(panelId: string): string | undefined;
   /** The agent's last reply, or else the last lines on its screen. */
   lastOutput(panelId: string): Promise<PanelLastOutput | undefined>;
+  /** What the panel's agent still runs in the background (from its screen), if anything. */
+  backgroundWork?: (panelId: string) => string | undefined;
+  recheckMs?: number;
   /** False for a panel that no longer exists; its saved expectation is dropped on load. */
   panelExists?: (panelId: string) => boolean;
   log?: (message: string, error: Error) => void;
@@ -47,6 +59,8 @@ export interface ExpectedReportTrackerOptions {
 export class ExpectedReportTracker {
   private readonly expectations = new Map<string, TerminalExpectedReport>();
   private readonly raising = new Set<string>();
+  /** Ready panels waiting for their background work to end, with the READY that started the wait. */
+  private readonly waiting = new Map<string, { entry: RunpaneWorkspaceEntry; timer: ReturnType<typeof setTimeout> }>();
   private readonly unsubscribe: () => void;
   private loaded = false;
 
@@ -56,6 +70,7 @@ export class ExpectedReportTracker {
 
   dispose(): void {
     this.unsubscribe();
+    for (const panelId of [...this.waiting.keys()]) this.stopWaiting(panelId);
   }
 
   /** Records that the sender of the panel's work, sent at `since`, waits for a report. */
@@ -77,6 +92,9 @@ export class ExpectedReportTracker {
   private observe(entry: RunpaneWorkspaceEntry): void {
     const panelId = entry.panelId;
     if (!panelId || entry.replay) return;
+    // A new state ends a wait for background work: busy means the agent took a new turn, and its
+    // next READY looks again. IDLE reminders change nothing.
+    if (STATE_CHANGES.has(entry.kind)) this.stopWaiting(panelId);
     if (entry.kind === 'agent.report') {
       this.clear(panelId);
       return;
@@ -84,7 +102,15 @@ export class ExpectedReportTracker {
     if (entry.kind !== 'agent.ready' && entry.kind !== 'panel.exited') return;
     const expected = this.expectation(panelId);
     if (!expected || this.raising.has(panelId)) return;
-    // One missing report per expectation: the next `--expect-report` dispatch arms it again.
+    if (entry.kind === 'agent.ready' && this.options.backgroundWork?.(panelId)) {
+      this.waitForBackground(panelId, entry);
+      return;
+    }
+    this.raiseNow(entry, panelId, expected);
+  }
+
+  private raiseNow(entry: RunpaneWorkspaceEntry, panelId: string, expected: TerminalExpectedReport): void {
+    // One missing report per expectation: the next dispatch arms it again.
     this.clear(panelId);
     if (this.fulfilled(panelId, expected)) return;
     this.raising.add(panelId);
@@ -112,6 +138,28 @@ export class ExpectedReportTracker {
       missing.lastOutputSource = output.source;
     }
     this.options.journal.appendPaneEntry(entry.paneId, missing);
+  }
+
+  private waitForBackground(panelId: string, entry: RunpaneWorkspaceEntry): void {
+    const timer = setTimeout(() => {
+      this.waiting.delete(panelId);
+      const expected = this.expectation(panelId);
+      if (!expected || this.raising.has(panelId)) return;
+      if (this.options.backgroundWork?.(panelId)) {
+        this.waitForBackground(panelId, entry);
+        return;
+      }
+      this.raiseNow(entry, panelId, expected);
+    }, this.options.recheckMs ?? BACKGROUND_RECHECK_MS);
+    timer.unref?.();
+    this.waiting.set(panelId, { entry, timer });
+  }
+
+  private stopWaiting(panelId: string): void {
+    const waiting = this.waiting.get(panelId);
+    if (!waiting) return;
+    clearTimeout(waiting.timer);
+    this.waiting.delete(panelId);
   }
 
   private fulfilled(panelId: string, expected: TerminalExpectedReport): boolean {

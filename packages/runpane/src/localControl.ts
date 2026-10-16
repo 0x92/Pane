@@ -2461,7 +2461,7 @@ function isRetryableWatchError(error: Error): boolean {
 
 export async function runPanesCreate(parsed: ParsedArgs): Promise<number> {
   const request = await buildPaneCreateRequest(parsed);
-  if (parsed.expectReport) request.expectReport = true;
+  if (parsed.expectReport !== undefined) request.expectReport = parsed.expectReport;
   await confirmPaneCreate(parsed, request);
 
   const result = await invokeDaemon('runpane:panes:create', [request], paneCreateResultSchema, {
@@ -2694,7 +2694,7 @@ export async function runPanelsList(parsed: ParsedArgs): Promise<number> {
 
 export async function runPanelsCreate(parsed: ParsedArgs): Promise<number> {
   const request = await buildPanelCreateRequest(parsed);
-  if (parsed.expectReport) request.expectReport = true;
+  if (parsed.expectReport !== undefined) request.expectReport = parsed.expectReport;
   await confirmPanelCreate(parsed, request);
 
   const result = await invokeDaemon('runpane:panels:create', [request], panelCreateResultSchema, {
@@ -3284,7 +3284,7 @@ export function buildPanelInputRequest(parsed: ParsedArgs, command: 'input' | 's
     asFilePointer: parsed.asFilePointer || undefined,
     interrupt: parsed.interrupt || undefined,
     source: parsed.source === 'user' || parsed.source === 'agent' ? parsed.source : undefined,
-    expectReport: command === 'submit' && parsed.expectReport ? true : undefined,
+    expectReport: command === 'submit' ? parsed.expectReport : undefined,
   };
 }
 

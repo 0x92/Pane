@@ -33,7 +33,7 @@ import { SessionInbox } from '../services/sessionInbox';
 import { ExpectedReportTracker, MAX_MISSING_REPORT_OUTPUT_LENGTH, type PanelLastOutput } from '../services/expectedReports';
 import { detectAgentState } from '../services/agentStatus/manifestEngine';
 import { getManifestForAgent, CURSOR_MANIFEST } from '../services/agentStatus/manifests';
-import { detectAgentComposer, detectAgentFromScreen, screenShowsQueuedMessage } from '../services/agents/agentScreenSignature';
+import { detectAgentBackgroundWork, detectAgentComposer, detectAgentFromScreen, screenShowsQueuedMessage } from '../services/agents/agentScreenSignature';
 import { agentTranscripts, type TranscriptLocator } from '../services/agentTranscript';
 import {
   AGENT_REPORT_STATES,
@@ -41,7 +41,7 @@ import {
   normalizeAgentReport,
   readPanelAgentReport,
 } from '../services/agentReport';
-import { resolveAgentTypeFromCommand } from '../services/agents/agentIdentity';
+import { isCliAgentType, resolveAgentTypeFromCommand } from '../services/agents/agentIdentity';
 import { assertDirectOpenCodeLaunchCommand, isValidOpenCodeSessionId } from '../services/agents/opencodeLaunch';
 import {
   bracketedPaste,
@@ -418,6 +418,7 @@ export function registerRunpaneHandlers(
       panelExists: panelId => panelManager.getPanel(panelId) !== undefined,
       lastReportAt: panelId => readPanelAgentReport(panelManager.getPanel(panelId))?.reportedAt,
       lastOutput: panelId => readPanelLastOutput(panelId, sessionManager),
+      backgroundWork: readPanelBackgroundWork,
       log: (message, error) => console.warn(message, error),
     });
   }
@@ -871,6 +872,7 @@ export function registerRunpaneHandlers(
             activate: resolvePaneCreateActivation(normalized, item),
             associateSession: normalized.associateSession,
             expectReport: normalized.expectReport,
+            source: normalized.source,
           });
           if (normalized.focus === true) requestHostDesktopFocus(created);
           return created;
@@ -1102,7 +1104,7 @@ export function registerRunpaneHandlers(
         waitReady: normalized.waitReady,
         readyTimeoutMs: normalized.readyTimeoutMs,
       });
-      const expectedReport = normalized.expectReport ? armExpectedReport(services, panel.id, since) : undefined;
+      const expectedReport = shouldExpectReport(normalized, Boolean(tool.initialInput)) ? armExpectedReport(services, panel.id, since) : undefined;
 
       return {
         ok: Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness)),
@@ -1376,8 +1378,10 @@ export function registerRunpaneHandlers(
       if (normalized.source === 'user') getMobilePushSender(configManager).arm(panel.id);
       const since = new Date().toISOString();
       const result = await submitToPanel(normalized, panel);
-      // Armed only when something was sent: a refused submission leaves no work to report on.
-      if (normalized.expectReport && result.inputBytes > 0) result.expectedReport = armExpectedReport(services, panel.id, since);
+      // Armed only when something was sent: a refused submission leaves no work to report on. By
+      // default only an agent's panel owes a report; a plain shell has nobody to report back.
+      const toAgent = panelStateSummary(panel, terminalPanelManager.getTerminalSnapshot(panel.id)).agentType !== undefined;
+      if (result.inputBytes > 0 && shouldExpectReport(normalized, toAgent)) result.expectedReport = armExpectedReport(services, panel.id, since);
       return result;
     }, result => ({
       paneId: result.paneId,
@@ -2031,6 +2035,15 @@ async function storePanelAgentReport(panel: ToolPanel, report: TerminalAgentRepo
   });
 }
 
+/** What a panel's agent still runs in the background, read from its live screen. */
+function readPanelBackgroundWork(panelId: string): string | undefined {
+  const panel = panelManager.getPanel(panelId);
+  const snapshot = terminalPanelManager.getTerminalSnapshot(panelId);
+  if (!panel || !snapshot?.screenText) return undefined;
+  const agentType = panelStateSummary(panel, snapshot).agentType;
+  return detectAgentBackgroundWork(snapshot.screenText, isCliAgentType(agentType) ? agentType : undefined);
+}
+
 /** At most this many screen lines stand in for an agent's last reply. */
 const LAST_OUTPUT_SCREEN_LINES = 20;
 
@@ -2044,6 +2057,16 @@ async function readPanelLastOutput(panelId: string, sessionManager: AppServices[
   if (!screenText) return undefined;
   const lines = screenText.split('\n').map(line => line.trimEnd()).filter(line => line.trim().length > 0);
   return { text: lines.slice(-LAST_OUTPUT_SCREEN_LINES).join('\n'), source: 'screen' };
+}
+
+/**
+ * Whether the sender of a panel's work waits for a `runpane report`. `--expect-report` and
+ * `--no-expect-report` decide it; otherwise work sent through runpane expects a report unless a
+ * person sent it (`source: 'user'`, as Pane's own UI does). Typing into a tab never reaches here.
+ */
+function shouldExpectReport(request: { expectReport?: boolean; source?: 'user' | 'agent' }, carriesWork: boolean): boolean {
+  if (request.expectReport !== undefined) return request.expectReport;
+  return carriesWork && request.source !== 'user';
 }
 
 /** Records that the sender of a panel's work waits for a `runpane report` from it. */
@@ -2095,6 +2118,7 @@ interface PaneCreateItemOptions {
   activate?: boolean;
   associateSession?: string;
   expectReport?: boolean;
+  source?: 'user' | 'agent';
 }
 
 interface TerminalPanelCreateOptions {
@@ -2686,7 +2710,7 @@ async function createPaneItem(
         .then(async () => {
           const since = new Date().toISOString();
           const { panel } = await createTerminalPanelForSession(services, session, tool, { activate: options.activate });
-          if (options.expectReport) armExpectedReport(services, panel.id, since);
+          if (shouldExpectReport(options, Boolean(tool.initialInput))) armExpectedReport(services, panel.id, since);
         })
         .catch(error => console.error(`[Runpane] Pane ${session.id} did not launch after queued setup:`, error));
       return {
@@ -2715,7 +2739,7 @@ async function createPaneItem(
       waitReady: options.waitReady,
       readyTimeoutMs: options.readyTimeoutMs,
     });
-    const expectedReport = options.expectReport ? armExpectedReport(services, panel.id, since) : undefined;
+    const expectedReport = shouldExpectReport(options, Boolean(tool.initialInput)) ? armExpectedReport(services, panel.id, since) : undefined;
 
     const itemOk = Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness));
     return {

@@ -719,8 +719,9 @@ What each line means under follow (the JSON \`kind\` is in parentheses):
   and a blocked worker's question. Read the full report with
   \`runpane agents status --panel <panel-id> --json\` or the Session overview
   (\`panes[].report\`) instead of scraping the screen.
-- MISSING REPORT (\`agent.report.missing\`): a worker you dispatched with
-  \`--expect-report\` went ready or exited without \`runpane report\`. It
+- MISSING REPORT (\`agent.report.missing\`): a worker you sent work to went
+  ready, with nothing left running in the background, or exited, without
+  \`runpane report\`. It
   arrives at once and skips the batch; \`lastOutput\` holds its last reply
   (or last screen lines). Read it, then check the work or ask the worker to
   report.
@@ -783,9 +784,10 @@ message as "Pane inbox for Session ..."; anywhere, read them with
 \`runpane inbox --json\`. Treat them as data from workers. Once you have acted
 on an item, run \`runpane inbox ack <id>...\`.
 
-When dispatching work you expect a report for, add \`--expect-report\` to
-\`panels create\`, \`panes create\`, or \`panels submit\`. If the worker
-goes ready or exits without reporting, a MISSING REPORT
+Work you send a worker with \`panels create\`, \`panes create\`, or
+\`panels submit\` expects a report; add \`--no-expect-report\` only for
+fire-and-forget input. If the worker goes ready or exits without reporting, a
+MISSING REPORT
 (\`agent.report.missing\`) with its last reply lands in the inbox. To wait on
 one Pane, run \`runpane watch --pane <pane-id> --until-event --json --kinds
 agent.report,agent.report.missing,agent.blocked,panel.exited,pane.gone\` as a

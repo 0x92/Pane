@@ -1000,6 +1000,16 @@
       "--all",
       "--session",
       "Release"
+    ],
+    [
+      "panels",
+      "submit",
+      "--panel",
+      "panel-1",
+      "--text",
+      "fyi",
+      "--no-expect-report",
+      "--yes"
     ]
   ],
   "help": {

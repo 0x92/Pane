@@ -1078,7 +1078,7 @@ const PARSER_DEFAULT_DIFFERENCES = {
   watchKinds: [], watchPaneIds: [], watchExcludePaneIds: [],
   asFilePointer: false, interrupt: false, noAssociate: false, removeWorktree: false, merged: false,
   quiet: false, readOnly: false, launch: false,
-  expectReport: false, hook: false, all: false, inboxIds: [],
+  hook: false, all: false, inboxIds: [],
 };
 
 function normalizeParsedArgs(value) {

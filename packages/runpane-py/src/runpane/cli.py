@@ -219,7 +219,7 @@ class ParsedArgs:
     summary: Optional[str] = None
     summary_file: Optional[str] = None
     question: Optional[str] = None
-    expect_report: bool = False
+    expect_report: Optional[bool] = None
     hook: bool = False
     all: bool = False
     inbox_ids: List[str] = field(default_factory=list)
@@ -801,8 +801,11 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
     if flag == "--read-only":
         parsed.read_only = True
         return
-    if flag == "--expect-report":
-        parsed.expect_report = True
+    if flag in ("--expect-report", "--no-expect-report"):
+        expect_report = flag == "--expect-report"
+        if parsed.expect_report is (not expect_report):
+            raise ValueError("Pass either --expect-report or --no-expect-report, not both.")
+        parsed.expect_report = expect_report
         return
     if flag == "--hook":
         parsed.hook = True

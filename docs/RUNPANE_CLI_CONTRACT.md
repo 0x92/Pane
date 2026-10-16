@@ -237,7 +237,7 @@ A watch releases its pending slot when its client socket or named pipe disconnec
 
 `runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (`panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`. It prints how many watches were waiting for the report and received it (`Delivered to 1 waiting watcher.`, `liveWatchers` in JSON). Zero means nobody was waiting right now, not that the report is lost: it stays on the panel, and a named-cursor watch receives it when it next waits.
 
-`--expect-report` on `runpane panels create`, `panes create`, and `panels submit` records that the sender waits for a `runpane report`. If the agent then goes ready or its panel exits without one, Pane journals one opt-in `agent.report.missing` entry (`MISSING REPORT <pane-name> pane <pane-id> panel <panel-id> ready|exited`) whose `lastOutput` is the agent's last transcript reply or last screen lines; it skips the `--min-interval` batch and reaches only watchers that list it in `--kinds`. `agent.blocked` entries carry `screenLines`, the prompt the agent waits on, and are journalled once a panel has stayed blocked for 2 seconds.
+Work sent to an agent through `runpane panels create`, `panes create` (with a prompt), or `panels submit` records that the sender waits for a `runpane report`, unless the request says `--source user` (Pane's own UI does) or `--no-expect-report`; `--expect-report` asks for one anyway. Typing into a tab never does. If the agent then goes ready or its panel exits without a report, Pane journals one opt-in `agent.report.missing` entry (`MISSING REPORT <pane-name> pane <pane-id> panel <panel-id> ready|exited`) whose `lastOutput` is the agent's last transcript reply or last screen lines; it skips the `--min-interval` batch and reaches only watchers that list it in `--kinds`. While the agent's screen shows background work (Claude's `· 1 shell` footer or a running background subagent row, Codex's `background terminal running` line), Pane waits and looks again every 10 seconds instead. `agent.blocked` entries carry `screenLines`, the prompt the agent waits on, and are journalled once a panel has stayed blocked for 2 seconds.
 
 `runpane inbox [--session <id|name>] [--hook] [--json]` lists what a Session's orchestrator has not acknowledged: reports, missing reports, and on-screen questions (a question clears itself once its panel moves on). `runpane inbox ack <item-id>...` or `--all --session <id|name>` clears items. `--hook` prints them for a Claude Code `UserPromptSubmit` hook, prints nothing when the inbox is empty or Pane is unreachable, and always exits 0; Pane launches Claude Session orchestrators with that hook.
 
@@ -376,8 +376,8 @@ runpane workspace <machine> exec [--cwd <path>] [--timeout-ms <ms>] [--json] -- 
 runpane handoff --template
 runpane handoff "<destination>" --note-file <path|-> [--machine <name>] [--agent <codex|claude|cursor>] [--model <model>] [--effort <level>] [--repo <selector>] [--push] [--dry-run] [--json]
 runpane watch [--follow|--until-event] [--session <id|name>|--pane <id>] [--json] [overrides]
-runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [--expect-report] [options] [--pane-dir <path>]
-runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--source user|agent] [--focus|--no-focus] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [--expect-report] [options] [--pane-dir <path>]
+runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [--expect-report|--no-expect-report] [options] [--pane-dir <path>]
+runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--source user|agent] [--focus|--no-focus] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [--expect-report|--no-expect-report] [options] [--pane-dir <path>]
 runpane panes create --from-json <path|-> [--yes] [--json] [--pane-dir <path>]
 runpane panes adopt --repo <selector> --path <dir> --name <name> --agent <codex|claude|cursor> [--resume <id>] [--folder <name>] [--launch [--prompt <text>|--prompt-file <path|->] [--wait-ready] [--ready-timeout-ms <ms>]] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]
 runpane panes adopt --repo <selector> --path <dir> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--folder <name>] [--launch [--prompt <text>|--prompt-file <path|->] [--wait-ready] [--ready-timeout-ms <ms>]] [--no-pinned] [--no-associate] [--dry-run] [--yes] [--json] [--pane-dir <path>]
@@ -387,14 +387,14 @@ runpane panes pin --pane <pane-id> --yes [--dry-run] [--json] [--pane-dir <path>
 runpane panes unpin --pane <pane-id> --yes [--dry-run] [--json] [--pane-dir <path>]
 runpane panes rename --pane <pane-id> --name <new-name> --yes [--dry-run] [--json] [--pane-dir <path>]
 runpane panes focus --pane <pane-id> [--panel <panel-id>] --source user|agent --yes [--json] [--pane-dir <path>]
-runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--wait-ready] [--expect-report] --yes [--json] [--pane-dir <path>]
-runpane panels create --pane <pane-id> --tool-command <command> [--agent <codex|claude|cursor>] [--title <title>] [--focus|--no-focus] [--wait-ready] [--expect-report] --yes [--json] [--pane-dir <path>]
+runpane panels create --pane <pane-id> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--wait-ready] [--expect-report|--no-expect-report] --yes [--json] [--pane-dir <path>]
+runpane panels create --pane <pane-id> --tool-command <command> [--agent <codex|claude|cursor>] [--title <title>] [--focus|--no-focus] [--wait-ready] [--expect-report|--no-expect-report] --yes [--json] [--pane-dir <path>]
 runpane panels open [--pane <pane-id>] (--url <url>|--file <path>) [--title <title>] [--split|--tab] [--focus|--no-focus] [--source user|agent] --yes [--json]
 runpane panels list --pane <pane-id> [--json] [--pane-dir <path>]
 runpane panels output --panel <panel-id> [--limit <count>] [--json] [--pane-dir <path>]
 runpane panels screen --panel <panel-id> [--limit <count>] [--json] [--pane-dir <path>]
 runpane panels input --panel <panel-id> (--text <text>|--keys <name,...>|--input-file <path|->) [--source user|agent] --yes [--json] [--pane-dir <path>]
-runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] [--interrupt] [--source user|agent] [--expect-report] --yes [--json] [--pane-dir <path>]
+runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] [--interrupt] [--source user|agent] [--expect-report|--no-expect-report] --yes [--json] [--pane-dir <path>]
 runpane panels submit-composer --panel <panel-id> [--strategy auto|codex-ctrl-enter|enter|tab] --yes [--json] [--pane-dir <path>]
 runpane panels wait --panel <panel-id> [--for initialized|ready|idle|text] [--contains <text>] [--timeout-ms <ms>] [--interval-ms <ms>] [--json] [--pane-dir <path>]
 runpane panels resume --panel <panel-id> [--wait-ready] [--ready-timeout-ms <ms>] --yes [--json] [--pane-dir <path>]
@@ -624,6 +624,7 @@ These flags are consumed by local daemon-control commands:
 --push
 --interrupt
 --expect-report
+--no-expect-report
 --hook
 --all
 ```

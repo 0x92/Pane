@@ -115,7 +115,10 @@ export interface ParsedArgs {
   summary?: string;
   summaryFile?: string;
   question?: string;
-  /** panels create|submit, panes create: the sender waits for a `runpane report`. */
+  /**
+   * panels create|submit, panes create: whether the sender waits for a `runpane report`.
+   * Unset leaves it to the daemon, which expects one for work an agent sent.
+   */
   expectReport?: boolean;
   /** inbox: print Claude Code UserPromptSubmit hook output. */
   hook?: boolean;
@@ -683,8 +686,10 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
     parsed.handoffTemplate = true;
     return;
   }
-  if (flag === '--expect-report') {
-    parsed.expectReport = true;
+  if (flag === '--expect-report' || flag === '--no-expect-report') {
+    const expectReport = flag === '--expect-report';
+    if (parsed.expectReport === !expectReport) throw new Error('Pass either --expect-report or --no-expect-report, not both.');
+    parsed.expectReport = expectReport;
     return;
   }
   if (flag === '--hook') {

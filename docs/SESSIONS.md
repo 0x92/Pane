@@ -822,9 +822,13 @@ wake on a MISSING REPORT too.
 
 ### Expected reports
 
-`runpane panels create`, `panes create`, and `panels submit` take
-`--expect-report`: the sender waits for a `runpane report` from that panel.
-Pane saves `{ since }` per panel in `expected-reports.json` below `PANE_DIR`
+Work sent to an agent through runpane expects a `runpane report` back: a
+`panels submit` to an agent's panel, and a `panels create` or `panes create`
+that carries a prompt. A request marked `--source user` (Pane's own UI marks
+its sends that way) expects none, and neither does typing into a tab, which
+never goes through runpane. `--no-expect-report` sends fire-and-forget input;
+`--expect-report` asks for a report anyway, also from a plain shell panel.
+`shouldExpectReport()` in `main/src/ipc/runpane.ts` holds the rule. Pane saves `{ since }` per panel in `expected-reports.json` below `PANE_DIR`
 (results echo it as `expectedReport`); only the tracker writes that file, so
 panel-state writes cannot bring back a cleared expectation. When the agent then goes ready (`agent.ready`)
 or its panel exits without a report made at or after `since`, Pane journals
@@ -832,7 +836,20 @@ one `agent.report.missing` entry (`MISSING REPORT <pane-name> pane <pane-id>
 panel <panel-id> ready|exited`) and clears the expectation. The entry's
 `lastOutput` is the agent's last reply from its transcript, or else the last
 20 lines on its screen (`lastOutputSource: transcript|screen`), cut to 2,000
-characters with the end kept. A report clears the expectation. Like
+characters with the end kept. A report clears the expectation.
+
+An agent can end its turn while work it started keeps running. Pane reads
+that from the screen: Claude Code counts running background shells in its
+footer (`⏵⏵ bypass permissions on · 1 shell`) and lists each running
+background subagent under it (`◯ general-purpose  <task>  14s`); Codex prints
+`1 background terminal running · /ps to view` above its prompt
+(`detectAgentBackgroundWork()` in `agentScreenSignature.ts`). While one shows,
+a READY does not raise the missing report. Claude takes a new turn when the
+work finishes, and that turn's READY decides. Codex doesn't, so Pane looks at
+the screen again every 10 seconds while the panel stays ready, and raises
+once nothing runs. An exit raises at once.
+
+Like
 `agent.report`, the kind reaches only watchers that list it in `--kinds` (a
 Session scope alone does not deliver it), and it skips the `--min-interval`
 batch. The tracker is `main/src/services/expectedReports.ts`.

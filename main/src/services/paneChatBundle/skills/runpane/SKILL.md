@@ -106,12 +106,14 @@ record an output baseline (cursor or hash) and a timestamp. Put the prompt in a
 file and submit it:
 
 ```bash
-runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --expect-report --yes --json
+runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --yes --json
 ```
 
-`--expect-report` (also on `panels create` and `panes create`) tells Pane you
-wait for a `runpane report`. If the worker goes ready or exits without one,
-Pane emits MISSING REPORT (`agent.report.missing`) with its last reply.
+Pane expects a `runpane report` for work you send an agent this way (also
+with `panels create` and `panes create`). If the worker goes ready or exits
+without one, and nothing it started still runs in the background, Pane emits
+MISSING REPORT (`agent.report.missing`) with its last reply. Pass
+`--no-expect-report` for fire-and-forget input such as an FYI.
 
 Prefer `--as-file-pointer` for long prompts. Pane writes a private copy under
 `<pane-dir>/prompts/` and submits the single line `Read and follow <path>`
@@ -280,7 +282,7 @@ result. Watch for it by adding `agent.report` to `--kinds`; watchers that
 don't list it never receive it, except a Session watch. A report arrives from
 any tab, a shell tab or a wrapper launch whose agent isn't detected yet
 included. Add `agent.report.missing` the same way to hear when work sent
-with `--expect-report` ended without a report. Each REPORT line
+to an agent ended without a report. Each REPORT line
 (`REPORT <pane> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`, or
 `... blocked: <question>`) arrives at once, skipping the `--min-interval`
 batch.
@@ -309,7 +311,7 @@ whether anyone received it (`Delivered to 1 waiting watcher.`).
 - `blocked` carries the worker's question; answer it or take it to the user.
   `failed` means the worker gave up; read its summary before retrying.
 - A MISSING REPORT means the worker went ready or exited without reporting
-  after work sent with `--expect-report`. Its `lastOutput` is the worker's
+  after work you sent it. Its `lastOutput` is the worker's
   last reply; check the work, then ask it to run `runpane report`.
 - A BLOCKED carries the prompt on the worker's screen in `screenLines` (an
   AskUserQuestion picker, a permission or trust prompt, an update screen),

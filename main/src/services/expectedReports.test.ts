@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ExpectedReportTracker, MAX_MISSING_REPORT_OUTPUT_LENGTH, type PanelLastOutput } from './expectedReports';
 import { WorkspaceJournal } from './workspaceJournal';
 import type { TerminalExpectedReport } from '../../../shared/types/panels';
@@ -9,23 +9,31 @@ import type { TerminalExpectedReport } from '../../../shared/types/panels';
 function setup(lastOutput: PanelLastOutput | undefined = { text: 'All done, PR #12 is open.', source: 'transcript' }, filePath?: string) {
   const journal = new WorkspaceJournal({ resolvePane: paneId => ({ paneId, paneName: 'Worker' }), blockedDebounceMs: 0 });
   const reports = new Map<string, string>();
+  const background = new Map<string, string>();
   const tracker = new ExpectedReportTracker({
     journal,
     filePath,
     lastReportAt: panelId => reports.get(panelId),
     lastOutput: async () => lastOutput,
+    backgroundWork: panelId => background.get(panelId),
+    recheckMs: 1_000,
   });
   const expectations = {
     set: (panelId: string, expected: TerminalExpectedReport) => tracker.arm(panelId, expected.since),
     has: (panelId: string) => tracker.expectation(panelId) !== undefined,
   };
+  const busy = () => journal.append({ kind: 'agent.busy', paneId: 'pane-1', paneName: 'Worker', panelId: 'panel-1', agentType: 'claude', source: 'agent' });
   const ready = () => journal.append({ kind: 'agent.ready', paneId: 'pane-1', paneName: 'Worker', panelId: 'panel-1', agentType: 'claude', source: 'agent' });
   const missing = () => journal.readAfter(0, { kinds: ['agent.report.missing'] }).entries;
   const settle = () => new Promise(resolve => setTimeout(resolve, 0));
-  return { journal, expectations, reports, tracker, ready, missing, settle };
+  return { journal, expectations, reports, background, tracker, ready, busy, missing, settle };
 }
 
 describe('ExpectedReportTracker', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('journals agent.report.missing with the last reply when an expected report never came', async () => {
     const { expectations, ready, missing, settle } = setup();
     expectations.set('panel-1', { since: '2026-10-15T10:00:00.000Z' });
@@ -118,5 +126,52 @@ describe('ExpectedReportTracker', () => {
     await settle();
 
     expect(missing()).toEqual([]);
+  });
+
+  it('waits while the agent still runs background work, then raises once it has ended', async () => {
+    vi.useFakeTimers();
+    const { expectations, background, ready, missing } = setup();
+    expectations.set('panel-1', { since: '2026-10-15T10:00:00.000Z' });
+    background.set('panel-1', '1 shell');
+    ready();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(missing()).toEqual([]);
+    expect(expectations.has('panel-1')).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(missing()).toEqual([]);
+
+    // Codex takes no new turn when a background terminal ends, so the recheck raises it.
+    background.delete('panel-1');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(missing()).toEqual([expect.objectContaining({ kind: 'agent.report.missing', reason: 'ready' })]);
+  });
+
+  it('lets the follow-up turn decide when the agent wakes for its finished background work', async () => {
+    vi.useFakeTimers();
+    const { expectations, reports, background, ready, busy, missing } = setup();
+    expectations.set('panel-1', { since: '2026-10-15T10:00:00.000Z' });
+    background.set('panel-1', 'background agent general-purpose');
+    ready();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Claude wakes when its subagent finishes, works, and this time reports.
+    background.delete('panel-1');
+    busy();
+    reports.set('panel-1', '2026-10-15T10:05:00.000Z');
+    ready();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(missing()).toEqual([]);
+    expect(expectations.has('panel-1')).toBe(false);
+  });
+
+  it('raises at once when a panel exits with background work still listed', async () => {
+    const { expectations, background, journal, missing, settle } = setup();
+    expectations.set('panel-1', { since: '2026-10-15T10:00:00.000Z' });
+    background.set('panel-1', '1 shell');
+    journal.append({ kind: 'panel.exited', paneId: 'pane-1', paneName: 'Worker', panelId: 'panel-1', source: 'exit' });
+    await settle();
+
+    expect(missing()).toEqual([expect.objectContaining({ reason: 'exited' })]);
   });
 });

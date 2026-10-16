@@ -7101,6 +7101,45 @@ describe('runpane IPC handlers', () => {
       await expect(otherKinds).resolves.toMatchObject({ timedOut: true, entries: [] });
     });
 
+    it('expects a report for work sent to an agent unless a person sent it or the sender opted out', async () => {
+      vi.mocked(terminalPanelManager.getForegroundProcess).mockReturnValue({ name: 'zsh', isShell: true });
+      const services = createServices({ workspaceJournal: new WorkspaceJournal() });
+      const registry = createRegistry(services);
+      const submit = async (request: Record<string, string | boolean>) => {
+        stored = structuredClone(terminalPanel);
+        services.expectedReportTracker?.arm(terminalPanel.id, 'stale');
+        services.workspaceJournal?.appendPaneEntry(session.id, { kind: 'agent.report', panelId: terminalPanel.id, source: 'agent' });
+        const result = await registry.invoke('runpane:panels:submit', [{ panelId: terminalPanel.id, input: 'ship it', ...request }]);
+        return { result, expectation: services.expectedReportTracker?.expectation(terminalPanel.id) };
+      };
+
+      const byDefault = await submit({});
+      expect(byDefault.result.expectedReport).toEqual({ since: expect.any(String) });
+      expect(byDefault.expectation).toEqual(byDefault.result.expectedReport);
+      expect((await submit({ source: 'agent' })).expectation).toEqual({ since: expect.any(String) });
+      for (const optedOut of [{ source: 'user' }, { expectReport: false }]) {
+        const { result, expectation } = await submit(optedOut);
+        expect(result.expectedReport).toBeUndefined();
+        expect(expectation).toBeUndefined();
+      }
+      expect((await submit({ source: 'user', expectReport: true })).expectation).toEqual({ since: expect.any(String) });
+      // Expectations are saved under PANE_DIR, which the tests in this file share.
+      services.workspaceJournal?.appendPaneEntry(session.id, { kind: 'agent.report', panelId: terminalPanel.id, source: 'agent' });
+    });
+
+    it('expects no report by default from a panel with no agent', async () => {
+      vi.mocked(terminalPanelManager.getForegroundProcess).mockReturnValue({ name: 'zsh', isShell: true });
+      stored = structuredClone(terminalPanel);
+      stored.state.customState = { isCliPanel: false };
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue({ ...terminalSnapshot('$ ', 'idle'), agentType: undefined, currentCommand: 'zsh', isCliPanel: false });
+      const services = createServices({ workspaceJournal: new WorkspaceJournal() });
+      const registry = createRegistry(services);
+
+      const result = await registry.invoke('runpane:panels:submit', [{ panelId: terminalPanel.id, input: 'npm test' }]);
+      expect(result.expectedReport).toBeUndefined();
+      expect(services.expectedReportTracker?.expectation(terminalPanel.id)).toBeUndefined();
+    });
+
     it('arms an expected report on submit and puts the missing report in the Session inbox', async () => {
       // A plain shell takes the submission without waiting for an agent composer.
       stored = structuredClone(terminalPanel);

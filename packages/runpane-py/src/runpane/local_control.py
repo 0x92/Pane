@@ -642,8 +642,8 @@ def effective_watch_heartbeat_ms(seconds: float) -> float:
 
 def run_panes_create(parsed: Any) -> int:
     request = build_pane_create_request(parsed)
-    if parsed.expect_report:
-        request["expectReport"] = True
+    if parsed.expect_report is not None:
+        request["expectReport"] = parsed.expect_report
     confirm_pane_create(parsed, request)
     result = invoke_daemon(
         "runpane:panes:create",
@@ -869,8 +869,8 @@ def run_panels_list(parsed: Any) -> int:
 
 def run_panels_create(parsed: Any) -> int:
     request = build_panel_create_request(parsed)
-    if parsed.expect_report:
-        request["expectReport"] = True
+    if parsed.expect_report is not None:
+        request["expectReport"] = parsed.expect_report
     confirm_panel_create(parsed, request)
     result = invoke_daemon(
         "runpane:panels:create",
@@ -1396,7 +1396,7 @@ def build_panel_input_request(parsed: Any, command: str = "input") -> Dict[str, 
         **optional_value("asFilePointer", True if parsed.as_file_pointer else None),
         **optional_value("interrupt", True if parsed.interrupt else None),
         **optional_value("source", parsed.source),
-        **optional_value("expectReport", True if command == "submit" and parsed.expect_report else None),
+        **optional_value("expectReport", parsed.expect_report if command == "submit" else None),
     }
 
 

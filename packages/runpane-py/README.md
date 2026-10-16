@@ -218,8 +218,11 @@ when blocked. READY alone is activity evidence. Read the full report with
 `runpane agents status --panel <id> --json`. Resume stopped workers in the same
 panel with `runpane panels resume --panel <id> --wait-ready --yes --json`.
 
-Add `--expect-report` to `panels create`, `panes create`, or `panels submit`
-when you wait for that report. If the agent goes ready or exits without one,
+Work an agent sends with `panels create`, `panes create` (with a prompt), or
+`panels submit` expects that report; `--no-expect-report` sends without
+waiting, and `--expect-report` asks for one on `--source user` work. If the
+agent goes ready, with nothing left running in the background, or exits
+without one,
 watchers that list `agent.report.missing` get `MISSING REPORT <pane> pane
 <pane-id> panel <panel-id> ready` with its last reply; add it to `--kinds`, for
 example `--until-event --kinds
