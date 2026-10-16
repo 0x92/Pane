@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { boundary, decodeBoundary } from './boundaryDecoder';
 import { RunpaneError } from './errors';
 
@@ -106,6 +107,9 @@ export function claimUpdateLock(directory: string, id: string, statusFile: strin
     if (journal.id === owner.id && ['complete', 'failed'].includes(journal.phase)) {
       releaseUpdateLock(directory, owner.id);
       if (!fs.existsSync(directory)) return claimUpdateLock(directory, id, statusFile);
+      const current = decodeBoundary(JSON.parse(fs.readFileSync(file, 'utf8')), boundary.object({ id: boundary.string }));
+      if (current.id !== owner.id) return claimUpdateLock(directory, id, statusFile);
+      throw new RunpaneError('ERR_UPDATE_LOCK_RECOVERY', `Update ${owner.id} finished, but its lock cleanup requires inspection: ${directory}. No new update was started.`, 'Wait for any active cleanup to finish. If it remains blocked, verify that no operation helper or installer is running, then follow docs/UPDATE_RECOVERY.md before moving this exact owner’s lock aside.');
     }
     return { ...owner, acquired: false };
   } finally { fs.rmSync(candidate, { recursive: true, force: true }); }
@@ -114,6 +118,7 @@ export function claimUpdateLock(directory: string, id: string, statusFile: strin
 /** Elect one releaser. A terminal journal plus a dead recorded releaser repairs a crashed cleanup. */
 export function releaseUpdateLock(directory: string, id: string): void {
   const marker = path.join(directory, 'releasing');
+  const candidate = path.join(directory, `.releasing-${randomUUID()}`);
   try {
     const owner = decodeBoundary(JSON.parse(fs.readFileSync(path.join(directory, 'owner.json'), 'utf8')), boundary.object({ id: boundary.nonEmptyString, statusFile: boundary.nonEmptyString }));
     if (owner.id !== id) return;
@@ -124,16 +129,24 @@ export function releaseUpdateLock(directory: string, id: string): void {
       try { process.kill(releasing.pid, 0); return; } catch (error) {
         if (decodeBoundary(error, boundary.object({ code: boundary.string })).code !== 'ESRCH') return;
       }
+      // Keep this election outside the removable lock directory. Two callers
+      // can both observe the same dead releaser; only one may remove its marker.
+      // Never remove the claim: a delayed observer must not act on a newer lock.
+      // An interrupted recovery election remains a manual inspection boundary.
+      const recovery = createHash('sha256').update(fs.realpathSync(directory)).update(JSON.stringify(releasing)).digest('hex');
+      fs.mkdirSync(path.join(path.dirname(owner.statusFile), `lock-recovery-${recovery}`), { mode: 0o700 });
       fs.unlinkSync(marker);
     }
-    const fd = fs.openSync(marker, 'wx', 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify({ id, pid: process.pid })); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    // Publish fully written contents exclusively, without a crash window that
+    // exposes an empty releasing marker to another caller.
+    writeUpdateJson(candidate, { id, pid: process.pid });
+    fs.linkSync(candidate, marker);
     const current = decodeBoundary(JSON.parse(fs.readFileSync(path.join(directory, 'owner.json'), 'utf8')), boundary.object({ id: boundary.nonEmptyString }));
     if (current.id === id) fs.rmSync(directory, { recursive: true });
     else fs.unlinkSync(marker);
   } catch {
     // Ambiguous ownership remains inspectable; it is never permission to steal.
-  }
+  } finally { fs.rmSync(candidate, { force: true }); }
 }
 
 /** Process disappearance is not proof of a clean shutdown. */

@@ -150,4 +150,7 @@ contains this exact operation ID. Lock directories are listed in
 `preflight.json` as `lockDirectory` and `additionalLockDirectories`. Preserve the
 journal/checkpoint/snapshot; do not delete another operation's locks or infer
 ownership from a reused PID. Incomplete or ambiguous locks require the same
-manual inspection. Logout/reboot continuation is not guaranteed.
+manual inspection. If recovery of a crashed lock cleanup is itself interrupted,
+its persistent cleanup claim also requires manual inspection; another caller
+will not steal it or report a new update as completed. Logout/reboot continuation
+is not guaranteed.

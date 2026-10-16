@@ -51,4 +51,11 @@ describe('durable panel restoration', () => {
     await vi.waitFor(async () => expect(await restore()).toMatchObject({ complete: true, restored: [{ outcome: 'needs-attention' }] }));
     expect(fixture.initialize).not.toHaveBeenCalled();
   });
+  it('does not reuse a successful launch acknowledgment from an earlier host boot', () => {
+    writeUpdateJson(path.join(fixture.root, 'updates/operation/restoration.json'), [{ panelId: 'panel', sessionId: 'session', resumeId: 'recorded', bootId: 'previous-host', phase: 'finished', outcome: 'resumed', reason: 'previously verified', pid: 123 }]);
+    expect(restore()).toMatchObject({ complete: true, restored: [{ outcome: 'needs-attention', reason: expect.stringContaining('restarted') }] });
+    expect(fixture.initialize).not.toHaveBeenCalled();
+    expect(fixture.verify).not.toHaveBeenCalled();
+    expect(restore().restored[0].outcome).toBe('needs-attention');
+  });
 });

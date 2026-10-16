@@ -20,6 +20,20 @@ async function setup() {
 }
 beforeEach(() => { vi.clearAllMocks(); });
 
+it('does not acknowledge required restoration when a newer Session refresh is still pending', async () => {
+  const first = deferred<ReturnType<typeof reply>>();
+  const newer = deferred<ReturnType<typeof reply>>();
+  list.mockReturnValueOnce(first.promise).mockReturnValueOnce(newer.promise);
+  const store = await setup();
+  const required = store.getState().refresh({ throwOnError: true });
+  const rejection = expect(required).rejects.toThrow('Session list changed during restoration');
+  const background = store.getState().refresh();
+  first.resolve(reply('a'));
+  await rejection;
+  newer.resolve(reply('b'));
+  await background;
+});
+
 describe('Session intent ownership', () => {
   it('selects B immediately and ignores late A replies', async () => {
     const a = deferred<ReturnType<typeof reply>>();

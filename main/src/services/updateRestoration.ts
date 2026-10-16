@@ -29,7 +29,14 @@ export class UpdatePanelRestorer {
         for (const item of checkpoint.panels) {
           const panel = this.dependencies.getPanel(item.panelId);
           const previous = progress.find(record => record.panelId === item.panelId);
-          if (previous?.phase === 'finished') continue;
+          if (previous?.phase === 'finished') {
+            if (previous.outcome === 'resumed' && previous.bootId !== this.bootId) {
+              previous.outcome = 'needs-attention';
+              previous.reason = 'Pane restarted after this conversation was verified. The old launch was not replayed; inspect the current panel before resuming manually.';
+              writeUpdateJson(progressFile, progress);
+            }
+            continue;
+          }
           const record: (typeof progress)[number] = previous ?? { pid: undefined, panelId: item.panelId, sessionId: item.sessionId, resumeId: item.resumeId, bootId: this.bootId, phase: 'claimed' as const, outcome: 'pending', reason: 'Restoration claimed; no launch acknowledgment yet.' };
           if (!previous) { progress.push(record); writeUpdateJson(progressFile, progress); }
           try {

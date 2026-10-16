@@ -168,7 +168,11 @@ export const useOrchestrationSessionStore = create<OrchestrationSessionState>((s
         };
       });
     } catch (error) {
-      if (generation !== operationGeneration || sequence !== refreshSequence) return;
+      if (generation !== operationGeneration) return;
+      if (sequence !== refreshSequence) {
+        if (options?.throwOnError) throw error;
+        return;
+      }
       set((state) => ({
         error: error instanceof Error ? error.message : 'Failed to refresh Sessions',
         availability: state.availability === 'idle' ? 'error' : state.availability,

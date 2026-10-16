@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assertUpdateQuiescence, claimUpdateLock, releaseUpdateLock, executeUpdate, readUpdateJournal, writeUpdateJson } from '../../../packages/runpane/src/updateOperation';
 
 const directories: string[] = [];
@@ -12,7 +12,7 @@ function fixture() {
   writeUpdateJson(file, { id: 'test', host: 'isolated', scope: 'both', version: '2.4.182', phase: 'accepted', completed: [], updatedAt: new Date().toISOString(), appUpdated: false, cliUpdated: false, hostReachable: false, restored: [] });
   return { directory, file };
 }
-afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 describe('durable update operation', () => {
   it('refuses replacement after a forced exit or another boot’s shutdown acknowledgment', () => {
     const { directory } = fixture();
@@ -74,6 +74,33 @@ describe('durable update operation', () => {
     claimUpdateLock(lock, 'first', file);
     writeUpdateJson(path.join(lock, 'releasing'), { id: 'first', pid: 999999999 });
     expect(claimUpdateLock(lock, 'next', file)).toMatchObject({ acquired: true, id: 'next' });
+  });
+  it('preserves ownership when a cleanup recovery itself was interrupted', () => {
+    const { file, directory } = fixture();
+    writeUpdateJson(file, { ...readUpdateJournal(file), id: 'first', phase: 'complete' });
+    const lock = path.join(directory, 'lock');
+    claimUpdateLock(lock, 'first', file);
+    const marker = path.join(lock, 'releasing');
+    writeUpdateJson(marker, { id: 'first', pid: 999999999 });
+    const unlink = fs.unlinkSync;
+    const interruption = vi.spyOn(fs, 'unlinkSync').mockImplementation(target => {
+      if (target === marker) throw new Error('Cleanup interrupted after its exclusive recovery claim');
+      unlink(target);
+    });
+    releaseUpdateLock(lock, 'first');
+    interruption.mockRestore();
+    expect(() => claimUpdateLock(lock, 'next', file)).toThrow(expect.objectContaining({ code: 'ERR_UPDATE_LOCK_RECOVERY' }));
+    expect(JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')).id).toBe('first');
+    expect(fs.existsSync(marker)).toBe(true);
+  });
+  it('reports an incomplete legacy cleanup marker instead of claiming a completed update again', () => {
+    const { file, directory } = fixture();
+    writeUpdateJson(file, { ...readUpdateJournal(file), id: 'first', phase: 'complete' });
+    const lock = path.join(directory, 'lock');
+    claimUpdateLock(lock, 'first', file);
+    fs.writeFileSync(path.join(lock, 'releasing'), '');
+    expect(() => claimUpdateLock(lock, 'next', file)).toThrow(expect.objectContaining({ code: 'ERR_UPDATE_LOCK_RECOVERY' }));
+    expect(fs.existsSync(lock)).toBe(true);
   });
   it('cancels an expired setup from a dead caller before a late helper can run', async () => {
     const { file, directory } = fixture();
