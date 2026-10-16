@@ -62,7 +62,7 @@ describe('installRunpaneShim', () => {
     const state = installRunpaneShim({ appDirectory, bundledCliPath, execPath: process.execPath });
     expect(state).not.toBeNull();
     const result = process.platform === 'win32'
-      ? spawnSync('cmd.exe', ['/d', '/s', '/c', `"${state!.shimPath}" --version`], { encoding: 'utf8' })
+      ? spawnSync('cmd.exe', ['/d', '/s', '/c', `""${state!.shimPath}" --version"`], { encoding: 'utf8', windowsVerbatimArguments: true })
       : spawnSync(state!.shimPath, ['--version'], { encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe('requested-cli-version');
