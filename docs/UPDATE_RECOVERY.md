@@ -54,7 +54,18 @@ runpane update --json
 runpane update --status <id> --pane-dir <path> --wait --json
 ```
 
-The status command reads the local journal even while Pane is stopped. Its JSON
+The status command reads the local journal even while Pane is stopped, provided
+the invoking CLI and its runtime can still launch. If the normal command fails
+because the app or CLI was damaged, read `<pane-dir>/updates/<id>/status.json`
+directly in a text editor. On macOS/Linux, use
+`cat "<pane-dir>/updates/<id>/status.json"`; in PowerShell, use
+`Get-Content -Raw '<pane-dir>\updates\<id>\status.json'`. Replace the placeholders
+with the original data directory and operation ID. This read does not start or
+resume an update. If the ID was lost, inspect the directories under `updates`
+and match the journal's ID and host with `preflight.json`; do not guess ownership
+from timestamps alone. A missing or unreadable journal requires maintainer help.
+
+The command's JSON
 object has these fields; this result is documented here and is not currently a
 named schema in the agent contract's `jsonSchemas` collection.
 
@@ -82,8 +93,11 @@ Exit 0 means the returned status is not a terminal failure. Without `--wait`, it
 can still be in progress. `failed` and `needs-attention` return exit 1. Command or
 preflight errors also return nonzero. `--wait` has no overall timeout. Ctrl+C stops
 the waiting caller, not the independent operation; inspect status before retrying.
-There is no supported operation cancellation command. Repeating update while a
-lock is owned returns that operation's status instead of starting another install.
+There is no supported operation cancellation command. A fresh update runs
+preflight before checking locks. If preflight succeeds and an existing lock is
+found, it returns that operation's status instead of starting another install.
+During downtime, preflight may fail before reaching the lock. Use `--status`
+(which bypasses preflight), or read the journal directly, to inspect recovery.
 
 ## What happens to agent work and drafts
 
@@ -118,6 +132,30 @@ The operation directory is `<pane-dir>/updates/<id>/`:
 | `checkpoint.json`, `restoration.json` | Prior panel state and durable per-panel launch claims/outcomes |
 | `quiesced.json` | Original host's clean-shutdown acknowledgment |
 | `snapshot/data`, `snapshot/profile`, `snapshot/complete.json` | Pre-install copy; only the complete marker establishes a finished snapshot |
+
+### Inspecting the supervisor and remaining processes
+
+Use the operation ID from the journal. These commands inspect state; they do
+not stop jobs or clear locks:
+
+| Platform | Supervisor and logs |
+| --- | --- |
+| macOS | `launchctl print "gui/$(id -u)/com.pane.update.<id>"`; read `<operation-directory>/supervisor.log` and `supervisor.plist` for the executable and arguments. |
+| Windows | `schtasks /Query /TN "com.pane.update.<id>" /V /FO LIST`; inspect `<operation-directory>/supervisor.xml`. Task Scheduler's History tab or the `Microsoft-Windows-TaskScheduler/Operational` event log may provide execution history if enabled. This adapter does not create a stdout/stderr log file. |
+| Linux | `systemctl --user status "com.pane.update.<id>.service"` and `journalctl --user -u "com.pane.update.<id>.service"`; transient units may already have been collected. |
+
+Windows relaunch can also create `com.pane.update.<id>-app`; inspect that task
+when present. A completed or missing supervisor is not proof that a child
+installer has exited. On macOS/Linux use `ps -axo pid,ppid,command`; on Windows
+use `Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine`
+in PowerShell. Compare full paths and arguments with this operation's staged
+runtime/helper, `staged.json` installer path and `preflight.json` installation.
+Check helper children and installer processes separately; a reused PID, generic
+process name or stale Task Scheduler result is insufficient. If processes cannot
+be attributed confidently, access is denied, or logs contradict the journal,
+leave locks and snapshots intact and ask a maintainer to inspect them.
+
+### Recovery steps
 
 1. Read status before starting another installer. If it is progressing, let it
    finish. If it stops progressing, inspect the helper supervisor and logs. A

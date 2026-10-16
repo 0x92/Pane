@@ -352,6 +352,7 @@ export async function openConnectedRemotePwa(
 
   await page.goto('/remote.html', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.getByRole('tablist', { name: 'Remote tool panels' }).waitFor();
+  await page.getByRole('status').filter({ hasText: /^Connected to/ }).waitFor();
   return fixtures.host;
 }
 
@@ -388,6 +389,7 @@ export async function connectAnotherRemoteClient(page: Page, host: RemotePwaMock
   await installRemoteHostRoute(page, fixtures);
   await page.goto('/remote.html', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.getByRole('tablist', { name: 'Remote tool panels' }).waitFor();
+  await page.getByRole('status').filter({ hasText: /^Connected to/ }).waitFor();
 }
 
 /** Sends one host event to this client, the way the daemon's event stream does. */

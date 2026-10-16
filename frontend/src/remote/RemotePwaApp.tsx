@@ -332,8 +332,10 @@ export function RemotePwaApp() {
       const shown = (panelId: string | null | undefined) => strip.some(panel => panel.id === panelId && phoneShows(panel)) ? panelId : null;
       // This client's own tab first; the host's last-used tab only for a Pane this client has not opened;
       // else the first tab it can show. A tab the phone cannot show is never restored.
-      // Background reads must not overwrite a newer navigation in another browser tab.
-      setSelectedPanel(routeMatches ? routedPanel.panelId : shown(currentPanelId) ?? shown(rememberedPanelId) ?? shown(activePanel?.id) ?? firstSupportedPanel(strip)?.id ?? null, { remember: Boolean(routeMatches) });
+      setSelectedPanel(
+        routeMatches ? routedPanel.panelId : shown(currentPanelId) ?? shown(rememberedPanelId) ?? shown(activePanel?.id) ?? firstSupportedPanel(strip)?.id ?? null,
+        { restore: !routeMatches },
+      );
       if (routedPanel?.sessionId === sessionId && !routeMatches) {
         setLastError('The notified panel is no longer available on this Pane host.');
       } else {
