@@ -868,6 +868,10 @@ async function checkWatchUntilEvent() {
       assert.strictEqual(requests[0].as, 'orch');
       assert.deepStrictEqual(requests[0].kinds, ['agent.report']);
       assert.strictEqual(requests[0].agentsOnly, true, `${runtime} --until-event keeps the --follow agents-only default`);
+      for (const field of ['settleMs', 'blockedSettleMs', 'minIntervalMs']) {
+        assert.strictEqual(requests[0][field], undefined, `${runtime} --until-event must not send follow cadence`);
+      }
+      assert.ok(!requests[0].idleBackoff, `${runtime} --until-event must not enable follow backoff`);
 
       requests = [];
       run = await withFakeDaemon(paneDir, scriptedWatch([
@@ -1066,7 +1070,7 @@ function spawnWatchCli(runtime, args, paneDir) {
 // undefined both mean an unset optional value; all populated fields are compared.
 const PARSER_DEFAULT_DIFFERENCES = {
   waitReady: false, noFocus: false, focus: false, pinned: false, noPinned: false,
-  force: false, present: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
+  force: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
   includeHeldInput: false, idleBackoff: false, allManaged: false, allStopped: false,
   includeShells: false, noHeldInput: false, selfTest: false, report: false,
   watchKinds: [], watchPaneIds: [], watchExcludePaneIds: [],
@@ -1085,6 +1089,17 @@ function normalizeParsedArgs(value) {
 
 function compareParserParity() {
   require('./test-runpane-watch-defaults.js');
+  const doctor = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'doctor.js'));
+  const defaults = doctor.watchDefaults();
+  assert.deepStrictEqual(Object.keys(defaults).sort(), ['follow', 'untilEvent']);
+  const pythonDefaults = JSON.parse(runPythonSnippet(`
+import json
+from runpane.doctor import watch_defaults, format_watch_defaults
+print(json.dumps({"defaults": watch_defaults(), "text": format_watch_defaults(watch_defaults())}))
+`));
+  assert.deepStrictEqual(pythonDefaults.defaults, defaults);
+  assert.strictEqual(pythonDefaults.text, doctor.formatWatchDefaults(defaults));
+  assert.deepStrictEqual(contract.jsonSchemas.doctorResult.properties.watchDefaults.required, ['follow', 'untilEvent']);
   const { parseRunpaneArgs } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'commands.js'));
   const nodeOutput = parserSamples.map((args) => normalizeParsedArgs({
     ...PARSER_DEFAULT_DIFFERENCES,
@@ -1111,6 +1126,8 @@ print(json.dumps([asdict(parse_args(args)) for args in json.loads(sys.stdin.read
     ['watch', '--profile', 'present'],
     ['watch', '--until-event', '--profile', 'unattended'],
     ['watch', '--follow', '--profile', 'invalid'],
+    ...['--present', '--present=true', '--profile', '--profile=present', '--profile=unattended'].flatMap(flag =>
+      [[], ['--follow'], ['--until-event']].map(mode => ['watch', ...mode, flag])),
     ['watch', '--epoch', 'e'],
     ['watch', '--as', 'c', '--since', '0', '--epoch', 'e'],
     ['watch', '--since', '0', '--epoch', ''],
@@ -1134,7 +1151,7 @@ print(json.dumps(errors))
       return true;
     });
   });
-  const removedFlags = ['--settle', '--format', '--quiet', '--no-control-lines', '--agents-only', '--all-managed', '--idle-backoff'];
+  const removedFlags = ['--settle', '--format', '--quiet', '--no-control-lines', '--agents-only', '--all-managed', '--idle-backoff', '--present', '--profile'];
   const pythonErrors = JSON.parse(runPythonSnippet(`
 import json
 import sys

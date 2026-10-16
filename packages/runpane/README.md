@@ -142,28 +142,24 @@ runpane watch --self-test
 runpane watch --follow
 ```
 
-`--follow` uses the unattended profile: READY settles for 3 minutes, BLOCKED
+`--follow` has one default cadence: READY settles for 3 minutes, BLOCKED
 for 30 seconds, and non-urgent events batch every 10 minutes. IDLE starts at
 10 minutes and backs off to 30 minutes, 1 hour, 3 hours, then daily. Heartbeats
 are off. WATCH OK prints once when armed; WATCH EXPIRED and exit 0 end a watch
 after 3 quiet hours. Meaningful events reset expiry; IDLE and replay do not.
 
-Use `--present` or `--profile present` when someone is waiting: READY settles
-for 1 minute, BLOCKED for 15 seconds, batches every 2 minutes, and IDLE does
-not back off. `--profile unattended` explicitly selects the default. Duration
-overrides accept `30s`, `3m`, `3h`, or `0`: `--ready-settle`, `--blocked-settle`,
+Individual duration overrides accept `30s`, `3m`, `3h`, or `0`: `--ready-settle`, `--blocked-settle`,
 `--min-interval`, `--idle-after`, `--expire-after`, `--heartbeat`, and
 watch `--timeout-ms` (for example, `--until-event --timeout-ms 30s`).
 `--expire-after 0` disables natural expiry. Bare values retain milliseconds,
 except heartbeat's legacy seconds. `--json` selects NDJSON; otherwise lines.
 
-With both options, `--present` selects the present preset even with
-`--profile unattended`, regardless of argument order. Individual duration
-flags override the selected preset. Both preset options require `--follow`.
+`--present` and `--profile` were removed. Use individual timing flags such as
+`--ready-settle 1m --blocked-settle 15s --min-interval 2m` to override the defaults.
 
 ```bash
 runpane watch --session <session-id> --follow --json
-runpane watch --session <session-id> --follow --profile present --json
+runpane watch --session <session-id> --follow --ready-settle 1m --blocked-settle 15s --min-interval 2m --json
 runpane watch --pane <pane-id> --until-event --json
 ```
 
@@ -171,7 +167,14 @@ Session membership changes need no re-arm. Named cursors survive daemon
 restarts; the journal and PR baselines are saved together. RESET/DROPPED mean
 refresh the overview; replayed baseline entries never mean a new READY.
 `--until-event` waits for REPORT, BLOCKED, EXIT or GONE by default and exits 0
-when one arrives. Override `--kinds` for PR events. Its `--timeout-ms` is a
+when one arrives, immediately without follow settling or batching. A harness
+that consumes a named follow stream gets its cadence; a process-exit waiter
+keeps these immediate single-event semantics. Cadence requires a named consumer
+(explicit `--as` or the name assigned by follow). `--follow --since <generation>`
+has no consumer name and also bypasses settling and batching. Named `--as`
+cannot be combined with numeric `--since`; switching only the wait mode does
+not enable cadence for a numeric generation/epoch cursor.
+Override `--kinds` for PR events. Its `--timeout-ms` is a
 total deadline (exit 124); under follow it bounds each daemon request.
 
 REPORT remains the completion signal: workers use `runpane report --state

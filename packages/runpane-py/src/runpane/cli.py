@@ -179,8 +179,6 @@ class ParsedArgs:
     watch_exclude_pane_ids: List[str] = field(default_factory=list)
     name_contains: Optional[str] = None
     follow: bool = False
-    present: bool = False
-    watch_profile: Optional[str] = None
     until_event: bool = False
     agents_only: bool = False
     ack_now: bool = False
@@ -469,8 +467,8 @@ def parse_args(argv: List[str]) -> ParsedArgs:
     if parsed.command == "watch" and parsed.json and parsed.watch_format == "lines":
         raise ValueError("runpane watch accepts either --json or --format lines, not both.")
     cadence_value_flag_present = has_cadence_value_flag(parsed)
-    if parsed.command == "watch" and not parsed.follow and (cadence_value_flag_present or parsed.present or parsed.watch_profile or parsed.expire_after_ms is not None):
-        raise ValueError("--ready-settle, --blocked-settle, --min-interval, --profile, --present, and --expire-after require --follow.")
+    if parsed.command == "watch" and not parsed.follow and (cadence_value_flag_present or parsed.expire_after_ms is not None):
+        raise ValueError("--ready-settle, --blocked-settle, --min-interval, and --expire-after require --follow.")
     if parsed.command == "watch" and parsed.watch_since is not None and cadence_value_flag_present:
         raise ValueError(
             "runpane watch accepts either --since or --ready-settle/--blocked-settle/--min-interval, not both (cadence needs a named cursor)."
@@ -501,7 +499,7 @@ def apply_watch_defaults(parsed: ParsedArgs) -> None:
         parsed.watch_kinds = list(defaults["untilEvent"]["kinds"])
     if not parsed.follow:
         return
-    follow = {**defaults["follow"], **(defaults["present"] if parsed.present or parsed.watch_profile == "present" else {})}
+    follow = defaults["follow"]
     if not parsed.watch_kinds:
         parsed.watch_kinds = list(follow["kinds"])
     for field, key in [("settle_ms", "readySettle"), ("blocked_settle_ms", "blockedSettle"),
@@ -602,7 +600,9 @@ def parse_flags(raw_args: List[str], parsed: ParsedArgs) -> None:
             "--all-managed": "omit it; all managed Panes are the default",
             "--quiet": "omit it; heartbeats are off by default",
             "--no-control-lines": "omit it; WATCH OK and errors always print",
-            "--idle-backoff": "omit it; backoff is the unattended default",
+            "--idle-backoff": "omit it; backoff is the default",
+            "--present": "--follow with individual duration overrides such as --ready-settle 1m --blocked-settle 15s --min-interval 2m",
+            "--profile": "--follow with individual duration overrides such as --ready-settle 1m --blocked-settle 15s --min-interval 2m",
         }
         for token in raw_args:
             flag = token.split("=", 1)[0]
@@ -724,9 +724,6 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
         return
     if flag == "--merged":
         parsed.merged = True
-        return
-    if flag == "--present":
-        parsed.present = True
         return
     if flag == "--follow":
         parsed.follow = True
@@ -955,11 +952,6 @@ def parse_local_value_flag(parsed: ParsedArgs, flag: str, value: str) -> None:
         if value not in FORMATS:
             raise ValueError(f"Invalid --format {value}. Expected one of: {', '.join(sorted(FORMATS))}")
         parsed.format = value
-        return
-    if flag == "--profile":
-        if value not in ("unattended", "present"):
-            raise ValueError("--profile must be unattended or present.")
-        parsed.watch_profile = value
         return
     if flag == "--heartbeat":
         parsed.heartbeat_seconds = parse_watch_duration(flag, value, 1000) / 1000

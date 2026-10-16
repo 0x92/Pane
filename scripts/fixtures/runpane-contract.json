@@ -100,9 +100,7 @@
       "--kinds",
       "agent.ready,agent.idle",
       "--include-held-input",
-      "--self-test",
-      "--profile",
-      "present"
+      "--self-test"
     ],
     [
       "daemon",
@@ -885,18 +883,10 @@
     [
       "watch",
       "--follow",
-      "--profile",
-      "present",
       "--ready-settle",
       "5s",
       "--expire-after",
       "0"
-    ],
-    [
-      "watch",
-      "--follow",
-      "--profile",
-      "unattended"
     ],
     [
       "watch",
@@ -921,9 +911,6 @@
     [
       "watch",
       "--follow",
-      "--present",
-      "--profile",
-      "present",
       "--ready-settle",
       "5s",
       "--expire-after",
@@ -932,40 +919,26 @@
     [
       "watch",
       "--follow",
-      "--profile",
-      "present",
-      "--present",
       "--ready-settle",
       "5s",
+      "--blocked-settle",
+      "2s",
+      "--min-interval",
+      "1m",
+      "--idle-after",
+      "20m",
       "--expire-after",
-      "off"
+      "off",
+      "--heartbeat",
+      "30s"
     ],
     [
       "watch",
       "--follow",
-      "--present",
-      "--profile",
-      "unattended",
-      "--ready-settle",
-      "5s",
-      "--expire-after",
-      "off"
-    ],
-    [
-      "watch",
-      "--follow",
-      "--profile",
-      "unattended",
-      "--present",
-      "--ready-settle",
-      "5s",
-      "--expire-after",
-      "off"
-    ],
-    [
-      "watch",
-      "--follow",
-      "--present"
+      "--since",
+      "42",
+      "--epoch",
+      "test-epoch"
     ]
   ],
   "help": {
