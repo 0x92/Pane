@@ -433,6 +433,29 @@ export class TerminalPanelManager extends EventEmitter {
     shellType?: string,
     isWSL = false,
   ): CliLaunchResolution {
+    const resolution = this.resolveSavedCliLaunchCommand(panelId, initialCommand, customState, shellType, isWSL);
+    if (customState.updateResumeId) {
+      const id = customState.updateResumeId;
+      const custom = effectiveCustomResume(customState);
+      const expectedCustom = custom?.config.resumeTemplate.replace(/\{command\}|\{sessionId\}/g, token => token === '{command}' ? initialCommand : this.quoteCommandArgument(id));
+      const exact = expectedCustom
+        ? resolution.commandToRun === expectedCustom
+        : resolution.commandToRun.includes(id) && /(?:--resume(?:=|\s)|\bresume\s|--session(?:=|\s))/.test(resolution.commandToRun);
+      if (!exact || resolution.customState.agentSessionId !== id) {
+        throw new PaneError('ERR_UPDATE_CONVERSATION', `Panel ${panelId} could not reopen its exact recorded conversation. No command or input was sent.`, 'Review the saved panel and resume the intended conversation manually.');
+      }
+      resolution.customState = { ...resolution.customState, initialInput: undefined, initialInputFile: undefined, updateResumeId: undefined };
+    }
+    return resolution;
+  }
+
+  private resolveSavedCliLaunchCommand(
+    panelId: string,
+    initialCommand: string,
+    customState: TerminalPanelState,
+    shellType?: string,
+    isWSL = false,
+  ): CliLaunchResolution {
     const resume = effectiveCustomResume({ initialCommand, customResume: customState.customResume });
     if (resume) {
       const config = validateCustomCommandResume(resume.config);
@@ -1582,6 +1605,10 @@ export class TerminalPanelManager extends EventEmitter {
       throw new Error(`Panel ${panel.id} not found during terminal initialization`);
     }
     panel = authoritativePanel;
+    const updateHold = terminalCustomState(panel.state).updateResumeHold;
+    if (updateHold) {
+      throw new PaneError('ERR_UPDATE_PANEL_HELD', `Panel ${panel.id} is preserved after update ${updateHold}; its command was not restarted.`, `Review its saved conversation, then run runpane panels resume --panel ${panel.id} --yes when ready.`);
+    }
     if (this.sessionTerminations.has(panel.sessionId)) {
       throw new PaneError(
         'ERR_PANEL_STILL_STOPPING',
@@ -2336,17 +2363,9 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   private async getProcessCwd(pid: number): Promise<string> {
-    // This is platform-specific and simplified
-    // In production, you'd use more robust methods
-    if (process.platform === 'darwin' || process.platform === 'linux') {
-      try {
-        const cwdLink = `/proc/${pid}/cwd`;
-        return await fs.readlink(cwdLink);
-      } catch {
-        return process.cwd();
-      }
-    }
-    return process.cwd();
+    // Only Linux exposes /proc. Failure must preserve the recorded launch cwd;
+    // the Electron process directory says nothing about an individual panel.
+    return await fs.readlink(`/proc/${pid}/cwd`);
   }
   
   async restoreTerminalState(panel: ToolPanel, state: TerminalPanelState, wslContext?: WSLContext | null): Promise<void> {
@@ -2399,7 +2418,7 @@ export class TerminalPanelManager extends EventEmitter {
     );
     return {
       isInitialized: true,
-      cwd: process.cwd(), // Simplified - would need platform-specific implementation
+      cwd: terminalCustomState(panelManager.getPanel(panelId)?.state ?? { isActive: false }).cwd,
       shellType: process.env.SHELL || 'bash',
       scrollbackBuffer: cappedScrollback,
       alternateScreenBuffer: terminal.alternateScreenBuffer,

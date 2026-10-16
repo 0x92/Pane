@@ -65,12 +65,20 @@ export class RemoteRuntimeAdapter {
     return this.client.connect();
   }
 
+  suspend(): void { this.client.suspend(); }
+
+  resume(): void { this.client.resume(); }
+
   disconnect(): void {
     this.client.disconnect();
   }
 
   getStatus(): RemoteBrowserConnectionState {
     return this.client.getState();
+  }
+
+  onRestore(listener: (signal: AbortSignal) => Promise<void>): () => void {
+    return this.client.onRestore(listener);
   }
 
   onStatus(listener: RemoteRuntimeStatusListener): () => void {

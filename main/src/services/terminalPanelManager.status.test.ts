@@ -396,6 +396,21 @@ describe('terminal status events', () => {
     }) }));
   });
 
+  it('preserves the panel launch directory when reading and saving terminal state', async () => {
+    attach('codex');
+    const panel: ToolPanel = {
+      id: 'p', sessionId: 's', type: 'terminal', title: 'Codex',
+      state: { isActive: true, customState: { cwd: '/workspace/owned-session' } },
+      metadata: { createdAt: '', lastActiveAt: '', position: 0 },
+    };
+    panelManager.getPanel.mockReturnValue(panel);
+    panelManager.updatePanel.mockResolvedValue(undefined);
+    expect((await manager.getTerminalState('p'))?.cwd).toBe('/workspace/owned-session');
+    vi.spyOn(access, 'getProcessCwd').mockRejectedValue(new Error('Process cwd unavailable'));
+    await manager.saveTerminalState('p');
+    expect(panel.state.customState).toMatchObject({ cwd: '/workspace/owned-session' });
+  });
+
   it('discards a terminal state read after the terminal was replaced', async () => {
     const old = attach('codex');
     old.data('old terminal output');

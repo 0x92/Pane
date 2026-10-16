@@ -44,7 +44,7 @@ Pane desktop app, not in this package. Run it with Node:
 pipx run runpane setup
 pipx run runpane install client
 pipx run runpane install daemon --label "My Server"
-pipx run runpane update
+pipx run runpane update --pane-only
 pipx run runpane doctor
 ```
 
@@ -82,6 +82,48 @@ runpane version
 runpane doctor
 runpane --help
 ```
+
+### Independent updates
+
+`runpane update` updates both the running Pane installation on this machine and
+the CLI installation that received the command. Use `--pane-only` or
+`--cli-only` to select one; these flags are mutually exclusive. `--version`
+continues to select the requested release. A managed CLI update stays pinned
+when an older Pane starts again. Global npm and supported pip environments are
+updated through their owning package manager; changing the bundled shim does
+not count as updating either package.
+
+Run `runpane update --dry-run --json` to inspect the machine, executable, CLI
+owner, and supervisor capability. App updates require a running host supporting
+the continuity protocol and a release with a matching `continuity.json` manifest.
+Older releases require the normal manual installer. Cached/local npm installs,
+system-managed Linux packages, non-stable/daemon installer options, custom download
+directories, missing standalone Node, and unwritable targets
+are refused before downtime. Python delegates to the managed engine installed
+by Pane and records the invoking Python environment.
+
+The command returns an operation ID after the independent helper acknowledges
+startup. That is acceptance, not completion. Use
+`runpane update --status <id> --wait --json` with the same `--pane-dir` to inspect
+installed components, host health, and each panel's restoration outcome. A
+current-user launchd, Task Scheduler, or systemd service owns the helper; its
+code and standalone runtime are staged outside the files being replaced.
+
+The helper stages and verifies packages before shutdown, preserves a data and
+browser-profile snapshot, replaces the identified installation, and checks the
+new host's version, endpoint/auth configuration, and data/profile identity.
+Active agents reopen only their recorded conversation with the saved launch
+profile. It never sends a prompt or `continue`, guesses a conversation, or
+replays an uncertain action. Idle/completed/approval-blocked panels stay stopped;
+ambiguous active runs report `needs-attention`. Review a stopped panel before
+explicitly resuming it. A failed post-shutdown operation retains its lock and
+snapshot for inspection; it never downgrades a migrated database automatically.
+
+Updates need the current interactive login. Logout/reboot recovery and a
+`needs-attention` operation require inspecting durable status before further
+installation work. To choose another machine explicitly, run
+`runpane workspace <machine> exec -- runpane update`; the UI's selected host does
+not change the default update target.
 
 ### Common Options
 

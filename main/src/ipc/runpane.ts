@@ -2775,6 +2775,12 @@ async function resumeTerminalPanel(
       'Restore the Pane from the Archived list in Pane before resuming its panels.',
     );
   }
+  // SAFETY: callers resolveTerminalPanel before reaching this terminal-only action.
+  const heldState = panel.state.customState as TerminalPanelState | undefined;
+  if (heldState?.updateResumeHold) {
+    await panelManager.updatePanel(panel.id, { state: { ...panel.state, customState: { ...heldState, updateResumeHold: undefined, updateResumeId: undefined } } });
+    panel = panelManager.getPanel(panel.id) ?? panel;
+  }
   const waitIfAsked = async (target: ToolPanel) => options.waitReady
     ? toPaneReadiness(await waitForPanel(target, {
       panelId: target.id,

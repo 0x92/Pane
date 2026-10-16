@@ -611,6 +611,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   remoteDaemon: {
+    restoreComplete: (restoreId: number, error?: string): Promise<void> => ipcRenderer.invoke('remote-daemon:restore-complete', restoreId, error),
     getConfig: (): Promise<IPCResponse<RemoteDaemonConfig>> => invokeIpc('remote-daemon:get-config'),
     getConnectionState: (): Promise<IPCResponse<RemotePaneConnectionState>> => invokeIpc('remote-daemon:get-connection-state'),
     getHostState: (): Promise<IPCResponse<RemoteDaemonHostRuntimeState>> => invokeIpc('remote-daemon:get-host-state'),
@@ -1066,8 +1067,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('window:focus-changed', wrappedCallback);
       return () => ipcRenderer.removeListener('window:focus-changed', wrappedCallback);
     },
-    onRemoteDaemonResyncRequested: (callback: (event: { hostChanged: boolean }) => void) => {
-      const wrappedCallback = (_event: Electron.IpcRendererEvent, payload?: { hostChanged?: boolean }) => callback({ hostChanged: payload?.hostChanged === true });
+    onRemoteDaemonResyncRequested: (callback: (event: { hostChanged: boolean; restoreId?: number }) => void) => {
+      const wrappedCallback = (_event: Electron.IpcRendererEvent, payload?: { hostChanged?: boolean; restoreId?: number }) => callback({ hostChanged: payload?.hostChanged === true, restoreId: payload?.restoreId });
       ipcRenderer.on('remote-daemon:resync-required', wrappedCallback);
       return () => ipcRenderer.removeListener('remote-daemon:resync-required', wrappedCallback);
     },

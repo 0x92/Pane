@@ -7,6 +7,7 @@ import { Text } from '@/ui';
 
 const presentation: Record<RemotePaneConnectionStatus, { label: string; color: keyof ThemeColors }> = {
   connected: { label: 'Connected', color: 'success' },
+  restoring: { label: 'Restoring…', color: 'warning' },
   connecting: { label: 'Connecting…', color: 'warning' },
   reconnecting: { label: 'Reconnecting…', color: 'warning' },
   error: { label: 'Offline', color: 'danger' },

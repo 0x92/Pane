@@ -20,6 +20,7 @@ import {
 import { isMac } from '../../utils/platformUtils';
 import { copyTerminalText, decodeOsc52Write, isTerminalCopyShortcut } from '../../utils/terminalClipboard';
 import { sendTerminalInput } from '../../utils/terminalInput';
+import { registerRemoteTerminalRestore } from '../../utils/remoteRestoration';
 import { terminalTiming } from '../../utils/terminalTiming';
 import { acknowledgeTerminalOutput } from '../../utils/terminalAck';
 import { FileEdit, FolderOpen } from 'lucide-react';
@@ -246,6 +247,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
   const [isInitialized, setIsInitialized] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [interceptorState, setInterceptorState] = useState<InterceptorState | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -747,6 +749,8 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
       if (xtermRef.current !== terminal) return;
       const state = await window.electronAPI.invoke('terminal:getState', panel.id);
       if (xtermRef.current !== terminal) return;
+      if (isRemoteMode && !state) throw new Error('The host did not return this terminal snapshot.');
+      setRefreshError(null);
       if (state?.isAlternateScreen) {
         // Renderer refresh alone cannot repair an application frame that was
         // restored before the visible grid settled. Ask main for a forced resize
@@ -786,9 +790,10 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
       }
       await finishRefresh();
     } catch (e) {
+      setRefreshError(e instanceof Error ? e.message : 'The terminal snapshot could not be restored.');
       console.warn('[TerminalPanel] Failed to refresh terminal:', e);
     }
-  }, [panel.id, resizePtyToFit]);
+  }, [panel.id, resizePtyToFit, isRemoteMode]);
 
   const handleManualRefresh = useCallback(async () => {
     setIsRefreshing(true);
@@ -800,6 +805,13 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
       setIsRefreshing(false);
     }
   }, [handleRefreshTerminal]);
+
+  useEffect(() => registerRemoteTerminalRestore(panel.id, async () => {
+    if (!isRemoteMode) return;
+    needsFullActivationRefreshRef.current = true;
+    if (!activationVisible) return;
+    await handleManualRefresh();
+  }), [panel.id, isRemoteMode, activationVisible, handleManualRefresh]);
 
   // Light repaint for pure-refocus activations (buffer is live, only pixels are
   // stale). Pattern: the theme effect's guarded refresh minus its unconditional
@@ -2077,6 +2089,10 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
           never replays, and replaying scrollback rewrites the scrollbar
           slider's style thousands of times, which the recorder would serialize. */}
       <div ref={terminalRef} className="ph-no-capture h-full w-full" data-terminal-font={terminalFontObservation} data-window-focused={windowFocused ? "true" : "false"} />
+      {refreshError && <div role="status" className="absolute bottom-0 inset-x-0 z-30 bg-surface-secondary px-3 py-2 text-xs text-text-secondary">
+        Terminal restoration needs attention: {refreshError}
+        <button className="ml-3 text-text-primary" onClick={() => void handleManualRefresh()}>Retry snapshot</button>
+      </div>}
 
       {/* Terminal search overlay */}
       <TerminalSearchOverlay

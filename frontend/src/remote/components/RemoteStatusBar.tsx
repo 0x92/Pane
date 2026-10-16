@@ -99,6 +99,8 @@ function getStatusLabel(status: RemotePaneConnectionStatus): string {
       return 'Connected to';
     case 'connecting':
       return 'Connecting to';
+    case 'restoring':
+      return 'Restoring workspace on';
     case 'reconnecting':
       return 'Reconnecting to';
     case 'error':

@@ -1285,7 +1285,7 @@ if (launchRemoteSetup) {
       app.exit(0);
       return;
     }
-    if (app.isPackaged && !app.isDefaultProtocolClient(PANE_LINK_SCHEME)) {
+    if (process.env.PANE_DISABLE_OS_INTEGRATION !== '1' && app.isPackaged && !app.isDefaultProtocolClient(PANE_LINK_SCHEME)) {
       app.setAsDefaultProtocolClient(PANE_LINK_SCHEME);
     }
 
@@ -1294,8 +1294,8 @@ if (launchRemoteSetup) {
     // after the window opens reads the cache instead of blocking on the shell.
     void warmShellPath();
     await initializeServices();
-    syncAutoStartOnBoot(app, configManager.getConfig().autoStartOnBoot !== false);
-    setTimeout(() => syncPaneMcpForApp({
+    if (process.env.PANE_DISABLE_OS_INTEGRATION !== '1') syncAutoStartOnBoot(app, configManager.getConfig().autoStartOnBoot !== false);
+    if (process.env.PANE_DISABLE_OS_INTEGRATION !== '1') setTimeout(() => syncPaneMcpForApp({
       isPackaged: app.isPackaged,
       config: configManager.getConfig(),
       getProjects: () => databaseService.getAllProjects(),

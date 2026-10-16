@@ -244,8 +244,8 @@ export function RemotePwaApp() {
     let active = true;
     void addNativeAppListener('appStateChange', (event) => {
       const isActive = event.isActive === true;
-      if (!isActive) adapter.disconnect();
-      if (isActive && active) void adapter.connect().catch(() => {});
+      if (!isActive) adapter.suspend();
+      if (isActive && active) adapter.resume();
     }).then(result => {
       if (!active) void result?.remove();
       else listener = result;
@@ -482,6 +482,21 @@ export function RemotePwaApp() {
     activeRuntimeRef.current = runtime;
     updateConnection({ ...INITIAL_CONNECTION, connectionStatus: 'connecting' });
     resetHostState(profile.id);
+    updateConnection({ adapter: runtime, activeProfile: profile });
+    runtime.onRestore(async signal => {
+      // Required reads reject on failure; the normal refresh helpers also serve
+      // optional UI actions and intentionally catch their own errors.
+      const projects = await runtime.getProjectsWithSessions();
+      if (signal.aborted || runtime !== activeRuntimeRef.current) return;
+      setProjects(projects);
+      const paneId = useRemoteSessionStore.getState().selectedSessionId;
+      if (paneId) {
+        const panels = await runtime.getPanels(paneId);
+        if (signal.aborted || runtime !== activeRuntimeRef.current) return;
+        setPanels(paneId, panels);
+      }
+      await resyncHost(runtime);
+    });
 
     try {
       await runtime.connect();
@@ -502,17 +517,14 @@ export function RemotePwaApp() {
       }
       return activeRuntimeRef.current === runtime ? runtime : null;
     } catch (error) {
-      runtime.disconnect();
       if (activeRuntimeRef.current !== runtime) return null;
-      activeRuntimeRef.current = null;
-      updateConnection({
-        ...INITIAL_CONNECTION,
-        lastError: error instanceof Error ? error.message : 'Failed to connect to remote Pane',
-        connectionErrorKind: 'connection',
-      });
-      throw error;
+      const state = runtime.getStatus();
+      updateConnection({ connectionStatus: state.status, lastError: state.lastError });
+      // The client owns bounded recovery. Keep its workspace and subscriptions
+      // alive through an initial network failure; auth errors stop immediately.
+      return runtime;
     }
-  }, [loadAffordances, openRemoteOrchestrationSession, refreshOrchestrationSessions, refreshProjects, resetHostState]);
+  }, [loadAffordances, openRemoteOrchestrationSession, refreshOrchestrationSessions, refreshProjects, resetHostState, resyncHost, setPanels, setProjects]);
 
   useEffect(() => {
     if (!pendingPushRoute || profilesLoading) return;
@@ -772,14 +784,11 @@ export function RemotePwaApp() {
 
   useEffect(() => {
     if (!adapter) return;
-    // Events sent while the stream was down are lost: refetch once it is back.
-    let streamDropped = false;
-    return adapter.onStatus(state => {
+    const unsubscribeStatus = adapter.onStatus(state => {
       updateConnection({ connectionStatus: state.status, lastError: state.lastError, lastSeenAt: state.lastSeenAt });
-      if (state.status === 'connected' && streamDropped) void resyncHost(adapter);
-      if (state.status !== 'connecting') streamDropped = state.status !== 'connected';
     });
-  }, [adapter, resyncHost]);
+    return unsubscribeStatus;
+  }, [adapter, resyncHost, setPanels, setProjects]);
 
   useEffect(() => adapter ? subscribeRemotePanelStatus(adapter) : undefined, [adapter]);
 

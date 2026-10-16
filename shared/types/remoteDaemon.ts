@@ -5,7 +5,7 @@ import type { BoundarySchema, JsonObject, JsonValue } from '../validation/bounda
 
 export type RemoteDaemonTransport = 'http+sse';
 export type RemoteDaemonClientMode = 'local' | 'remote';
-export type RemotePaneConnectionStatus = 'local' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+export type RemotePaneConnectionStatus = 'local' | 'connecting' | 'connected' | 'restoring' | 'reconnecting' | 'error';
 export type RemoteSetupChannel = 'stable' | 'nightly';
 export type RemoteSetupTunnelPreference = 'auto' | 'tailscale' | 'ssh' | 'manual';
 export type RemoteSetupDataDirectoryMode = 'current' | 'isolated';

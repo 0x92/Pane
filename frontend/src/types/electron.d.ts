@@ -356,6 +356,7 @@ interface ElectronAPI {
   };
 
   remoteDaemon: {
+    restoreComplete: (restoreId: number, error?: string) => Promise<void>;
     getConfig: () => Promise<IPCResponse<RemoteDaemonConfig>>;
     getConnectionState: () => Promise<IPCResponse<RemotePaneConnectionState>>;
     getHostState: () => Promise<IPCResponse<RemoteDaemonHostRuntimeState>>;
@@ -517,7 +518,7 @@ interface ElectronAPI {
     // Window focus state from BrowserWindow (more reliable than document.hasFocus())
     onAppMenuAction: (callback: (action: 'open-about' | 'open-settings') => void) => () => void;
     onWindowFocusChanged: (callback: (focused: boolean) => void) => () => void;
-    onRemoteDaemonResyncRequested: (callback: (event: { hostChanged: boolean }) => void) => () => void;
+    onRemoteDaemonResyncRequested: (callback: (event: { hostChanged: boolean; restoreId?: number }) => void) => () => void;
 
     // Spotlight events
     onSpotlightStatusChanged?: (callback: (data: { sessionId: string; projectId: number; active: boolean }) => void) => () => void;

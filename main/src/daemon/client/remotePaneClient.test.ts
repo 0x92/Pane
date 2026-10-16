@@ -15,6 +15,7 @@ interface TestRemoteServer {
   baseUrl: string;
   /** Answer this channel the way a host without the command does. */
   refuseChannel(channel: string): void;
+  truncateInvoke(): void;
   close(): Promise<void>;
   closeEventStream(): void;
   emitDaemonEvent(payload: JsonValue): void;
@@ -69,6 +70,39 @@ describe('RemotePaneClient', () => {
       channel: 'sessions:get-all',
       args: ['session-1'],
     }));
+  });
+
+  it('routes a truncated mutation response to recovery and never replays it', async () => {
+    const server = await createTestRemoteServer();
+    activeServers.push(server);
+    const states: string[] = [];
+    const client = new RemotePaneClient({ id: 'truncated', label: 'host', baseUrl: server.baseUrl, token: '', transport: 'http+sse' }, {
+      onConnectionStateChange: status => states.push(status),
+    });
+    await client.connect();
+    server.truncateInvoke();
+    await expect(client.invoke('panels:input', ['panel', 'hello'])).rejects.toThrow('Delivery unknown');
+    expect(states.at(-1)).toBe('reconnecting');
+    await client.disconnect();
+  });
+
+  it('waits for restoration before connected and ignores restoration after disconnect', async () => {
+    const server = await createTestRemoteServer();
+    activeServers.push(server);
+    const states: string[] = [];
+    let finish!: () => void;
+    const restored = new Promise<void>(resolve => { finish = resolve; });
+    const client = new RemotePaneClient({ id: 'restore', label: 'host', baseUrl: server.baseUrl, token: '', transport: 'http+sse' }, {
+      onConnectionStateChange: status => states.push(status),
+      onResyncRequired: () => restored,
+    });
+    const connecting = client.connect();
+    await waitFor(() => states.includes('restoring'));
+    expect(states).not.toContain('connected');
+    await client.disconnect();
+    finish();
+    await connecting;
+    expect(states).not.toContain('connected');
   });
 
   it('falls back to a stored Tailscale IP when macOS cannot resolve a ts.net host', async () => {
@@ -225,7 +259,7 @@ describe('RemotePaneClient', () => {
     await client.disconnect();
   });
 
-  it('retries stale remote event streams five times before surfacing a hard error', async () => {
+  it('retries stale remote event streams until the outage deadline', async () => {
     const server = await createTestRemoteServer();
     activeServers.push(server);
     const connectionStates: Array<{ status: string; errorMessage: string | null | undefined }> = [];
@@ -240,7 +274,7 @@ describe('RemotePaneClient', () => {
       heartbeatStaleTimeoutMs: 20,
       reconnectInitialDelayMs: 5,
       reconnectMaxDelayMs: 20,
-      reconnectErrorThreshold: 5,
+      reconnectDurationMs: 160,
       onConnectionStateChange(status, errorMessage) {
         connectionStates.push({ status, errorMessage });
       },
@@ -253,10 +287,10 @@ describe('RemotePaneClient', () => {
 
     const firstErrorIndex = connectionStates.findIndex((state) => state.status === 'error');
     expect(firstErrorIndex).toBeGreaterThan(-1);
-    expect(server.getEventRequestCount()).toBe(6);
+    expect(server.getEventRequestCount()).toBeGreaterThan(6);
     expect(connectionStates.slice(0, firstErrorIndex).filter((state) => state.status === 'reconnecting').length)
       .toBeGreaterThanOrEqual(5);
-    expect(connectionStates[firstErrorIndex].errorMessage).toBe('Remote daemon not ready yet');
+    expect(connectionStates[firstErrorIndex].errorMessage).toContain('Could not reconnect');
 
     await client.disconnect();
   });
@@ -331,6 +365,35 @@ describe('RemotePaneClient', () => {
 });
 
 describe('RemotePaneClientController', () => {
+  it('requires every current renderer to acknowledge restoration before green', async () => {
+    const server = await createTestRemoteServer();
+    activeServers.push(server);
+    const config = createDefaultRemoteDaemonConfig();
+    config.client = { mode: 'remote', activeProfileId: 'ack', profiles: [
+      { id: 'ack', label: 'host', baseUrl: server.baseUrl, token: 'test-token', transport: 'http+sse' },
+    ] };
+    const controller = new RemotePaneClientController();
+    let restoreId = 0;
+    controller.initialize({
+      configManager: createConfigManagerStub(config),
+      rendererIds: () => [10, 11],
+      rendererEventSink: { send(channel, payload) {
+        if (channel === 'remote-daemon:resync-required') {
+          restoreId = decodeBoundary(payload, boundary.object({ restoreId: boundary.number })).restoreId;
+        }
+      } },
+    });
+    await waitFor(() => restoreId > 0);
+    expect(controller.getConnectionState().status).toBe('restoring');
+    controller.acknowledgeRestore(10, restoreId);
+    controller.acknowledgeRestore(99, restoreId);
+    controller.acknowledgeRestore(11, restoreId - 1);
+    expect(controller.getConnectionState().status).toBe('restoring');
+    controller.acknowledgeRestore(11, restoreId);
+    await waitFor(() => controller.getConnectionState().status === 'connected');
+    await controller.switchToLocalMode();
+  });
+
   it('syncs into remote mode and suppresses local daemon renderer events', async () => {
     const server = await createTestRemoteServer();
     activeServers.push(server);
@@ -688,6 +751,7 @@ async function createTestRemoteServer(host = '127.0.0.1', basePath = ''): Promis
   let eventsReady = true;
   let emitReadyEvent = true;
   const refusedChannels = new Set<string>();
+  let truncateInvoke = false;
   const normalizedBasePath = normalizeTestBasePath(basePath);
   const invokePath = `${normalizedBasePath}/invoke`;
   const eventsPath = `${normalizedBasePath}/events`;
@@ -715,6 +779,7 @@ async function createTestRemoteServer(host = '127.0.0.1', basePath = ''): Promis
         return;
       }
       response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      if (truncateInvoke) { response.end('{"ok":'); return; }
       response.end(JSON.stringify({
         ok: true,
         result: parsed,
@@ -771,6 +836,7 @@ async function createTestRemoteServer(host = '127.0.0.1', basePath = ''): Promis
 
   return {
     baseUrl: `http://${host.includes(':') ? `[${host}]` : host}:${address.port}${normalizedBasePath}`,
+    truncateInvoke() { truncateInvoke = true; },
     refuseChannel(channel: string) {
       refusedChannels.add(channel);
     },

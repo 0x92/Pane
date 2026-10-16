@@ -165,9 +165,10 @@ export const RUNPANE_CONTRACT = {
     },
     {
       "name": "update",
-      "summary": "Update the Pane desktop app using the same artifact path as install client.",
+      "summary": "Update both Pane and the invoked supported CLI through an independent helper.",
       "usage": [
-        "runpane update [options]"
+        "  runpane update [--pane-only | --cli-only] [--version <latest|vX.Y.Z>] [--pane-dir <path>] [--dry-run] [--wait] [--json]",
+        "  runpane update --status <operation-id> [--wait] [--pane-dir <path>] [--json]"
       ],
       "target": "client",
       "localControl": false
@@ -2151,18 +2152,14 @@ export const RUNPANE_CONTRACT = {
       ],
       "update": [
         "Usage:",
-        "  runpane update [options]",
+        "  runpane update [--pane-only | --cli-only] [--version <latest|vX.Y.Z>] [--pane-dir <path>] [--dry-run] [--wait] [--json]",
+        "  runpane update --status <operation-id> [--wait] [--pane-dir <path>] [--json]",
         "",
-        "Updates Pane using the same artifact selection as \"runpane install client\".",
-        "",
-        "Options:",
-        "  --version <latest|vX.Y.Z>",
-        "  --format <auto|appimage|deb|dmg|zip|exe>",
-        "  --download-dir <path>",
-        "  --pane-path <path>",
-        "  --dry-run",
-        "  --yes",
-        "  --verbose"
+        "Updates both Pane and the invoked supported CLI by default, on this machine.",
+        "Preflight identifies the host and installation owner before downtime. The independent helper stages an app, CLI, and standalone Node runtime before stopping Pane.",
+        "Status distinguishes acceptance, installed components, host health, and per-panel restoration. No prompts or uncertain actions are replayed.",
+        "CLI-only updates do not restart Pane; a managed CLI pin survives later Pane startup.",
+        "Use workspace <machine> exec -- runpane update for an explicit remote machine."
       ],
       "version": [
         "Usage:",
@@ -3445,7 +3442,14 @@ export const RUNPANE_CONTRACT = {
       ],
       "update": [
         "Usage:",
-        "  runpane update [--version <latest|vX.Y.Z>] [--dry-run] [--yes]"
+        "  runpane update [--pane-only | --cli-only] [--version <latest|vX.Y.Z>] [--pane-dir <path>] [--dry-run] [--wait] [--json]",
+        "  runpane update --status <operation-id> [--wait] [--pane-dir <path>] [--json]",
+        "",
+        "Updates both Pane and the invoked supported CLI by default, on this machine.",
+        "Preflight identifies the host and installation owner before downtime. The independent helper stages an app, CLI, and standalone Node runtime before stopping Pane.",
+        "Status distinguishes acceptance, installed components, host health, and per-panel restoration. No prompts or uncertain actions are replayed.",
+        "CLI-only updates do not restart Pane; a managed CLI pin survives later Pane startup.",
+        "Use workspace <machine> exec -- runpane update for an explicit remote machine."
       ],
       "version": [
         "Usage:",
@@ -4631,7 +4635,7 @@ export const RUNPANE_CONTRACT = {
       "`runpane install client` downloads the selected Pane desktop artifact and installs, opens, or launches it for the current platform.",
       "`runpane install daemon` downloads or installs Pane, resolves a stable Pane executable path, and spawns `<pane executable> --remote-setup <forwarded remote setup args>`.",
       "The wrapper must stream Pane stdout/stderr without reformatting because `pane --remote-setup` prints the one-time `pane-remote://...` connection code.",
-      "`runpane update` uses the same release resolution and installer path as `install client`.",
+      "`runpane update` defaults to both app and active supported CLI, with independent supervision, staging, durable status, and explicit restoration outcomes.",
       "`runpane version` prints only wrapper package metadata and does not contact, launch, or focus the Pane app or daemon.",
       "`runpane doctor` checks platform support, release metadata reachability, download URL selection, installed Pane detection, daemon reachability, and remote-daemon hints. Add `--json` for a machine-readable report that agents should run before mutating Pane state. Installed app version detection must be best-effort and must not launch, focus, or configure Pane; macOS wrappers read app bundle metadata instead of executing `Pane --version`.",
       "`runpane daemon repair` rewrites and restarts only the managed remote-daemon launcher/service. It never creates pairing credentials, changes tunnels, or downloads Pane; doctor only recommends it and never runs it automatically.",
@@ -11314,8 +11318,8 @@ export const RUNPANE_CONTRACT = {
       },
       "update": {
         "name": "update",
-        "summary": "Update the Pane desktop app using the same artifact path as install client.",
-        "details": "Resolves and installs the selected Pane client release.",
+        "summary": "Update Pane and the active supported CLI with durable status.",
+        "details": "Defaults to both components. Use --pane-only or --cli-only to select one. Preflight checks installation ownership and supervisor capability before downtime.",
         "requiresPaneDaemon": false,
         "mutates": true,
         "arguments": [
@@ -11323,18 +11327,33 @@ export const RUNPANE_CONTRACT = {
             "name": "--version",
             "value": "<latest|vX.Y.Z>",
             "required": false,
-            "description": "Pane release to update to."
+            "description": "Requested app and CLI release version."
           },
           {
-            "name": "--format",
-            "value": "<auto|appimage|deb|dmg|zip|exe>",
+            "name": "--pane-only",
             "required": false,
-            "description": "Release artifact format."
+            "description": "Update only the installed Pane app."
+          },
+          {
+            "name": "--cli-only",
+            "required": false,
+            "description": "Update only the invoked supported CLI installation."
+          },
+          {
+            "name": "--status",
+            "value": "<operation-id>",
+            "required": false,
+            "description": "Read durable status without a running Pane."
+          },
+          {
+            "name": "--wait",
+            "required": false,
+            "description": "Wait until the operation completes or requires attention."
           },
           {
             "name": "--dry-run",
             "required": false,
-            "description": "Print the update plan without downloading."
+            "description": "Inspect preflight without staging or stopping Pane."
           }
         ],
         "examples": [
@@ -11342,7 +11361,9 @@ export const RUNPANE_CONTRACT = {
           "runpane update --version latest"
         ],
         "notes": [
-          "Equivalent artifact selection to `runpane install client`."
+          "Requires standalone Node and a current-user OS supervisor. npm, managed CLI, and supported pip environments retain their actual ownership. System-package Linux and installations requiring elevation are refused before downtime.",
+          "The operation preserves a pre-migration data snapshot; it never blindly rolls an old app or database over migrated state.",
+          "The initial result can be accepted or staging; it is not a claim that the update or restoration completed."
         ]
       },
       "version": {

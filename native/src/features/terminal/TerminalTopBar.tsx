@@ -22,6 +22,7 @@ import { ComposerSheet, useAfterSheetCloses } from '../composer/ComposerSheet';
 const STATUS_LABEL: Record<RemotePaneConnectionStatus, string> = {
   connected: 'Connected to',
   connecting: 'Connecting to',
+  restoring: 'Restoring workspace on',
   reconnecting: 'Reconnecting to',
   error: 'Connection issue with',
   local: 'Disconnected from',

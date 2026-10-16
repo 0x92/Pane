@@ -32,6 +32,7 @@ function createFakeHost() {
   const requests: RecordedRequest[] = [];
   const streams: Array<ReadableStreamDefaultController<Uint8Array>> = [];
   let eventsStatus = 200;
+  let sendReady = true;
   let hangEvents = false;
   let hostDown = false;
   let invokeHandler: (body: { channel: string; args: unknown[] }) => Response = () =>
@@ -48,7 +49,10 @@ function createFakeHost() {
       if (hangEvents) return new Promise<Response>(() => {});
       if (eventsStatus !== 200) return Response.json({ ok: false }, { status: eventsStatus });
       const body = new ReadableStream<Uint8Array>({
-        start: (controller) => { streams.push(controller); },
+        start: (controller) => {
+          streams.push(controller);
+          if (sendReady) controller.enqueue(new TextEncoder().encode('event: ready\ndata: {"replay":"none"}\n\n'));
+        },
       });
       init?.signal?.addEventListener('abort', () => {
         try { streams.at(-1)?.error(new DOMException('Aborted', 'AbortError')); } catch { /* closed */ }
@@ -65,6 +69,7 @@ function createFakeHost() {
     write(text: string) { streams.at(-1)?.enqueue(new TextEncoder().encode(text)); },
     writeBytes(bytes: Uint8Array) { streams.at(-1)?.enqueue(bytes); },
     end() { streams.at(-1)?.close(); },
+    sendReady(value: boolean) { sendReady = value; },
     rejectEvents(status: number) { eventsStatus = status; },
     hangEvents(hang: boolean) { hangEvents = hang; },
     goDown(down: boolean) { hostDown = down; },
@@ -89,10 +94,12 @@ async function flush(): Promise<void> {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('RemoteDaemonClient with the fetch event stream transport', () => {
@@ -154,7 +161,7 @@ describe('RemoteDaemonClient with the fetch event stream transport', () => {
     client.disconnect();
   });
 
-  it('reconnects with 1, 2, 4, 8, 15 s backoff, then gives up', async () => {
+  it('reconnects with capped backoff for five minutes, then stops', async () => {
     const host = createFakeHost();
     host.rejectEvents(503);
     const client = createClient(host);
@@ -162,7 +169,7 @@ describe('RemoteDaemonClient with the fetch event stream transport', () => {
     await client.connect();
     await flush();
 
-    for (const [index, delayMs] of [1_000, 2_000, 4_000, 8_000, 15_000].entries()) {
+    for (const [index, delayMs] of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000].entries()) {
       expect(client.getState()).toMatchObject({
         status: 'reconnecting',
         lastError: 'Remote event stream failed with 503',
@@ -173,8 +180,21 @@ describe('RemoteDaemonClient with the fetch event stream transport', () => {
       expect(eventRequests()).toBe(index + 2);
     }
     await vi.runAllTimersAsync();
-    expect(eventRequests()).toBe(6);
-    expect(client.getState()).toMatchObject({ status: 'error', lastError: 'Remote event stream failed with 503' });
+    expect(eventRequests()).toBeGreaterThan(6);
+    expect(client.getState()).toMatchObject({ status: 'error', lastError: expect.stringContaining('five minutes') });
+  });
+
+  it('keeps the outage deadline while ready streams fail restoration', async () => {
+    const host = createFakeHost();
+    const client = createClient(host);
+    client.onRestore(async () => { throw new Error('State refresh failed'); });
+    await client.connect();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(client.getState().status).toBe('error');
+    const requests = host.requests.length;
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(host.requests).toHaveLength(requests);
+    client.disconnect();
   });
 
   it('resets the backoff after a stream opens again', async () => {
@@ -282,7 +302,7 @@ describe('RemoteDaemonClient with the fetch event stream transport', () => {
     const rejected = expect(connecting).rejects.toThrow('Network request failed');
     await vi.runAllTimersAsync();
     await rejected;
-    expect(client.getState()).toMatchObject({ status: 'error', lastError: 'Network request failed' });
+    expect(client.getState()).toMatchObject({ status: 'error', lastError: expect.stringContaining('five minutes') });
 
     host.goDown(false);
     await client.connect();
@@ -327,6 +347,16 @@ describe('RemoteDaemonClient invoke errors', () => {
 
     await expect(createClient(host).invoke('panels:list')).rejects.toBeInstanceOf(RemoteAuthError);
     expect(host.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports uncertainty when the connection changes after a mutation was dispatched', async () => {
+    const host = createFakeHost();
+    const client = createClient(host);
+    await client.connect();
+    await flush();
+    host.onInvoke(() => { client.disconnect(); return Response.json({ ok: true, result: 'stale' }); });
+    await expect(client.invoke('panels:create', [])).rejects.toBeInstanceOf(RemoteUnconfirmedResultError);
+    expect(host.requests.filter(request => request.url.endsWith('/invoke'))).toHaveLength(1);
   });
 
   it('does not replay a mutation whose response was lost', async () => {
