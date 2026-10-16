@@ -117,7 +117,9 @@ that panel and returns once, as one JSON line, when the worker reports
 own background shells or subagents still run is not done yet, so the call
 keeps waiting. Answer a blocked worker with another `panels submit --wait`
 carrying the answer. The result never includes the transcript, and nothing
-goes into your chat.
+goes into your chat. Like `--until-event`, `--wait` is a single-event wait: it
+delivers at once, without `--follow`'s settling or batching, and because it
+exits, a plain background task is enough.
 
 Pane expects a `runpane report` for work you send an agent, with or without
 `--wait`. Pass `--no-expect-report` (without `--wait`) for fire-and-forget

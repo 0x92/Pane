@@ -847,7 +847,10 @@ The result never includes the transcript. The daemon stamps the result of
 every create and submit with the journal generation it read before delivering
 the work, and `--wait` follows the journal from there
 (`runpane:workspace:wait` filtered to the Pane), so an event that fires right
-after delivery can't be missed, and a daemon restart only reconnects. Claude
+after delivery can't be missed, and a daemon restart only reconnects. Like
+`--until-event`, it is a single-event wait: it delivers at once, without
+`--follow`'s settling or batching, and since it exits on the event, a plain
+background task is enough (no line-delivering monitor). Claude
 Code wakes the orchestrator when the background call exits, and the line
 arrives as the tool result. To answer a blocked worker, send the answer with
 another `panels submit --wait`, which takes a new position and arms a new

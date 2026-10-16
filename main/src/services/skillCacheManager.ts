@@ -761,7 +761,9 @@ Dispatch each worker with one background tool call that returns its result:
 (\`panels create\` and \`panes create\` with a prompt take \`--wait\` too). Run
 it in the background (Claude Code: Bash with run_in_background), so you are
 woken when it exits and its output arrives as the tool result, never in your
-chat. It returns once, as one JSON line: \`outcome: "report"\` (exit 0) with
+chat. Like \`--until-event\`, it is a single-event wait: it delivers at once,
+without follow's settling or batching, and because it exits, backgrounding it
+is enough; it needs no line-delivering monitor. It returns once, as one JSON line: \`outcome: "report"\` (exit 0) with
 the report's state, summary, summaryPath, PR and head; \`"missing"\` (exit
 3) when the worker went ready or exited without \`runpane report\`, with
 \`lastOutput\`; \`"blocked"\` (exit 4) when it waits on a prompt, with

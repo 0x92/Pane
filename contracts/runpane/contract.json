@@ -13144,7 +13144,7 @@
         ],
         "notes": [
           "Use this before `panels output` when an agent only needs the latest visible/current state.",
-          "The composer object reports whether a Claude or Codex composer is present and whether it holds undelivered text. Placeholder and suggestion text (drawn dim or grey, such as Claude's suggested next prompt) does not count as undelivered text; `composer.ghostText` carries it, and text output marks its line with `\u27e8suggestion\u27e9`.",
+          "The composer object reports whether a Claude or Codex composer is present and whether it holds undelivered text. Placeholder and suggestion text (drawn dim or grey, such as Claude's suggested next prompt) does not count as undelivered text; `composer.ghostText` carries it, and text output marks its line with `⟨suggestion⟩`.",
           "If hasMore is true and context is missing, rerun with a larger --limit or use `panels output`."
         ]
       },
