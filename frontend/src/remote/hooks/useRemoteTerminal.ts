@@ -6,6 +6,7 @@ import type { RemotePaneConnectionStatus } from '../../../../shared/types/remote
 import type { SessionOutput } from '../../types/session';
 import type { RemoteRuntimeAdapter } from '../runtime/remoteRuntimeAdapter';
 import { boundary, decodeOptionalBoundary } from '../../../../shared/validation/boundaryDecoder';
+import { hydrateRemoteTerminalSnapshot } from '../runtime/terminalSnapshot';
 import { terminalOutputByteLength } from '../../utils/terminalRestore';
 
 interface UseRemoteTerminalOptions {
@@ -36,6 +37,7 @@ export function useRemoteTerminal({
 }: UseRemoteTerminalOptions) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const snapshotGenerationRef = useRef(0);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [statusText, setStatusText] = useState('Starting terminal...');
 
@@ -68,15 +70,10 @@ export function useRemoteTerminal({
     terminalRef.current?.scrollToBottom();
   }, []);
 
-  const hydrateTerminal = useCallback(async (terminal: Terminal) => {
-    const outputs = await adapter.getPanelOutput(panel.id);
-    // A response can outlive the terminal during a tab switch or effect cleanup.
-    if (terminalRef.current !== terminal) return;
-    const distanceFromBottom = terminal.buffer.active.baseY - terminal.buffer.active.viewportY;
-    terminal.reset();
-    await new Promise<void>(resolve => terminal.write(outputs.map(formatSessionOutput).join(''), resolve));
-    if (terminalRef.current === terminal) terminal.scrollToLine(Math.max(0, terminal.buffer.active.baseY - distanceFromBottom));
-  }, [adapter, panel.id]);
+  const hydrateTerminal = useCallback((terminal: Terminal, owns: () => boolean) =>
+    hydrateRemoteTerminalSnapshot(terminal, async () =>
+      (await adapter.getPanelOutput(panel.id)).map(formatSessionOutput).join(''),
+    () => terminalRef.current === terminal && owns()), [adapter, panel.id]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -157,26 +154,28 @@ export function useRemoteTerminal({
     }, VISIBILITY_REFRESH_MS);
 
     const initialize = async () => {
+      const generation = ++snapshotGenerationRef.current;
+      const owns = () => !disposed && snapshotGenerationRef.current === generation;
       try {
         const initialized = await adapter.checkPanelInitialized(panel.id);
-        if (disposed) return;
+        if (!owns()) return;
         if (!initialized) {
           await adapter.initializePanel(panel.id, {
             sessionId,
             cols: terminal.cols,
             rows: terminal.rows,
           });
-          if (disposed) return;
+          if (!owns()) return;
         }
-        await hydrateTerminal(terminal);
-        if (disposed) return;
+        if (!await hydrateTerminal(terminal, owns)) return;
+        if (!owns()) return;
         fitTerminal();
         await adapter.setTerminalVisibility(panel.id, true, TERMINAL_VIEWER_ID);
-        if (!disposed) {
+        if (owns()) {
           setStatusText('Connected');
         }
       } catch (error) {
-        if (!disposed) {
+        if (owns()) {
           setStatusText(error instanceof Error ? error.message : 'Terminal failed to initialize');
         }
       }
@@ -186,6 +185,7 @@ export function useRemoteTerminal({
 
     return () => {
       disposed = true;
+      snapshotGenerationRef.current += 1;
       window.clearInterval(visibilityTimer);
       unsubscribe();
       inputDisposable.dispose();
@@ -204,14 +204,15 @@ export function useRemoteTerminal({
   useEffect(() => adapter.onRestore(async signal => {
     const terminal = terminalRef.current;
     if (!terminal || signal.aborted) return;
+    const generation = ++snapshotGenerationRef.current;
+    const owns = () => !signal.aborted && terminalRef.current === terminal && snapshotGenerationRef.current === generation;
     setStatusText('Restoring terminal…');
     try {
-      await hydrateTerminal(terminal);
-      if (signal.aborted || terminalRef.current !== terminal) return;
+      if (!await hydrateTerminal(terminal, owns)) return;
       await adapter.setTerminalVisibility(panel.id, true, TERMINAL_VIEWER_ID);
-      setStatusText('Connected');
+      if (owns()) setStatusText('Connected');
     } catch (error) {
-      if (!signal.aborted && terminalRef.current === terminal) setStatusText(error instanceof Error ? error.message : 'Terminal snapshot failed; reconnect to retry.');
+      if (owns()) setStatusText(error instanceof Error ? error.message : 'Terminal snapshot failed; reconnect to retry.');
     }
   }), [adapter, panel.id, hydrateTerminal]);
 

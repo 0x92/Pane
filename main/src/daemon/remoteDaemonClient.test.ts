@@ -103,6 +103,21 @@ afterEach(() => {
 });
 
 describe('RemoteDaemonClient with the fetch event stream transport', () => {
+  it.each(['suspend', 'retry'] as const)('does not dispatch an admitted mutation after %s retires its stream', async transition => {
+    const host = createFakeHost();
+    const client = createClient(host);
+    await client.connect();
+    await flush();
+    expect(client.getState().status).toBe('connected');
+    const pending = client.invoke('panels:create', ['session-1']);
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'ERR_REMOTE_OFFLINE' });
+    if (transition === 'suspend') client.suspend();
+    else client.retryNow();
+    await rejected;
+    expect(host.requests.filter(request => request.url.endsWith('/invoke'))).toHaveLength(0);
+    client.disconnect();
+  });
+
   it('sends the token only in the Authorization header', async () => {
     const host = createFakeHost();
     const client = createClient(host);

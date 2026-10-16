@@ -268,6 +268,8 @@ export class RemoteDaemonClient {
     let lastError: Error | null = null;
     let dispatched = false;
     const connection = this.abortController;
+    const stream = this.streamController;
+    const mutation = !REMOTE_READ_CHANNELS.has(channel) && !REMOTE_RESTORE_CHANNELS.has(channel);
     const signal = inputSignal ?? connection?.signal;
     const retryableRead = REMOTE_READ_CHANNELS.has(channel);
     const attempts = retryableRead ? INVOKE_ATTEMPTS : 1;
@@ -279,6 +281,9 @@ export class RemoteDaemonClient {
           request.signal = signal;
         }
 
+        if (mutation && (this.state.status !== 'connected' || stream !== this.streamController || stream?.signal.aborted || connection !== this.abortController)) {
+          throw new PaneError('ERR_REMOTE_OFFLINE', 'The action was not sent because the connection changed before dispatch.', 'Wait for restoration before submitting it.');
+        }
         if (signal?.aborted || connection !== this.abortController || connection?.signal.aborted) throw createAbortError();
         dispatched = true;
         const response = await this.fetch(this.endpoint('invoke'), request);
@@ -307,6 +312,7 @@ export class RemoteDaemonClient {
         }
         lastError = new Error(message);
       } catch (error) {
+        if (!dispatched && error instanceof PaneError && error.code === 'ERR_REMOTE_OFFLINE') throw error;
         if (error instanceof RemoteAuthError) this.stopRecovery(error.message);
         if (error instanceof RemoteAuthError || error instanceof RemoteRequestError) throw error;
         if (signal?.aborted || connection !== this.abortController || connection?.signal.aborted) {

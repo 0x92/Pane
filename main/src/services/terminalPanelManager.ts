@@ -332,6 +332,10 @@ interface TerminalProcess {
    *  differ transiently from isAlternateScreen which is chunk-granular). */
   filterInAltScreen: boolean;
   capturedAgentSessionId?: string;
+  /** Fresh per-PTY challenge; only a post-acceptance harness signal can satisfy it. */
+  updateResumeNonce?: string;
+  updateResumeReadyId?: string;
+  updateResumeReadyBuffer?: string;
   agentSessionScrapeBuffer: string;
   /** Agent Farm reported its ID for this launch; later ID lines are agent output. */
   reportedSessionIdLocked?: boolean;
@@ -976,6 +980,14 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   private captureAgentSessionId(terminal: TerminalProcess, output: string): void {
+    if (terminal.updateResumeNonce && terminal.launchCommandWrittenAt) {
+      terminal.updateResumeReadyBuffer = (terminal.updateResumeReadyBuffer ?? '') + output;
+      const matches = terminal.updateResumeReadyBuffer.matchAll(/(?:^|[\r\n])PANE_UPDATE_RESUME_READY=([0-9a-f-]{36}):([A-Za-z0-9][A-Za-z0-9._:-]{0,255})(?=[\r\n])/g);
+      for (const match of matches) {
+        if (match[1] === terminal.updateResumeNonce) terminal.updateResumeReadyId = match[2];
+      }
+      terminal.updateResumeReadyBuffer = terminal.updateResumeReadyBuffer.slice(-512);
+    }
     const panel = panelManager.getPanel(terminal.panelId);
     if (!panel) return;
     const customState = terminalCustomState(panel.state);
@@ -1720,6 +1732,7 @@ export class TerminalPanelManager extends EventEmitter {
       launchStatePersistedBeforeSpawn = true;
     }
     const panelCustomState = launchResolution?.customState ?? existingState;
+    const updateResumeNonce = updateOperationId ? randomUUID() : undefined;
     const wslEnvVars: Record<string, string> = isWSL
       ? {
           WSLENV: buildWSLENV([
@@ -1728,6 +1741,7 @@ export class TerminalPanelManager extends EventEmitter {
             'PANE_PORT',
             'PANE_SESSION_ID',
             'PANE_PANEL_ID',
+            'PANE_UPDATE_RESUME_NONCE',
             'PANE_ORCHESTRATION_SESSION_ID',
             'GIT_CEILING_DIRECTORIES',
             'WORKTREE_PATH',
@@ -1756,6 +1770,7 @@ export class TerminalPanelManager extends EventEmitter {
       PANE_SESSION_ID: panel.sessionId,
       PANE_NOTES_FILE: isWSL ? '' : noteContextPath(path.join(getAppDirectory(), 'notes'), panel.sessionId),
       PANE_PANEL_ID: panel.id,
+      PANE_UPDATE_RESUME_NONCE: updateResumeNonce ?? '',
       PANE_PORT: String(panePort),
       PANE_WORKSPACE_PATH: cwd,
       ...wslEnvVars,
@@ -1826,6 +1841,7 @@ export class TerminalPanelManager extends EventEmitter {
 
     // Create terminal process object
     const terminalProcess: TerminalProcess = {
+      updateResumeNonce,
       launchCwd: cwd,
       pty: ptyProcess,
       ptyId: ptyHostId,
@@ -2640,9 +2656,15 @@ export class TerminalPanelManager extends EventEmitter {
     while (Date.now() < deadline) {
       if (!terminal || terminal.destroying || this.terminals.get(panelId) !== terminal) throw new Error('The resumed terminal exited before identity verification.');
       if (terminal.capturedAgentSessionId && terminal.capturedAgentSessionId !== resumeId) throw new Error('The harness reported a different conversation; inspect the panel.');
-      const activity = this.getAgentStatus(panelId);
-      if (terminal.launchCommandWrittenAt && terminal.capturedAgentSessionId === resumeId && activity && activity !== 'unknown') return { pid: terminal.pty.pid };
       if (await this.hasLaunchCommandExited(panelId)) throw new Error('The resume command exited before confirming its conversation.');
+      // Exit inspection yields: the panel may have died or been replaced meanwhile.
+      if (terminal.destroying || this.terminals.get(panelId) !== terminal) throw new Error('The resumed terminal exited before identity verification.');
+      if (this.getAgentStatus(panelId) === 'blocked') throw new Error('The resumed harness requires attention before it can confirm readiness.');
+      if (terminal.updateResumeReadyId && terminal.updateResumeReadyId !== resumeId) throw new Error('The ready harness reported a different conversation; inspect the panel.');
+      // Wrapper IDs, generic byte activity and CLI-ready timers are not acceptance.
+      // Harness adapters must emit the fresh challenge and actual loaded ID only
+      // after resume succeeds. Uninstrumented vendor CLIs remain needs-attention.
+      if (terminal.launchCommandWrittenAt && terminal.updateResumeNonce && terminal.updateResumeReadyId === resumeId) return { pid: terminal.pty.pid };
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     throw new Error('The exact resume command was launched, but the harness did not confirm its conversation identity and readiness. Inspect the panel; no prompt was sent.');

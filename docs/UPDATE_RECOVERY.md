@@ -108,6 +108,22 @@ containing `{sessionId}`. Eligibility is not a promise of success: `resumed`
 requires fresh conversation-identity and readiness evidence from the running
 harness. An incompatible command or missing evidence yields `needs-attention`.
 
+Readiness requires an explicit adapter acknowledgment after the harness has
+accepted the exact conversation and is usable. The relaunched process receives
+a fresh `PANE_UPDATE_RESUME_NONCE`. An adapter may emit one complete line
+`PANE_UPDATE_RESUME_READY=<nonce>:<actual-loaded-conversation-id>` only after that
+acceptance. The nonce binds the acknowledgment to this launch; an old marker,
+wrapper ID line, generic output, startup animation or CLI-ready timeout does not
+confirm readiness. Login/trust blockers and command exit prevent success.
+Do not print this marker merely because a wrapper started or received a resume ID.
+
+The built-in Claude/Codex/Cursor launch commands do not currently provide this
+acknowledgment themselves. Without an instrumented harness adapter, reopening
+these conversations reports `needs-attention`; inspect the live panel manually.
+Custom reported/generated commands can integrate the same acknowledgment. The
+native QA adapter proves this protocol with a harmless process, not a vendor
+login or conversation acceptance.
+
 Reopening the conversation does not submit the interrupted task again. The agent
 may return to its prompt; review it and decide what to send. Idle, completed and
 approval-blocked work stays stopped. The updater sends no `continue`, prompt,
