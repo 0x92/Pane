@@ -896,6 +896,17 @@
       "--follow",
       "--profile",
       "unattended"
+    ],
+    [
+      "watch",
+      "--until-event",
+      "--timeout-ms",
+      "30s"
+    ],
+    [
+      "watch",
+      "--timeout-ms",
+      "off"
     ]
   ],
   "help": {

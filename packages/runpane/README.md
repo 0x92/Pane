@@ -152,7 +152,8 @@ Use `--present` or `--profile present` when someone is waiting: READY settles
 for 1 minute, BLOCKED for 15 seconds, batches every 2 minutes, and IDLE does
 not back off. `--profile unattended` explicitly selects the default. Duration
 overrides accept `30s`, `3m`, `3h`, or `0`: `--ready-settle`, `--blocked-settle`,
-`--min-interval`, `--idle-after`, `--expire-after`, and `--heartbeat`.
+`--min-interval`, `--idle-after`, `--expire-after`, `--heartbeat`, and
+watch `--timeout-ms` (for example, `--until-event --timeout-ms 30s`).
 `--expire-after 0` disables natural expiry. Bare values retain milliseconds,
 except heartbeat's legacy seconds. `--json` selects NDJSON; otherwise lines.
 

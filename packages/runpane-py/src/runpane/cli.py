@@ -850,6 +850,9 @@ def parse_local_value_flag(parsed: ParsedArgs, flag: str, value: str) -> None:
         parsed.from_json = value
         return
     if flag == "--timeout-ms":
+        if parsed.command == "watch":
+            parsed.timeout_ms = parse_watch_duration(flag, value)
+            return
         try:
             timeout_ms = float(value)
         except ValueError as error:

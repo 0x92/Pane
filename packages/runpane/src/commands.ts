@@ -767,7 +767,7 @@ function parseLocalValueFlag(flag: string, value: string, parsed: ParsedArgs): v
     return;
   }
   if (flag === '--timeout-ms') {
-    const timeoutMs = Number(value);
+    const timeoutMs = parsed.command === 'watch' ? parseWatchDuration(flag, value) : Number(value);
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || (timeoutMs === 0 && parsed.command !== 'watch')) {
       throw new Error('--timeout-ms must be a positive number (watch also accepts 0).');
     }

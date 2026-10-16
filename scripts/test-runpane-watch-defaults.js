@@ -16,4 +16,7 @@ assert.equal(present.idleBackoff, false);
 assert.equal(present.expireAfterMs, 0);
 assert.deepEqual(parseRunpaneArgs(['watch', '--until-event']).watchKinds, ['agent.report', 'agent.blocked', 'panel.exited', 'pane.gone']);
 assert.throws(() => parseRunpaneArgs(['watch', '--present']), /require.*--follow/);
+assert.equal(parseRunpaneArgs(['watch', '--until-event', '--timeout-ms', '30s']).timeoutMs, 30000);
+assert.equal(parseRunpaneArgs(['watch', '--timeout-ms', 'off']).timeoutMs, 0);
+assert.throws(() => parseRunpaneArgs(['watch', '--until-event', '--timeout-ms', 'off']), /greater than 0/);
 console.log('watch defaults passed');

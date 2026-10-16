@@ -920,7 +920,7 @@ async function checkWatchUntilEvent() {
         run = await withFakeDaemon(paneDir, (frame) => {
           requests.push(frame.args[0]);
           return { result: watchResult(5), delayMs: Math.min(700, frame.args[0].timeoutMs) };
-        }, () => runCliOnce(runtime, ['watch', '--until-event', ...(format === 'json' ? ['--json'] : []), '--timeout-ms', '2000'], paneDir));
+        }, () => runCliOnce(runtime, ['watch', '--until-event', ...(format === 'json' ? ['--json'] : []), '--timeout-ms', '2s'], paneDir));
         const elapsed = Date.now() - startedAt;
         assert.strictEqual(run.code, 124, `${runtime} --until-event deadline must exit 124. stdout=${run.stdout} stderr=${run.stderr}`);
         assertIncludes(run.stdout, expected);

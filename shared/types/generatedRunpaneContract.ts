@@ -5607,6 +5607,17 @@ export const RUNPANE_CONTRACT = {
         "--follow",
         "--profile",
         "unattended"
+      ],
+      [
+        "watch",
+        "--until-event",
+        "--timeout-ms",
+        "30s"
+      ],
+      [
+        "watch",
+        "--timeout-ms",
+        "off"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -13202,8 +13213,8 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--timeout-ms",
             "required": false,
-            "value": "<milliseconds>",
-            "description": "Per-request wait in milliseconds; 0 reads once without waiting. Default 60000, capped at 120000 (the follow loop re-issues requests). With --until-event it is the deadline for the whole wait (exit 124 with WATCH TIMEOUT)."
+            "value": "<duration>",
+            "description": "Per-request wait in milliseconds; 0 reads once without waiting. Default 60000, capped at 120000 (the follow loop re-issues requests). With --until-event it is the deadline for the whole wait (exit 124 with WATCH TIMEOUT). Accepts ms/s/m/h units; bare values are milliseconds. 0/off is a nonblocking read only, and is rejected with --follow or --until-event."
           },
           {
             "name": "--limit",
