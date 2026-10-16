@@ -428,7 +428,7 @@ export const RUNPANE_CONTRACT = {
       "name": "watch",
       "summary": "Wait for workspace agent and Pane transitions using a daemon-held cursor.",
       "usage": [
-        "runpane watch [--follow|--until-event] [--profile unattended|present] [--session <id|name>|--pane <id>] [--json] [overrides]"
+        "runpane watch [--follow|--until-event] [--profile unattended|present] [--present] [--session <id|name>|--pane <id>] [--json] [overrides]"
       ],
       "toolsets": [
         "agents"
@@ -2018,6 +2018,10 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--interrupt",
         "description": "Stop the current agent turn, wait for an empty idle composer, then submit and verify the replacement."
+      },
+      {
+        "name": "--present",
+        "description": "Follow only: select the present preset, overriding --profile regardless of argument order. Individual duration flags override the preset."
       }
     ]
   },
@@ -2329,6 +2333,7 @@ export const RUNPANE_CONTRACT = {
         "Options:",
         "  --profile <unattended|present> Follow preset (default unattended); explicit overrides win",
         "                                 present: READY 1m, BLOCKED 15s, batch 2m, no IDLE backoff",
+        "  --present                     Select present even with --profile unattended (order independent)",
         "  --session <id|name>            Watch every Pane in a Session; associate/detach apply live",
         "  --pane <id>                    Watch one Pane; repeatable (default: every managed Pane)",
         "  --exclude-pane <id>            Leave out a Pane; repeatable",
@@ -3604,6 +3609,7 @@ export const RUNPANE_CONTRACT = {
         "Options:",
         "  --profile <unattended|present> Follow preset (default unattended); explicit overrides win",
         "                                 present: READY 1m, BLOCKED 15s, batch 2m, no IDLE backoff",
+        "  --present                     Select present even with --profile unattended (order independent)",
         "  --session <id|name>            Watch every Pane in a Session; associate/detach apply live",
         "  --pane <id>                    Watch one Pane; repeatable (default: every managed Pane)",
         "  --exclude-pane <id>            Leave out a Pane; repeatable",
@@ -5629,6 +5635,55 @@ export const RUNPANE_CONTRACT = {
         "test-epoch",
         "--until-event",
         "--json"
+      ],
+      [
+        "watch",
+        "--follow",
+        "--present",
+        "--profile",
+        "present",
+        "--ready-settle",
+        "5s",
+        "--expire-after",
+        "off"
+      ],
+      [
+        "watch",
+        "--follow",
+        "--profile",
+        "present",
+        "--present",
+        "--ready-settle",
+        "5s",
+        "--expire-after",
+        "off"
+      ],
+      [
+        "watch",
+        "--follow",
+        "--present",
+        "--profile",
+        "unattended",
+        "--ready-settle",
+        "5s",
+        "--expire-after",
+        "off"
+      ],
+      [
+        "watch",
+        "--follow",
+        "--profile",
+        "unattended",
+        "--present",
+        "--ready-settle",
+        "5s",
+        "--expire-after",
+        "off"
+      ],
+      [
+        "watch",
+        "--follow",
+        "--present"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -13271,6 +13326,11 @@ export const RUNPANE_CONTRACT = {
             "value": "<epoch>",
             "description": "Journal epoch paired with --since; a mismatch emits _reset instead of silently skipping events.",
             "required": false
+          },
+          {
+            "name": "--present",
+            "required": false,
+            "description": "Follow only: select the present preset, overriding --profile regardless of argument order. Individual duration flags override the preset."
           }
         ],
         "examples": [
@@ -13299,7 +13359,8 @@ export const RUNPANE_CONTRACT = {
           "Replay: after a reset (RESET/_reset), the baseline restates current state. In JSON, those entries carry replay: true (and changedWhileAway: true after an epoch change). A replayed agent.ready is never READY: re-read runpane sessions overview instead of acting on it. Lines mode prints only CHANGED for them.",
           "agent.report (REPORT <pane-name> pane <pane-id> panel <panel-id> <state> [pr#<n>] [<head>][: <question>]) is a worker's `runpane report`. It is in the default kinds of --follow and --until-event, and arrives from any panel: a shell tab or a wrapper launch whose agent is not yet detected included. It bypasses --min-interval, and orchestrators treat it as the completion signal; a READY without a report means look, and maybe nudge.",
           "Never pipe --follow into grep -m1, head, or any other exit-on-match reader: it does not exit when its reader does until its next write. To wait for one event, use --until-event.",
-          "Registration returns generation and epoch. Initially arm watch --until-event --since <generation> --epoch <epoch> --pane <id> --json --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Process every NDJSON event, then persist its gen and epoch for the next --since/--epoch; --limit 1 delivers one event per run. Never mix --as with --since/--epoch. On _reset or _dropped, resynchronize GitHub state, then use the control record generation and epoch; replay/baseline records are not new events. No merge or GitHub write is performed."
+          "Registration returns generation and epoch. Initially arm watch --until-event --since <generation> --epoch <epoch> --pane <id> --json --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Process every NDJSON event, then persist its gen and epoch for the next --since/--epoch; --limit 1 delivers one event per run. Never mix --as with --since/--epoch. On _reset or _dropped, resynchronize GitHub state, then use the control record generation and epoch; replay/baseline records are not new events. No merge or GitHub write is performed.",
+          "--follow defaults to unattended. --present selects the present preset even with --profile unattended, regardless of argument order. Individual duration flags override the selected preset. --present and --profile both require --follow."
         ]
       },
       "panes git-status": {

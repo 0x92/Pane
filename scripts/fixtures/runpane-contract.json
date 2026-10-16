@@ -917,6 +917,55 @@
       "test-epoch",
       "--until-event",
       "--json"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--present",
+      "--profile",
+      "present",
+      "--ready-settle",
+      "5s",
+      "--expire-after",
+      "off"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--profile",
+      "present",
+      "--present",
+      "--ready-settle",
+      "5s",
+      "--expire-after",
+      "off"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--present",
+      "--profile",
+      "unattended",
+      "--ready-settle",
+      "5s",
+      "--expire-after",
+      "off"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--profile",
+      "unattended",
+      "--present",
+      "--ready-settle",
+      "5s",
+      "--expire-after",
+      "off"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--present"
     ]
   ],
   "help": {

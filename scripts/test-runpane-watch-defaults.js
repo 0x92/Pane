@@ -27,3 +27,19 @@ assert.throws(() => parseRunpaneArgs(['watch', '--until-event', '--profile', 'pr
 assert.throws(() => parseRunpaneArgs(['watch', '--follow', '--profile', 'invalid']), /must be unattended or present/);
 assert.equal(parseRunpaneArgs(['watch', '--follow', '--profile', 'unattended', '--ready-settle', '1s']).settleMs, 1000);
 assert.equal(parseRunpaneArgs(['watch', '--until-event', '--since', '1', '--epoch', 'e']).settleMs, undefined);
+
+// Explicit --present wins over either profile, independently of ordering;
+// per-setting overrides still win even when they precede the preset flags.
+for (const profile of ['unattended', 'present']) {
+  for (const flags of [['--present', '--profile', profile], ['--profile', profile, '--present']]) {
+    const selected = parseRunpaneArgs(['watch', '--follow', '--ready-settle', '5s', ...flags, '--expire-after', 'off']);
+    assert.equal(selected.settleMs, 5000);
+    assert.equal(selected.blockedSettleMs, 15000);
+    assert.equal(selected.minIntervalMs, 120000);
+    assert.equal(selected.idleBackoff, false);
+    assert.equal(selected.expireAfterMs, 0);
+  }
+}
+assert.equal(parseRunpaneArgs(['watch', '--follow', '--present']).settleMs, 60000);
+assert.throws(() => parseRunpaneArgs(['watch', '--present']), /require.*--follow/);
+assert.throws(() => parseRunpaneArgs(['watch', '--until-event', '--present']), /require.*--follow/);

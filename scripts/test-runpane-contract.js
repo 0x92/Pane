@@ -1066,7 +1066,7 @@ function spawnWatchCli(runtime, args) {
 // undefined both mean an unset optional value; all populated fields are compared.
 const PARSER_DEFAULT_DIFFERENCES = {
   waitReady: false, noFocus: false, focus: false, pinned: false, noPinned: false,
-  force: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
+  force: false, present: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
   includeHeldInput: false, idleBackoff: false, allManaged: false, allStopped: false,
   includeShells: false, noHeldInput: false, selfTest: false, report: false,
   watchKinds: [], watchPaneIds: [], watchExcludePaneIds: [],
@@ -1106,6 +1106,8 @@ print(json.dumps([asdict(parse_args(args)) for args in json.loads(sys.stdin.read
     assert.deepStrictEqual(pythonOutput[index], nodeOutput[index], `Parser parity: ${args.join(' ')}`);
   });
   const invalidWatchArgs = [
+    ['watch', '--present'],
+    ['watch', '--until-event', '--present'],
     ['watch', '--profile', 'present'],
     ['watch', '--until-event', '--profile', 'unattended'],
     ['watch', '--follow', '--profile', 'invalid'],
@@ -1132,7 +1134,7 @@ print(json.dumps(errors))
       return true;
     });
   });
-  const removedFlags = ['--present', '--settle', '--format', '--quiet', '--no-control-lines', '--agents-only', '--all-managed', '--idle-backoff'];
+  const removedFlags = ['--settle', '--format', '--quiet', '--no-control-lines', '--agents-only', '--all-managed', '--idle-backoff'];
   const pythonErrors = JSON.parse(runPythonSnippet(`
 import json
 import sys

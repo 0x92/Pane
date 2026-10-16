@@ -675,7 +675,7 @@ ends the process normally; re-arm with the next dispatch.
 
 Unattended is the default profile: READY after 3m, BLOCKED after 30s, batching
 at 10m, IDLE backoff. When someone is waiting, stop the old monitor and re-arm
-the same cursor with \`--profile present\`: 1m/15s/2m and no
+the same cursor with \`--present\` or \`--profile present\`: 1m/15s/2m and no
 idle backoff. Explicit duration overrides win. Switch back when they step away.
 
 What each line means (the JSON \`kind\` is in parentheses; timings are

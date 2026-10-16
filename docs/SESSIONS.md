@@ -685,7 +685,7 @@ for 30 seconds, and non-urgent events batch every 10 minutes. IDLE starts at
 are off. WATCH OK prints once when armed; WATCH EXPIRED and exit 0 end a watch
 after 3 quiet hours. Meaningful events reset expiry; IDLE and replay do not.
 
-Use `--profile present` when someone is waiting: READY settles
+Use `--present` or `--profile present` when someone is waiting: READY settles
 for 1 minute, BLOCKED for 15 seconds, batches every 2 minutes, and IDLE does
 not back off. `--profile unattended` explicitly selects the default. Duration
 overrides accept `30s`, `3m`, `3h`, or `0`: `--ready-settle`, `--blocked-settle`,
@@ -693,6 +693,10 @@ overrides accept `30s`, `3m`, `3h`, or `0`: `--ready-settle`, `--blocked-settle`
 watch `--timeout-ms` (for example, `--until-event --timeout-ms 30s`).
 `--expire-after 0` disables natural expiry. Bare values retain milliseconds,
 except heartbeat's legacy seconds. `--json` selects NDJSON; otherwise lines.
+
+With both options, `--present` selects the present preset even with
+`--profile unattended`, regardless of argument order. Individual duration
+flags override the selected preset. Both preset options require `--follow`.
 
 ```bash
 runpane watch --session <session-id> --follow --json
