@@ -123,7 +123,6 @@
           "type": "object",
           "required": [
             "follow",
-            "present",
             "untilEvent"
           ],
           "additionalProperties": false,
@@ -185,37 +184,6 @@
                   "type": "boolean"
                 },
                 "heldInputDetection": {
-                  "type": "boolean"
-                }
-              }
-            },
-            "present": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "summary",
-                "readySettle",
-                "blockedSettle",
-                "minInterval",
-                "idleBackoff"
-              ],
-              "properties": {
-                "summary": {
-                  "type": "string"
-                },
-                "readySettle": {
-                  "type": "string",
-                  "pattern": "^(off|[0-9]+(ms|s|m|h))$"
-                },
-                "blockedSettle": {
-                  "type": "string",
-                  "pattern": "^(off|[0-9]+(ms|s|m|h))$"
-                },
-                "minInterval": {
-                  "type": "string",
-                  "pattern": "^(off|[0-9]+(ms|s|m|h))$"
-                },
-                "idleBackoff": {
                   "type": "boolean"
                 }
               }
