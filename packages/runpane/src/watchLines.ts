@@ -25,7 +25,6 @@ interface WatchEntry {
   idleMs?: number;
   idleCount?: number;
   report?: WatchReport;
-  reason?: string | null;
 }
 
 /** The fields of a worker report a REPORT line shows. */
