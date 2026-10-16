@@ -159,7 +159,7 @@ runpane pr list [--pane <id>] [--json] [--pane-dir <path>]
 
 The wrapper must stream Pane stdout/stderr without reformatting because `pane --remote-setup` prints the one-time `pane-remote://...` connection code.
 
-`runpane update` uses the same release resolution and installer path as `install client`.
+`runpane update` defaults to both app and active supported CLI, with independent supervision, staging, durable status, and explicit restoration outcomes. Prerequisites, status fields/exit codes, draft handling and manual recovery are documented in [Update recovery](UPDATE_RECOVERY.md).
 
 `runpane version` prints only wrapper package metadata and does not contact, launch, or focus the Pane app or daemon.
 
@@ -262,7 +262,7 @@ Every command and its options, from `commands` in `contracts/runpane/contract.js
 - `help`: Show help for runpane or a specific command.
 - `setup`: Open the guided setup wizard for install, remote host setup, update, and diagnostics.
 - `install`: Install Pane on this machine or configure this machine as a remote daemon host.
-- `update`: Update the Pane desktop app using the same artifact path as install client.
+- `update`: Update both Pane and the invoked supported CLI through an independent helper.
 - `version`: Print the runpane wrapper version without contacting, launching, or focusing Pane.
 - `doctor`: Run platform, release, installed Pane, daemon reachability, and remote setup diagnostics.
 - `daemon repair`: Repair and restart the managed remote-daemon launcher without changing pairing or tunnel configuration.
@@ -345,7 +345,8 @@ Every command and its options, from `commands` in `contracts/runpane/contract.js
 runpane help [command]
 runpane setup
 runpane install [client|daemon] [options]
-runpane update [options]
+  runpane update [--pane-only | --cli-only] [--version <latest|vX.Y.Z>] [--pane-dir <path>] [--dry-run] [--wait] [--json]
+  runpane update --status <operation-id> [--wait] [--pane-dir <path>] [--json]
 runpane version [--pane-dir <path>]
 runpane --version
 runpane doctor [--json] [--pane-dir <path>] [--pane-path <path>] [--format <format>] [--verbose]

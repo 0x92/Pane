@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runUpdate, runUpdateHelper } from './update';
 import { RUNPANE_CONTRACT } from './generated/contract';
 import * as os from 'node:os';
 import { stdin as input, stdout as output } from 'node:process';
@@ -91,6 +92,7 @@ import {
 const SOURCE = 'npm' as const;
 
 export async function main(argv: string[]): Promise<number> {
+  if (argv[0] === '__update-runner' && argv.length === 2) return runUpdateHelper(argv[1]);
   const telemetryContext = createInitialTelemetryContext(argv);
   if (argv.length === 0) {
     return runTrackedCommand(telemetryContext, () => runNoArgsEntrypoint(telemetryContext));
@@ -334,7 +336,7 @@ const commandHandlers = new Map<string, CommandHandler>(Object.entries({
     return installOrUpdate(parsed, telemetryContext);
   },
   'update': async (parsed, telemetryContext) => {
-    return installOrUpdate(parsed, telemetryContext);
+    return runUpdate(parsed);
   },
   'panes git-status': (parsed) => { const action = daemonActionFor(parsed.command); if (!action) throw new Error('Missing daemon action'); return runDaemonAction(parsed, action); },
   'panes commit': (parsed) => { const action = daemonActionFor(parsed.command); if (!action) throw new Error('Missing daemon action'); return runDaemonAction(parsed, action); },
@@ -513,7 +515,7 @@ async function runInteractiveWizard(telemetryContext: WrapperTelemetryContext): 
 
   // All prompts have finished before the child inherits stdin for login/sudo.
   setSetupSelection(telemetryContext, action === 'update' ? 'update' : 'install', parsed.target);
-  const code = await installOrUpdate(parsed, telemetryContext);
+  const code = parsed.command === 'update' ? await runUpdate(parsed) : await installOrUpdate(parsed, telemetryContext);
   if (code === 0) {
     if (parsed.target === 'daemon') {
       prompts.log.success('Remote host setup finished.');

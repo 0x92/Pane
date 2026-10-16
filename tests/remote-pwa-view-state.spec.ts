@@ -294,3 +294,24 @@ test('moves to the next visible Session tab when another client closes the one i
   await reconnected(page);
   await expect(selectedTab(page)).toHaveText('Tool B');
 });
+
+test('keeps a phone draft and identifies unknown delivery without replaying it', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openConnectedRemotePwa(page);
+  let submissions = 0;
+  await page.route('http://anim-pane.test/**/invoke', async route => {
+    // SAFETY: this fixture intercepts the PWA's JSON invoke request envelope.
+    const body = route.request().postDataJSON() as { channel?: string };
+    if (body.channel !== 'terminal:input') return route.fallback();
+    submissions += 1;
+    await route.abort('failed');
+  });
+  const draft = page.getByPlaceholder('Type command or prompt...');
+  await draft.fill('do this once');
+  await draft.press('Enter');
+  await expect(page.getByText(/Delivery unknown/).last()).toBeVisible();
+  await expect(draft).toHaveValue('do this once');
+  await expect.poll(() => submissions).toBe(1);
+  await expect(draft).toBeEnabled();
+  expect(submissions).toBe(1);
+});

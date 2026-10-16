@@ -15,7 +15,7 @@ function createTerminal(agentType: 'claude' | 'codex' | undefined = 'codex') {
   let onData: (data: string) => void = () => undefined;
   let onExit: (exit: { exitCode: number; signal?: number }) => void = () => undefined;
   const terminal = {
-    panelId: 'p', sessionId: 's', agentType,
+    panelId: 'p', sessionId: 's', agentType, launchCwd: '/launch-origin',
     pty: {
       onData: (listener: typeof onData) => { onData = listener; },
       onExit: (listener: typeof onExit) => { onExit = listener; },
@@ -396,6 +396,24 @@ describe('terminal status events', () => {
     }) }));
   });
 
+  it('preserves the panel launch directory when reading and saving terminal state', async () => {
+    attach('codex');
+    const panel: ToolPanel = {
+      id: 'p', sessionId: 's', type: 'terminal', title: 'Codex',
+      state: { isActive: true, customState: { cwd: '/workspace/owned-session' } },
+      metadata: { createdAt: '', lastActiveAt: '', position: 0 },
+    };
+    panelManager.getPanel.mockReturnValue(panel);
+    panelManager.updatePanel.mockResolvedValue(undefined);
+    expect((await manager.getTerminalState('p'))?.cwd).toBe('/workspace/owned-session');
+    vi.spyOn(access, 'getProcessCwd').mockRejectedValue(new Error('Process cwd unavailable'));
+    await manager.saveTerminalState('p');
+    expect(panel.state.customState).toMatchObject({ cwd: '/workspace/owned-session' });
+    panel.state.customState = {};
+    await manager.saveTerminalState('p');
+    expect(panel.state.customState).toMatchObject({ cwd: '/launch-origin' });
+  });
+
   it('discards a terminal state read after the terminal was replaced', async () => {
     const old = attach('codex');
     old.data('old terminal output');
@@ -623,5 +641,52 @@ describe('terminal status events', () => {
     expect(wrapperJournal.readAfter(0, { agentsOnly: true }).entries.map(entry => [entry.kind, entry.agentType]))
       .toEqual([['agent.busy', 'claude']]);
     wrapperJournal.dispose();
+  });
+});
+
+describe('update resume acceptance', () => {
+  const nonce = '11111111-1111-4111-8111-111111111111';
+  function resumedFixture(agent: 'claude' | 'codex' = 'codex') {
+    const fixture = attach(agent);
+    Object.assign(fixture.terminal, { launchCommandWrittenAt: 19_000, updateResumeNonce: nonce });
+    panelManager.getPanel.mockReturnValue({
+      id: 'p', sessionId: 's', type: 'terminal', title: 'Resume',
+      state: { isActive: true, customState: { agentType: agent, agentSessionId: 'exact', customResume: { mode: 'reported', resumeTemplate: '{command} --resume {sessionId}' } } },
+      metadata: { createdAt: '', lastActiveAt: '', position: 0 },
+    });
+    return fixture;
+  }
+
+  it('does not accept a wrapper ID or startup working state before a failed command', async () => {
+    const fixture = resumedFixture();
+    fixture.data('PANE_AGENT_SESSION_ID=exact\r\nStarting wrapper\r\n');
+    vi.spyOn(manager, 'getAgentStatus').mockReturnValue('working');
+    const exited = vi.spyOn(manager, 'hasLaunchCommandExited').mockResolvedValue(true);
+    await expect(manager.verifyUpdateResume('p', 'exact')).rejects.toThrow('exited');
+    expect(exited).toHaveBeenCalled();
+  });
+
+  it.each(['startup', 'old nonce', 'login'] as const)('refuses %s instead of manufacturing a successful resume', async scenario => {
+    const fixture = resumedFixture();
+    fixture.data(`PANE_AGENT_SESSION_ID=exact\r\nPANE_UPDATE_RESUME_READY=${scenario === 'old nonce' ? '22222222-2222-4222-8222-222222222222' : nonce}:exact\r\n`);
+    if (scenario === 'startup') Object.assign(fixture.terminal, { updateResumeReadyId: undefined });
+    vi.spyOn(manager, 'getAgentStatus').mockReturnValue(scenario === 'login' ? 'blocked' : 'working');
+    vi.spyOn(manager, 'hasLaunchCommandExited').mockImplementation(async () => { vi.setSystemTime(21_000); return false; });
+    await expect(manager.verifyUpdateResume('p', 'exact', 500)).rejects.toThrow(scenario === 'login' ? 'requires attention' : 'did not confirm');
+  });
+
+  it.each(['claude', 'codex'] as const)('accepts a fresh explicit adapter acknowledgment for %s only after checking exit', async agent => {
+    const fixture = resumedFixture(agent);
+    fixture.data(`PANE_UPDATE_RESUME_READY=${nonce}:exact\r\n`);
+    const exited = vi.spyOn(manager, 'hasLaunchCommandExited').mockResolvedValue(false);
+    await expect(manager.verifyUpdateResume('p', 'exact')).resolves.toEqual({ pid: process.pid });
+    expect(exited).toHaveBeenCalled();
+  });
+
+  it('rejects a harness acknowledgment for a different conversation', async () => {
+    const fixture = resumedFixture();
+    fixture.data(`PANE_UPDATE_RESUME_READY=${nonce}:different\r\n`);
+    vi.spyOn(manager, 'hasLaunchCommandExited').mockResolvedValue(false);
+    await expect(manager.verifyUpdateResume('p', 'exact')).rejects.toThrow('different conversation');
   });
 });

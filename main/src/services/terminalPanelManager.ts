@@ -255,6 +255,7 @@ class PtyHandleShim implements pty.IPty {
 }
 
 interface TerminalProcess {
+  launchCwd: string;
   pty: pty.IPty;
   /** Host-allocated PTY id when routed through ptyHost; undefined under legacy `pty.spawn`. */
   ptyId?: string;
@@ -331,6 +332,10 @@ interface TerminalProcess {
    *  differ transiently from isAlternateScreen which is chunk-granular). */
   filterInAltScreen: boolean;
   capturedAgentSessionId?: string;
+  /** Fresh per-PTY challenge; only a post-acceptance harness signal can satisfy it. */
+  updateResumeNonce?: string;
+  updateResumeReadyId?: string;
+  updateResumeReadyBuffer?: string;
   agentSessionScrapeBuffer: string;
   /** Agent Farm reported its ID for this launch; later ID lines are agent output. */
   reportedSessionIdLocked?: boolean;
@@ -427,6 +432,29 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   private resolveCliLaunchCommand(
+    panelId: string,
+    initialCommand: string,
+    customState: TerminalPanelState,
+    shellType?: string,
+    isWSL = false,
+  ): CliLaunchResolution {
+    const resolution = this.resolveSavedCliLaunchCommand(panelId, initialCommand, customState, shellType, isWSL);
+    if (customState.updateResumeId) {
+      const id = customState.updateResumeId;
+      const custom = effectiveCustomResume(customState);
+      const expectedCustom = custom?.config.resumeTemplate.replace(/\{command\}|\{sessionId\}/g, token => token === '{command}' ? initialCommand : this.quoteCommandArgument(id));
+      const exact = expectedCustom
+        ? resolution.commandToRun === expectedCustom
+        : resolution.commandToRun.includes(id) && /(?:--resume(?:=|\s)|\bresume\s|--session(?:=|\s))/.test(resolution.commandToRun);
+      if (!exact || resolution.customState.agentSessionId !== id) {
+        throw new PaneError('ERR_UPDATE_CONVERSATION', `Panel ${panelId} could not reopen its exact recorded conversation. No command or input was sent.`, 'Review the saved panel and resume the intended conversation manually.');
+      }
+      resolution.customState = { ...resolution.customState, initialInput: undefined, initialInputFile: undefined, updateResumeId: undefined };
+    }
+    return resolution;
+  }
+
+  private resolveSavedCliLaunchCommand(
     panelId: string,
     initialCommand: string,
     customState: TerminalPanelState,
@@ -952,6 +980,14 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   private captureAgentSessionId(terminal: TerminalProcess, output: string): void {
+    if (terminal.updateResumeNonce && terminal.launchCommandWrittenAt) {
+      terminal.updateResumeReadyBuffer = (terminal.updateResumeReadyBuffer ?? '') + output;
+      const matches = terminal.updateResumeReadyBuffer.matchAll(/(?:^|[\r\n])PANE_UPDATE_RESUME_READY=([0-9a-f-]{36}):([A-Za-z0-9][A-Za-z0-9._:-]{0,255})(?=[\r\n])/g);
+      for (const match of matches) {
+        if (match[1] === terminal.updateResumeNonce) terminal.updateResumeReadyId = match[2];
+      }
+      terminal.updateResumeReadyBuffer = terminal.updateResumeReadyBuffer.slice(-512);
+    }
     const panel = panelManager.getPanel(terminal.panelId);
     if (!panel) return;
     const customState = terminalCustomState(panel.state);
@@ -979,9 +1015,9 @@ export class TerminalPanelManager extends EventEmitter {
     // The agent behind Agent Farm may be declared or detected differently from
     // the terminal; its reported ID belongs to the launch either way.
     const agentType = this.resolveTerminalAgentType(customState);
-    if ((!firstLineOnly && agentType !== terminal.agentType) || customState.agentSessionId === agentSessionId) return;
-
+    if (!firstLineOnly && agentType !== terminal.agentType) return;
     terminal.capturedAgentSessionId = agentSessionId;
+    if (customState.agentSessionId === agentSessionId) return;
 
     panel.state.customState = {
       ...customState,
@@ -1519,7 +1555,7 @@ export class TerminalPanelManager extends EventEmitter {
     return persistedPanel;
   }
 
-  async initializeTerminal(panel: ToolPanel, cwd: string, wslContext?: WSLContext | null, priority: number = 1, initialDimensions?: { cols: number; rows: number }): Promise<void> {
+  async initializeTerminal(panel: ToolPanel, cwd: string, wslContext?: WSLContext | null, priority: number = 1, initialDimensions?: { cols: number; rows: number }, updateOperationId?: string): Promise<void> {
     if (this.terminals.has(panel.id)) {
       return;
     }
@@ -1530,7 +1566,7 @@ export class TerminalPanelManager extends EventEmitter {
       return;
     }
 
-    const initialization = this.initializeTerminalOnce(panel, cwd, wslContext, priority, initialDimensions);
+    const initialization = this.initializeTerminalOnce(panel, cwd, wslContext, priority, initialDimensions, updateOperationId);
     this.terminalInitializations.set(panel.id, initialization);
     try {
       await initialization;
@@ -1541,7 +1577,7 @@ export class TerminalPanelManager extends EventEmitter {
     }
   }
 
-  private async initializeTerminalOnce(panel: ToolPanel, cwd: string, wslContext?: WSLContext | null, priority: number = 1, initialDimensions?: { cols: number; rows: number }): Promise<void> {
+  private async initializeTerminalOnce(panel: ToolPanel, cwd: string, wslContext?: WSLContext | null, priority: number = 1, initialDimensions?: { cols: number; rows: number }, updateOperationId?: string): Promise<void> {
     if (this.terminals.has(panel.id)) {
       return;
     }
@@ -1582,6 +1618,10 @@ export class TerminalPanelManager extends EventEmitter {
       throw new Error(`Panel ${panel.id} not found during terminal initialization`);
     }
     panel = authoritativePanel;
+    const updateHold = terminalCustomState(panel.state).updateResumeHold;
+    if (updateHold && updateHold !== updateOperationId) {
+      throw new PaneError('ERR_UPDATE_PANEL_HELD', `Panel ${panel.id} is preserved after update ${updateHold}; its command was not restarted.`, `Review its saved conversation, then run runpane panels resume --panel ${panel.id} --yes when ready.`);
+    }
     if (this.sessionTerminations.has(panel.sessionId)) {
       throw new PaneError(
         'ERR_PANEL_STILL_STOPPING',
@@ -1692,6 +1732,7 @@ export class TerminalPanelManager extends EventEmitter {
       launchStatePersistedBeforeSpawn = true;
     }
     const panelCustomState = launchResolution?.customState ?? existingState;
+    const updateResumeNonce = updateOperationId ? randomUUID() : undefined;
     const wslEnvVars: Record<string, string> = isWSL
       ? {
           WSLENV: buildWSLENV([
@@ -1700,6 +1741,7 @@ export class TerminalPanelManager extends EventEmitter {
             'PANE_PORT',
             'PANE_SESSION_ID',
             'PANE_PANEL_ID',
+            'PANE_UPDATE_RESUME_NONCE',
             'PANE_ORCHESTRATION_SESSION_ID',
             'GIT_CEILING_DIRECTORIES',
             'WORKTREE_PATH',
@@ -1728,6 +1770,7 @@ export class TerminalPanelManager extends EventEmitter {
       PANE_SESSION_ID: panel.sessionId,
       PANE_NOTES_FILE: isWSL ? '' : noteContextPath(path.join(getAppDirectory(), 'notes'), panel.sessionId),
       PANE_PANEL_ID: panel.id,
+      PANE_UPDATE_RESUME_NONCE: updateResumeNonce ?? '',
       PANE_PORT: String(panePort),
       PANE_WORKSPACE_PATH: cwd,
       ...wslEnvVars,
@@ -1798,6 +1841,8 @@ export class TerminalPanelManager extends EventEmitter {
 
     // Create terminal process object
     const terminalProcess: TerminalProcess = {
+      updateResumeNonce,
+      launchCwd: cwd,
       pty: ptyProcess,
       ptyId: ptyHostId,
       isPtyHost: usePtyHost,
@@ -1861,6 +1906,7 @@ export class TerminalPanelManager extends EventEmitter {
         console.warn(`[TerminalPanelManager] Could not launch ${initialCommand} in panel ${panel.id}:`, error);
         terminalProcess.outputBuffer += `\r\n\x1b[31mPane could not start "${initialCommand}": ${reason}\x1b[0m\r\n`;
         this.flushOutputBuffer(terminalProcess);
+        if (existingState.updateResumeId) throw error;
       }
     }
     if (initialCommand && launchResolution) {
@@ -2253,7 +2299,7 @@ export class TerminalPanelManager extends EventEmitter {
 
     // Get current working directory (if possible)
     let cwd = (panel.state.customState && 'cwd' in panel.state.customState) ? panel.state.customState.cwd : undefined;
-    cwd = cwd || process.cwd();
+    cwd = cwd || terminal.launchCwd;
     try {
       // Try to get CWD from process (platform-specific)
       if (process.platform !== 'win32') {
@@ -2336,17 +2382,9 @@ export class TerminalPanelManager extends EventEmitter {
   }
 
   private async getProcessCwd(pid: number): Promise<string> {
-    // This is platform-specific and simplified
-    // In production, you'd use more robust methods
-    if (process.platform === 'darwin' || process.platform === 'linux') {
-      try {
-        const cwdLink = `/proc/${pid}/cwd`;
-        return await fs.readlink(cwdLink);
-      } catch {
-        return process.cwd();
-      }
-    }
-    return process.cwd();
+    // Only Linux exposes /proc. Failure must preserve the recorded launch cwd;
+    // the Electron process directory says nothing about an individual panel.
+    return await fs.readlink(`/proc/${pid}/cwd`);
   }
   
   async restoreTerminalState(panel: ToolPanel, state: TerminalPanelState, wslContext?: WSLContext | null): Promise<void> {
@@ -2399,7 +2437,7 @@ export class TerminalPanelManager extends EventEmitter {
     );
     return {
       isInitialized: true,
-      cwd: process.cwd(), // Simplified - would need platform-specific implementation
+      cwd: terminalCustomState(panelManager.getPanel(panelId)?.state ?? { isActive: false }).cwd,
       shellType: process.env.SHELL || 'bash',
       scrollbackBuffer: cappedScrollback,
       alternateScreenBuffer: terminal.alternateScreenBuffer,
@@ -2611,6 +2649,27 @@ export class TerminalPanelManager extends EventEmitter {
    * group of its own. False where the foreground is unknown (Windows, WSL,
    * ptyHost).
    */
+  /** A saved ID or the generic CLI-ready timeout is not proof of a resumed harness. */
+  async verifyUpdateResume(panelId: string, resumeId: string, timeoutMs = 20_000): Promise<{ pid: number }> {
+    const terminal = this.terminals.get(panelId);
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!terminal || terminal.destroying || this.terminals.get(panelId) !== terminal) throw new Error('The resumed terminal exited before identity verification.');
+      if (terminal.capturedAgentSessionId && terminal.capturedAgentSessionId !== resumeId) throw new Error('The harness reported a different conversation; inspect the panel.');
+      if (await this.hasLaunchCommandExited(panelId)) throw new Error('The resume command exited before confirming its conversation.');
+      // Exit inspection yields: the panel may have died or been replaced meanwhile.
+      if (terminal.destroying || this.terminals.get(panelId) !== terminal) throw new Error('The resumed terminal exited before identity verification.');
+      if (this.getAgentStatus(panelId) === 'blocked') throw new Error('The resumed harness requires attention before it can confirm readiness.');
+      if (terminal.updateResumeReadyId && terminal.updateResumeReadyId !== resumeId) throw new Error('The ready harness reported a different conversation; inspect the panel.');
+      // Wrapper IDs, generic byte activity and CLI-ready timers are not acceptance.
+      // Harness adapters must emit the fresh challenge and actual loaded ID only
+      // after resume succeeds. Uninstrumented vendor CLIs remain needs-attention.
+      if (terminal.launchCommandWrittenAt && terminal.updateResumeNonce && terminal.updateResumeReadyId === resumeId) return { pid: terminal.pty.pid };
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error('The exact resume command was launched, but the harness did not confirm its conversation identity and readiness. Inspect the panel; no prompt was sent.');
+  }
+
   async hasLaunchCommandExited(panelId: string): Promise<boolean> {
     const terminal = this.terminals.get(panelId);
     if (!terminal || terminal.destroying || terminal.launchCommandWrittenAt === undefined) return false;

@@ -15,6 +15,9 @@ export interface ParsedArgs {
   helpTopic?: string;
   target: InstallTarget;
   paneVersion: string;
+  updateScope?: 'both' | 'pane' | 'cli';
+  updateStatus?: string;
+  updateWait?: boolean;
   channel: RunpaneChannel;
   format: ArtifactFormat;
   downloadDir?: string;
@@ -167,6 +170,8 @@ const INLINE_VALUE_FLAGS = new Set<string>([
 const DEFAULTS: Omit<ParsedArgs, 'command'> = {
   target: RUNPANE_CONTRACT.defaults.target,
   paneVersion: RUNPANE_CONTRACT.defaults.paneVersion,
+  updateScope: 'both',
+  updateWait: false,
   channel: RUNPANE_CONTRACT.defaults.channel,
   format: RUNPANE_CONTRACT.defaults.format,
   dryRun: RUNPANE_CONTRACT.defaults.dryRun,
@@ -242,6 +247,7 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
 
   if (parsed.command === 'update') {
     parsed.target = 'client';
+    parsed.updateScope = 'both';
   }
 
   Object.assign(parsed, workspaceArgs, workspaceMachine ? { workspaceMachine } : {});
@@ -417,6 +423,19 @@ function parseFlags(rawArgs: string[], parsed: ParsedArgs): void {
     const arg = args[index];
     const isAgentContextCommand = parsed.command === 'agent-context';
     const isLocalCommand = isRunpaneLocalCommand(parsed.command);
+
+    if (parsed.command === 'update') {
+      if (arg === '--pane-only' || arg === '--cli-only') {
+        const scope = arg === '--pane-only' ? 'pane' : 'cli';
+        if (parsed.updateScope !== 'both' && parsed.updateScope !== scope) throw new Error('--pane-only and --cli-only are mutually exclusive.');
+        parsed.updateScope = scope;
+        continue;
+      }
+      if (arg === '--status') { parsed.updateStatus = readValue(args, ++index, arg, literalValues); continue; }
+      if (arg === '--wait') { parsed.updateWait = true; continue; }
+      if (arg === '--json') { parsed.json = true; continue; }
+      if (arg === '--pane-dir') { parsed.paneDir = readValue(args, ++index, arg, literalValues); continue; }
+    }
 
     if (arg === '-h' || arg === '--help') {
       const topic = parsed.command;

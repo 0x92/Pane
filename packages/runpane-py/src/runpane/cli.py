@@ -76,6 +76,7 @@ from .telemetry import (
     track_wrapper_event,
 )
 from .version import print_version
+from .update import run_update
 
 SOURCE = "pip"
 
@@ -117,6 +118,9 @@ class ParsedArgs:
     command: str
     target: str = DEFAULTS["target"]
     pane_version: str = DEFAULTS["paneVersion"]
+    update_scope: str = "both"
+    update_status: Optional[str] = None
+    update_wait: bool = False
     channel: str = DEFAULTS["channel"]
     format: str = DEFAULTS["format"]
     download_dir: Optional[str] = None
@@ -348,7 +352,7 @@ def run_interactive_wizard(telemetry_context: WrapperTelemetryContext) -> int:
         print()
         print("Updating Pane desktop app on this machine...")
         set_setup_selection(telemetry_context, "update", "client")
-        return install_or_update(create_parsed_args("update", target="client"), telemetry_context)
+        return run_update(create_parsed_args("update", target="client"))
     if action == "doctor":
         print()
         print("Running runpane diagnostics...")
@@ -614,7 +618,22 @@ def parse_flags(raw_args: List[str], parsed: ParsedArgs) -> None:
         arg = args[index]
         is_agent_context_command = parsed.command == "agent-context"
         is_local_command = is_runpane_local_command(parsed.command)
-        if arg in {"-h", "--help"}:
+        if parsed.command == "update" and arg in {"--pane-only", "--cli-only"}:
+            scope = "pane" if arg == "--pane-only" else "cli"
+            if parsed.update_scope not in {"both", scope}:
+                raise ValueError("--pane-only and --cli-only are mutually exclusive.")
+            parsed.update_scope = scope
+        elif parsed.command == "update" and arg == "--status":
+            index += 1
+            parsed.update_status = read_value(args, index, arg, literal_values)
+        elif parsed.command == "update" and arg == "--wait":
+            parsed.update_wait = True
+        elif parsed.command == "update" and arg == "--json":
+            parsed.json = True
+        elif parsed.command == "update" and arg == "--pane-dir":
+            index += 1
+            parsed.pane_dir = read_value(args, index, arg, literal_values)
+        elif arg in {"-h", "--help"}:
             parsed.help_topic = parsed.command
             parsed.command = "help"
         elif arg == "--dry-run":
@@ -1310,7 +1329,7 @@ COMMAND_HANDLERS: Dict[str, Callable[[ParsedArgs, WrapperTelemetryContext], int]
     "panes adopt": lambda parsed, context: run_panes_adopt(parsed),
     "help": lambda parsed, context: print_help(parsed),
     "install": lambda parsed, context: install_or_update(parsed, context),
-    "update": lambda parsed, context: install_or_update(parsed, context),
+    "update": lambda parsed, context: run_update(parsed),
     "mcp": lambda parsed, context: run_unsupported_contract(parsed, context),
     "panes git-status": lambda parsed, context: run_daemon_action(parsed, contract_command(parsed.command)["daemonAction"]),
     "panes commit": lambda parsed, context: run_daemon_action(parsed, contract_command(parsed.command)["daemonAction"]),
