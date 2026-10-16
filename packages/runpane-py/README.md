@@ -108,7 +108,7 @@ Daemon setup also forwards Pane remote-host options:
 polling. Under `--follow` it prints one line per event: `READY` (a turn ended),
 `BLOCKED` (the agent is waiting on a human), `IDLE`, `STUCK` (real unsubmitted
 composer text; an agent prompt suggestion never counts), `NEW`, `GONE`, `EXIT`,
-plus `HEARTBEAT` every 60 seconds as proof of life.
+and optional `HEARTBEAT` lines when enabled with `--heartbeat`.
 
 ```bash
 runpane watch --self-test
