@@ -1,6 +1,7 @@
 // Retry only reviewed reads. A command name or runtime ID cannot prove that
 // replaying it is safe after the host applied it but its response was lost.
 export const REMOTE_READ_CHANNELS = new Set([
+  'runpane:update:progress',
   'config:get',
   'config:get-session-preferences',
   'ui-state:get-expanded',
@@ -43,3 +44,10 @@ export const REMOTE_READ_CHANNELS = new Set([
   'terminal:getState',
 ]);
 
+
+/** Idempotent viewer bookkeeping required to restore a connected workspace. */
+export const REMOTE_RESTORE_CHANNELS = new Set([
+  'terminal:resize', 'panels:resize-terminal', 'terminal:setVisibility',
+  'terminal:ack', 'terminal:resetFlowControl', 'sessions:mark-viewed',
+  'panels:set-active', 'terminal:reply',
+]);

@@ -235,6 +235,21 @@ describe('RemoteDaemonClient with the fetch event stream transport', () => {
     client.disconnect();
   });
 
+  it('rejects unsent mutations while restoration is pending but permits snapshot reads', async () => {
+    const host = createFakeHost();
+    const client = createClient(host);
+    let release!: () => void;
+    client.onRestore(() => new Promise<void>(resolve => { release = resolve; }));
+    await client.connect(); await flush();
+    expect(client.getState().status).toBe('restoring');
+    await expect(client.invoke('terminal:input', ['panel', 'never send'])).rejects.toMatchObject({ code: 'ERR_REMOTE_OFFLINE' });
+    expect(host.requests.filter(request => request.url.endsWith('/invoke'))).toHaveLength(0);
+    await client.invoke('terminal:getState', ['panel']);
+    release(); await flush();
+    expect(client.getState().status).toBe('connected');
+    client.disconnect();
+  });
+
   it('cuts an event stream request that never answers', async () => {
     const host = createFakeHost();
     host.hangEvents(true);
@@ -363,10 +378,14 @@ describe('RemoteDaemonClient invoke errors', () => {
     const host = createFakeHost();
     host.onInvoke(() => { throw new TypeError('Network connection was lost'); });
 
-    const error = await createClient(host).invoke('terminal:input', ['panel-1', 'ls\r']).catch((cause: Error) => cause);
+    const client = createClient(host);
+    await client.connect();
+    await flush();
+    host.fetch.mockClear();
+    const error = await client.invoke('terminal:input', ['panel-1', 'ls\r']).catch((cause: Error) => cause);
 
-    expect(error).toBeInstanceOf(RemoteUnconfirmedResultError);
-    expect(error.message).toMatch(/may have completed.+Network connection was lost/);
+    expect(error.message).toMatch(/Delivery unknown.+Check the original panel/);
+    client.disconnect();
     expect(host.fetch).toHaveBeenCalledTimes(1);
   });
 

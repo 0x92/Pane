@@ -136,11 +136,19 @@ installed components, host health, and each panel's restoration outcome. A
 current-user launchd, Task Scheduler, or systemd service owns the helper; its
 code and standalone runtime are staged outside the files being replaced.
 
+Settings installation uses this same operation; downloaded legacy updates never
+install implicitly on quit. Before downtime, Pane fences new mutations, waits for
+in-flight work, checks snapshot readability and capacity on every affected volume,
+and records a clean-shutdown acknowledgment after persistence and service cleanup.
+A forced exit or missing acknowledgment never authorizes installation.
+
 The helper stages and verifies packages before shutdown, preserves a data and
 browser-profile snapshot, replaces the identified installation, and checks the
 new host's version, endpoint/auth configuration, and data/profile identity.
-Active agents reopen only their recorded conversation with the saved launch
-profile. It never sends a prompt or `continue`, guesses a conversation, or
+Active agents receive only their recorded resume command with the saved launch
+profile. A panel reports `resumed` only after the harness confirms that conversation
+identity and readiness; a launched shell or readiness timeout is not confirmation.
+Harnesses that cannot provide fresh identity evidence report `needs-attention`. It never sends a prompt or `continue`, guesses a conversation, or
 replays an uncertain action. Idle/completed/approval-blocked panels stay stopped;
 ambiguous active runs report `needs-attention`. Review a stopped panel before
 explicitly resuming it. A failed post-shutdown operation retains its lock and

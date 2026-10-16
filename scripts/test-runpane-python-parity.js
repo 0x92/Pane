@@ -206,3 +206,19 @@ for delivery in json.load(sys.stdin):
     ]);
   });
 }
+
+test('Python forwards update installer options so the shared preflight can reject unsupported choices', () => {
+  const argv = JSON.parse(runPython(`
+import json
+from unittest.mock import patch
+from runpane.cli import parse_args
+from runpane.update import run_update
+parsed = parse_args(['update', '--pane-only', '--format', 'dmg', '--download-dir', 'custom cache'])
+with patch('runpane.update.Path.is_file', return_value=True), patch('runpane.update.shutil.which', return_value='node'), patch('runpane.update.subprocess.call', return_value=0) as call:
+    run_update(parsed)
+    print(json.dumps(call.call_args[0][0]))
+`, null));
+  assert.equal(argv[argv.indexOf('--format') + 1], 'dmg');
+  assert.equal(argv[argv.indexOf('--download-dir') + 1], 'custom cache');
+  assert.ok(argv.includes('--pane-only'));
+});

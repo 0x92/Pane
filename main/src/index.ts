@@ -1,3 +1,4 @@
+import { acknowledgeUpdateQuiescence } from './services/updateShutdown';
 // Answer --version before any import below logs or touches the database.
 import './versionQuery';
 // Load ReadableStream polyfill before any other imports
@@ -1649,6 +1650,8 @@ if (launchRemoteSetup) {
       paneDaemonHost = null;
       console.log('[Main] Daemon host services stopped');
     }
+
+    acknowledgeUpdateQuiescence();
 
     // Track app closed event with session duration.
     // Send directly via HTTP instead of IPC — the renderer may already be

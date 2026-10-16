@@ -32,3 +32,8 @@ export function checkpointUpdatePanel(state: TerminalPanelState, activity: Agent
     priorState: decodeBoundary(JSON.parse(JSON.stringify(state)), boundary.jsonObject),
   };
 }
+
+export const checkpointSchema = boundary.object({
+  bootId: boundary.string,
+  panels: boundary.array(boundary.object({ panelId: boundary.string, sessionId: boundary.string, resumeId: boundary.optional(boundary.string), cwd: boundary.optional(boundary.nonEmptyString), activity: boundary.enumeration('working', 'idle', 'blocked', 'unknown'), priorState: boundary.jsonObject, eligible: boundary.boolean, requiresAttention: boundary.optional(boundary.boolean), reason: boundary.string })),
+});

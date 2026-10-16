@@ -12,7 +12,7 @@ import { restoreHostNavigation, withHostNavigationWritesPaused } from '../utils/
 import { API } from '../utils/api';
 import { rememberPaneLayout } from '../utils/paneLayoutMemory';
 import { getActiveRemoteHostId } from '../../../shared/types/remoteDaemon';
-import { restoreRemoteTerminals } from '../utils/remoteRestoration';
+import { restoreRemoteTerminals, restoreRemoteWorkspace } from '../utils/remoteRestoration';
 import { devLog } from '../utils/console';
 import { claimCreatedPane, markAppReady } from '../utils/journeyTimings';
 import type { Session, SessionOutput, GitStatus } from '../types/session';
@@ -93,7 +93,8 @@ async function reloadRemoteRuntimeState(loadSessions: (sessions: Session[]) => v
   window.dispatchEvent(new Event('project-changed'));
   window.dispatchEvent(new Event('project-sessions-refresh'));
   // Sessions belong to the host too; adopt the new host's selection.
-  window.dispatchEvent(new CustomEvent('orchestration-sessions-changed', { detail: { kind: 'runtime-resync', selectionChanged: true } }));
+  await useOrchestrationSessionStore.getState().refresh({ adoptServerSelection: true, throwOnError: true });
+  if (ownsRuntime()) await restoreRemoteWorkspace();
 }
 
 async function resyncRemoteRuntimeState(loadSessions: (sessions: Session[]) => void, hostChanged: boolean, ownsRuntime: () => boolean): Promise<void> {

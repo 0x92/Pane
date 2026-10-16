@@ -48,6 +48,7 @@ export function useRemoteTerminal({
       await adapter.sendTerminalInput(panel.id, data);
     } catch (error) {
       setStatusText(error instanceof Error ? error.message : 'Failed to send input');
+      throw error;
     }
   }, [adapter, panel.id]);
 
@@ -71,10 +72,10 @@ export function useRemoteTerminal({
     const outputs = await adapter.getPanelOutput(panel.id);
     // A response can outlive the terminal during a tab switch or effect cleanup.
     if (terminalRef.current !== terminal) return;
-    terminal.clear();
-    for (const output of outputs) {
-      terminal.write(formatSessionOutput(output));
-    }
+    const distanceFromBottom = terminal.buffer.active.baseY - terminal.buffer.active.viewportY;
+    terminal.reset();
+    await new Promise<void>(resolve => terminal.write(outputs.map(formatSessionOutput).join(''), resolve));
+    if (terminalRef.current === terminal) terminal.scrollToLine(Math.max(0, terminal.buffer.active.baseY - distanceFromBottom));
   }, [adapter, panel.id]);
 
   useEffect(() => {
@@ -130,7 +131,7 @@ export function useRemoteTerminal({
     visualViewport?.addEventListener('scroll', handleViewportChange);
 
     const inputDisposable = terminal.onData(data => {
-      void sendInput(data);
+      void sendInput(data).catch(() => {});
     });
 
     const unsubscribe = adapter.onEvent(event => {
@@ -200,9 +201,22 @@ export function useRemoteTerminal({
     };
   }, [adapter, panel.id, sessionId, sendInput, hydrateTerminal]);
 
+  useEffect(() => adapter.onRestore(async signal => {
+    const terminal = terminalRef.current;
+    if (!terminal || signal.aborted) return;
+    setStatusText('Restoring terminal…');
+    try {
+      await hydrateTerminal(terminal);
+      if (signal.aborted || terminalRef.current !== terminal) return;
+      await adapter.setTerminalVisibility(panel.id, true, TERMINAL_VIEWER_ID);
+      setStatusText('Connected');
+    } catch (error) {
+      if (!signal.aborted && terminalRef.current === terminal) setStatusText(error instanceof Error ? error.message : 'Terminal snapshot failed; reconnect to retry.');
+    }
+  }), [adapter, panel.id, hydrateTerminal]);
+
   useEffect(() => {
-    if (connectionStatus !== 'connected' || !terminalRef.current) return;
-    void hydrateTerminal(terminalRef.current).catch(() => {});
+    if (connectionStatus !== 'connected'  || !terminalRef.current) return;
     void adapter.setTerminalVisibility(panel.id, true, TERMINAL_VIEWER_ID).catch(() => {});
   }, [adapter, connectionStatus, panel.id, hydrateTerminal]);
 

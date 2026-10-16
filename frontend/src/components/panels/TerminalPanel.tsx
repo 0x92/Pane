@@ -2091,7 +2091,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = React.memo(({ panel, isActiv
       <div ref={terminalRef} className="ph-no-capture h-full w-full" data-terminal-font={terminalFontObservation} data-window-focused={windowFocused ? "true" : "false"} />
       {refreshError && <div role="status" className="absolute bottom-0 inset-x-0 z-30 bg-surface-secondary px-3 py-2 text-xs text-text-secondary">
         Terminal restoration needs attention: {refreshError}
-        <button className="ml-3 text-text-primary" onClick={() => void handleManualRefresh()}>Retry snapshot</button>
+        <button type="button" className="ml-3 text-text-primary" onClick={() => void handleManualRefresh()}>Retry snapshot</button>
       </div>}
 
       {/* Terminal search overlay */}

@@ -319,6 +319,7 @@ export interface RemotePwaAffordances {
 }
 
 export interface RemotePaneConnectionState {
+  updateIntent?: import('../remoteClient/updateIntent').RemoteUpdateIntent | null;
   mode: RemoteDaemonClientMode;
   status: RemotePaneConnectionStatus;
   activeProfileId: string | null;

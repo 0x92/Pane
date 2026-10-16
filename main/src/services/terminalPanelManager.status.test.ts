@@ -15,7 +15,7 @@ function createTerminal(agentType: 'claude' | 'codex' | undefined = 'codex') {
   let onData: (data: string) => void = () => undefined;
   let onExit: (exit: { exitCode: number; signal?: number }) => void = () => undefined;
   const terminal = {
-    panelId: 'p', sessionId: 's', agentType,
+    panelId: 'p', sessionId: 's', agentType, launchCwd: '/launch-origin',
     pty: {
       onData: (listener: typeof onData) => { onData = listener; },
       onExit: (listener: typeof onExit) => { onExit = listener; },
@@ -409,6 +409,9 @@ describe('terminal status events', () => {
     vi.spyOn(access, 'getProcessCwd').mockRejectedValue(new Error('Process cwd unavailable'));
     await manager.saveTerminalState('p');
     expect(panel.state.customState).toMatchObject({ cwd: '/workspace/owned-session' });
+    panel.state.customState = {};
+    await manager.saveTerminalState('p');
+    expect(panel.state.customState).toMatchObject({ cwd: '/launch-origin' });
   });
 
   it('discards a terminal state read after the terminal was replaced', async () => {

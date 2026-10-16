@@ -28,6 +28,9 @@ def run_update(parsed) -> int:
     for enabled, flag in [(parsed.update_wait, "--wait"), (parsed.json, "--json"), (parsed.dry_run, "--dry-run"), (parsed.yes, "--yes")]:
         if enabled:
             args.append(flag)
+    args.extend(["--format", parsed.format])
+    if parsed.download_dir:
+        args.extend(["--download-dir", parsed.download_dir])
     if parsed.pane_path:
         args.extend(["--pane-path", parsed.pane_path])
     environment = dict(os.environ)

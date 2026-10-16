@@ -1,4 +1,5 @@
-import { REMOTE_READ_CHANNELS } from './readChannels';
+import { decodeUpdateIntent, type RemoteUpdateIntent } from './updateIntent';
+import { REMOTE_READ_CHANNELS, REMOTE_RESTORE_CHANNELS } from './readChannels';
 import { RecoveryCycle } from './recoveryCycle';
 import type { ParsedSseEvent } from '../sseParser';
 import {
@@ -11,7 +12,7 @@ import {
 } from '../types/remoteDaemon';
 import { boundary, decodeBoundary, type JsonValue } from '../validation/boundaryDecoder';
 import { RemoteInputQueue } from '../remoteInputQueue';
-import { paneErrorText } from '../paneError';
+import { PaneError, paneErrorText } from '../paneError';
 
 // Structural fetch types, so browser fetch, Node fetch and `expo/fetch` all fit.
 interface RemoteFetchInit {
@@ -69,6 +70,7 @@ export type RemoteDaemonClientEvent =
   | { type: 'daemon-event'; payload: RemoteDaemonEventEnvelope };
 
 export interface RemoteDaemonConnectionState {
+  updateIntent?: RemoteUpdateIntent | null;
   status: RemotePaneConnectionStatus;
   lastError: string | null;
   lastSeenAt: string | null;
@@ -260,6 +262,9 @@ export class RemoteDaemonClient {
   }
 
   private async invokeRequest<T = unknown>(channel: string, args: unknown[], inputSignal?: AbortSignal): Promise<T> {
+    if (this.state.status !== 'connected' && !REMOTE_READ_CHANNELS.has(channel) && !REMOTE_RESTORE_CHANNELS.has(channel)) {
+      throw new PaneError('ERR_REMOTE_OFFLINE', 'The action was not sent while the workspace is disconnected or restoring.', 'Wait for restoration before submitting it.');
+    }
     let lastError: Error | null = null;
     let dispatched = false;
     const connection = this.abortController;
@@ -400,11 +405,13 @@ export class RemoteDaemonClient {
             if (ready) return;
             ready = true;
             this.setState({ status: 'restoring', lastError: null });
+            this.handleSseEvent(event);
             void Promise.all([...this.restoreListeners].map(listener => listener(stream.signal))).then(() => {
               if (stream.signal.aborted || signal.aborted) return;
               this.recovery.reset();
               this.clearDeadline();
-              this.handleSseEvent(event);
+              this.setState({ status: 'connected', lastError: null });
+              if (this.state.updateIntent) this.setState({ updateIntent: null });
             }, error => {
               if (!stream.signal.aborted && !signal.aborted) this.scheduleReconnect(error instanceof Error ? error.message : 'Workspace restoration failed');
             });
@@ -444,14 +451,16 @@ export class RemoteDaemonClient {
 
     if (event.event === 'daemon-event') {
       const payload = decodeRemoteDaemonEventEnvelope(JSON.parse(event.data));
+      const updateIntent = payload.channel === 'remote:update-intent' ? decodeUpdateIntent(payload.args[0]) : undefined;
       this.setState({ lastSeenAt: payload.timestamp });
+      if (updateIntent) this.setState({ updateIntent });
       this.emitEvent({ type: 'daemon-event', payload });
       return;
     }
 
     if (event.event === 'ready') {
       const now = new Date().toISOString();
-      this.setState({ status: 'connected', lastError: null, lastSeenAt: now });
+      this.setState({ lastSeenAt: now });
       this.emitEvent({ type: 'ready', timestamp: now });
     }
   }

@@ -1,3 +1,4 @@
+import { decodeUpdateIntent } from '../../../../shared/remoteClient/updateIntent';
 import { EventEmitter } from 'events';
 import { lookup as defaultLookup, Resolver } from 'dns';
 import http, { type IncomingMessage, type RequestOptions } from 'http';
@@ -27,7 +28,7 @@ import { RemoteInputQueue } from '../../../../shared/remoteInputQueue';
 import { decodeListeningPortsSnapshot, type ListeningPortsSnapshot } from '../../../../shared/types/listeningPorts';
 import { localTargetOf } from '../../../../shared/utils/browserUrl';
 import { createPortTunnel, type PortTunnel } from './portTunnel';
-import { REMOTE_READ_CHANNELS } from '../../../../shared/remoteClient/readChannels';
+import { REMOTE_READ_CHANNELS, REMOTE_RESTORE_CHANNELS } from '../../../../shared/remoteClient/readChannels';
 import { RecoveryCycle } from '../../../../shared/remoteClient/recoveryCycle';
 import { PaneError } from '../../../../shared/paneError';
 
@@ -124,11 +125,6 @@ const PORTS_CHANGED_CHANNEL = 'ports:changed';
 const UNKNOWN_COMMAND_MESSAGE = 'No Pane daemon command registered';
 const PORTS_LIST_RETRY_MS = 5_000;
 // These view/flow-control operations restore a terminal without submitting work.
-const REMOTE_RESTORE_CHANNELS = new Set([
-  'terminal:resize', 'panels:resize-terminal', 'terminal:setVisibility',
-  'terminal:ack', 'terminal:resetFlowControl', 'sessions:mark-viewed',
-  'panels:set-active', 'terminal:reply',
-]);
 const REMOTE_RUNTIME_ID = createRemoteRuntimeId();
 const MEDIA_RESPONSE_HEADERS = [
   'content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control',
@@ -971,6 +967,10 @@ export class RemotePaneClientController extends EventEmitter {
       eventSink: {
         send: (channel, ...args) => {
           if (this.activeClient !== client) return;
+          if (channel === 'remote:update-intent') {
+            const updateIntent = decodeUpdateIntent(args[0]);
+            if (updateIntent) this.setConnectionState({ ...this.state, updateIntent });
+          }
           if (channel === PORTS_CHANGED_CHANNEL) {
             void this.publishTunnelledPorts(client, args[0]);
             return;
@@ -1011,6 +1011,7 @@ export class RemotePaneClientController extends EventEmitter {
           activeProfileId: profile.id,
           activeProfileLabel: profile.label,
           activeBaseUrl: profile.baseUrl,
+          updateIntent: status === 'connected' ? null : this.state.updateIntent,
           lastError: errorMessage ?? null,
           lastSeenAt: metadata?.lastSeenAt ?? this.getLastSeenAtForProfile(profile.id, status),
         });

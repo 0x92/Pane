@@ -89,6 +89,7 @@ interface ConnectionState {
   connectionStatus: RemotePaneConnectionStatus;
   lastError: string | null;
   connectionErrorKind: RemoteConnectionErrorKind | null;
+  updateIntent?: import('../../../shared/remoteClient/updateIntent').RemoteUpdateIntent | null;
   lastSeenAt: string | null;
 }
 const INITIAL_CONNECTION: ConnectionState = {
@@ -105,7 +106,7 @@ export function RemotePwaApp() {
   const [pendingPushRoute, setPendingPushRoute] = useState<NativePushRoute | null>(null);
   const [pushStatus, setPushStatus] = useState<{ registration: 'registered' | 'not-registered' | 'revoked'; provider: string; message: string; needsInputEnabled?: boolean; completedEnabled?: boolean } | null>(null);
   const [pushControls, setPushControls] = useState(DEFAULT_PUSH_CONTROLS);
-  const [{ adapter, activeProfile, connectionStatus, lastError, connectionErrorKind, lastSeenAt }, updateConnection] = useReducer(connectionReducer, INITIAL_CONNECTION);
+  const [{ adapter, activeProfile, connectionStatus, lastError, connectionErrorKind, lastSeenAt, updateIntent }, updateConnection] = useReducer(connectionReducer, INITIAL_CONNECTION);
   const setLastError = useCallback((error: string | null) => updateConnection({ lastError: error }), []);
   const [loading, setLoading] = useState(false);
   const [creatingTerminal, setCreatingTerminal] = useState(false);
@@ -331,7 +332,8 @@ export function RemotePwaApp() {
       const shown = (panelId: string | null | undefined) => strip.some(panel => panel.id === panelId && phoneShows(panel)) ? panelId : null;
       // This client's own tab first; the host's last-used tab only for a Pane this client has not opened;
       // else the first tab it can show. A tab the phone cannot show is never restored.
-      setSelectedPanel(routeMatches ? routedPanel.panelId : shown(currentPanelId) ?? shown(rememberedPanelId) ?? shown(activePanel?.id) ?? firstSupportedPanel(strip)?.id ?? null);
+      // Background reads must not overwrite a newer navigation in another browser tab.
+      setSelectedPanel(routeMatches ? routedPanel.panelId : shown(currentPanelId) ?? shown(rememberedPanelId) ?? shown(activePanel?.id) ?? firstSupportedPanel(strip)?.id ?? null, { remember: Boolean(routeMatches) });
       if (routedPanel?.sessionId === sessionId && !routeMatches) {
         setLastError('The notified panel is no longer available on this Pane host.');
       } else {
@@ -417,7 +419,7 @@ export function RemotePwaApp() {
     },
   });
 
-  const refreshOrchestrationSessions = useCallback(async (runtime: RemoteRuntimeAdapter | null = adapter) => {
+  const refreshOrchestrationSessions = useCallback(async (runtime: RemoteRuntimeAdapter | null = adapter, required = false) => {
     if (!runtime) return;
     try {
       const { sessions } = await runtime.listOrchestrationSessions();
@@ -431,16 +433,19 @@ export function RemotePwaApp() {
         state.selectSession(findFirstSessionId(state.projects));
       } else if (record.agent !== openView.agent) {
         // Desktop switched the Session's agent; show the new agent's chat if the Session is still open.
-        void runtime.openOrchestrationSession(record.id).then(view => {
+        await runtime.openOrchestrationSession(record.id).then(view => {
           const stillOpen = useRemoteSessionStore.getState().openOrchestrationSession?.session.id === record.id;
           if (runtime === activeRuntimeRef.current && stillOpen) openSession(view, { showChat: true });
-        }).catch(() => {});
+        });
       }
     } catch (error) {
       if (runtime !== activeRuntimeRef.current) return;
       const message = error instanceof Error ? error.message : 'Failed to load Sessions';
       if (message.includes('No Pane daemon command registered')) setOrchestrationFailure('unavailable', null);
-      else setOrchestrationFailure('error', message);
+      else {
+        setOrchestrationFailure('error', message);
+        if (required) throw error;
+      }
     }
   }, [adapter, openSession, setOrchestrationFailure, setOrchestrationSessions]);
 
@@ -495,6 +500,7 @@ export function RemotePwaApp() {
         if (signal.aborted || runtime !== activeRuntimeRef.current) return;
         setPanels(paneId, panels);
       }
+      await refreshOrchestrationSessions(runtime, true);
       await resyncHost(runtime);
     });
 
@@ -785,10 +791,10 @@ export function RemotePwaApp() {
   useEffect(() => {
     if (!adapter) return;
     const unsubscribeStatus = adapter.onStatus(state => {
-      updateConnection({ connectionStatus: state.status, lastError: state.lastError, lastSeenAt: state.lastSeenAt });
+      updateConnection({ connectionStatus: state.status, lastError: state.lastError, lastSeenAt: state.lastSeenAt, updateIntent: state.updateIntent });
     });
     return unsubscribeStatus;
-  }, [adapter, resyncHost, setPanels, setProjects]);
+  }, [adapter, updateConnection]);
 
   useEffect(() => adapter ? subscribeRemotePanelStatus(adapter) : undefined, [adapter]);
 
@@ -969,6 +975,8 @@ export function RemotePwaApp() {
           status={connectionStatus}
           lastError={lastError}
           lastSeenAt={lastSeenAt}
+          updateIntent={updateIntent}
+          onRetry={() => adapter.retryNow()}
           onDisconnect={disconnect}
           onOpenSidebar={openSidebar}
         />

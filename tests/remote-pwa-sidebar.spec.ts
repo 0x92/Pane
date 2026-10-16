@@ -105,7 +105,7 @@ test('archiving a Session from its row menu can be undone from the toast', async
   await expect(page.getByRole('group', { name: 'Sessions' }).getByRole('button', { name: 'Open Session Release prep' })).toBeVisible();
 });
 
-test('reopening reconnects to the last host, and shows the connect form when that fails or after Disconnect', async ({ page }) => {
+test('reopening keeps the last host through an outage and Disconnect returns to the connect form', async ({ page }) => {
   await openConnectedRemotePwa(page);
   await page.reload();
   await expect(page.getByRole('tablist', { name: 'Remote tool panels' })).toBeVisible();
@@ -113,13 +113,11 @@ test('reopening reconnects to the last host, and shows the connect form when tha
   const health = 'http://anim-pane.test/remote/browser/health';
   await page.route(health, route => route.abort());
   await page.reload();
-  await expect(page.getByRole('status').filter({ hasText: 'Reconnecting to MacBook Pro' })).toBeVisible();
-  // The client retries the health check for about 20 seconds before giving up.
-  await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole('alert')).toBeVisible();
-
+  // Startup failure keeps the selected host and its bounded recovery cycle.
+  await expect(page.getByRole('button', { name: 'Disconnect' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Connect', exact: true })).toHaveCount(0);
   await page.unroute(health);
-  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect(page.getByRole('tablist', { name: 'Remote tool panels' })).toBeVisible({ timeout: 25_000 });
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeVisible();

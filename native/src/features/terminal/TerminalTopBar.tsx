@@ -38,7 +38,7 @@ export function TerminalTopBar({ paneName, onClearScrollback }: { paneName: stri
   const theme = useTheme();
   const { colors } = theme;
   const insets = useSafeAreaInsets();
-  const { profile, connection } = useDaemon();
+  const { client, profile, connection } = useDaemon();
   const { status, lastError, lastSeenAt } = connection;
   const title = status === 'connected' ? profile.label : `${STATUS_LABEL[status]} ${profile.label}`;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -91,6 +91,7 @@ export function TerminalTopBar({ paneName, onClearScrollback }: { paneName: stri
             )}
           </View>
         </View>
+        {(status === 'error' || status === 'reconnecting') && <Pressable accessibilityRole="button" accessibilityLabel="Retry now" onPress={() => client.retryNow()}><Text variant="footnote">Retry now</Text></Pressable>}
         <Pressable
           testID="terminal-more"
           accessibilityRole="button"

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { claimUpdateLock, releaseUpdateLock, executeUpdate, readUpdateJournal, writeUpdateJson } from '../../../packages/runpane/src/updateOperation';
+import { assertUpdateQuiescence, claimUpdateLock, releaseUpdateLock, executeUpdate, readUpdateJournal, writeUpdateJson } from '../../../packages/runpane/src/updateOperation';
 
 const directories: string[] = [];
 function fixture() {
@@ -14,6 +14,15 @@ function fixture() {
 }
 afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 describe('durable update operation', () => {
+  it('refuses replacement after a forced exit or another boot’s shutdown acknowledgment', () => {
+    const { directory } = fixture();
+    const expected = { id: 'op', bootId: 'boot', pid: 123 };
+    expect(() => assertUpdateQuiescence(directory, expected)).toThrow('without acknowledging clean shutdown');
+    writeUpdateJson(path.join(directory, 'quiesced.json'), { ...expected, bootId: 'old' });
+    expect(() => assertUpdateQuiescence(directory, expected)).toThrow('another operation or host');
+    writeUpdateJson(path.join(directory, 'quiesced.json'), expected);
+    expect(() => assertUpdateQuiescence(directory, expected)).not.toThrow();
+  });
   it('acknowledges the independent helper before staging and never stops after staging fails', async () => {
     const { file } = fixture();
     const seen: string[] = [];
@@ -58,6 +67,25 @@ describe('durable update operation', () => {
     releaseUpdateLock(lock, 'first');
     expect(claimUpdateLock(lock, 'third', file)).toMatchObject({ acquired: false, id: 'second' });
   });
+  it('repairs cleanup after the terminal journal committed and its releaser died', () => {
+    const { file, directory } = fixture();
+    writeUpdateJson(file, { ...readUpdateJournal(file), id: 'first', phase: 'complete' });
+    const lock = path.join(directory, 'lock');
+    claimUpdateLock(lock, 'first', file);
+    writeUpdateJson(path.join(lock, 'releasing'), { id: 'first', pid: 999999999 });
+    expect(claimUpdateLock(lock, 'next', file)).toMatchObject({ acquired: true, id: 'next' });
+  });
+  it('cancels an expired setup from a dead caller before a late helper can run', async () => {
+    const { file, directory } = fixture();
+    writeUpdateJson(file, { ...readUpdateJournal(file), id: 'first', setupPid: 999999999, setupExpiresAt: 1 });
+    const lock = path.join(directory, 'lock');
+    claimUpdateLock(lock, 'first', file);
+    expect(claimUpdateLock(lock, 'next', file)).toMatchObject({ acquired: true });
+    const run = async () => { throw new Error('must never run'); };
+    expect((await executeUpdate(file, { run })).phase).toBe('failed');
+    expect(fs.existsSync(path.join(directory, 'canceled.json'))).toBe(true);
+  });
+
   it('honors caller failure before the helper can shut down Pane', async () => {
     const { file } = fixture();
     const seen: string[] = [];

@@ -65,6 +65,8 @@ export class RemoteRuntimeAdapter {
     return this.client.connect();
   }
 
+  retryNow(): void { this.client.retryNow(); }
+
   suspend(): void { this.client.suspend(); }
 
   resume(): void { this.client.resume(); }

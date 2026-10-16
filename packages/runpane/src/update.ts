@@ -1,3 +1,4 @@
+import { assertUpdateCapacity } from './updateCapacity';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -9,7 +10,7 @@ import { RunpaneError } from './errors';
 import { preflightUpdate, updateHostSchema } from './updatePreflight';
 import { stageUpdateRuntime } from './updateRuntime';
 import { checkUpdateSupervisor, startUpdateSupervisor, removeUpdateSupervisor } from './updateSupervisor';
-import { claimUpdateLock, releaseUpdateLock, executeUpdate, readUpdateJournal, writeUpdateJson, type UpdateJournal } from './updateOperation';
+import { assertUpdateQuiescence, claimUpdateLock, releaseUpdateLock, executeUpdate, readUpdateJournal, writeUpdateJson, type UpdateJournal } from './updateOperation';
 import { activateManagedCli, runNpm, stageCliPackage, stageUpdateCode, type StagedCli } from './updatePackage';
 import { identifyPythonCli, stagePythonCli, installPythonCli } from './updatePython';
 import { stageApp, installStagedApp, type StagedApp } from './updateArtifacts';
@@ -52,6 +53,7 @@ export async function runUpdate(parsed: ParsedArgs): Promise<number> {
   const id = randomUUID();
   const directory = operationDirectory(paneDir, id);
   const file = path.join(directory, 'status.json');
+  writeUpdateJson(file, { id, host: preflight.machine, scope: preflight.scope, version: preflight.requestedVersion, phase: 'accepted', completed: [], setupPid: process.pid, setupExpiresAt: Date.now() + 120_000, updatedAt: new Date().toISOString(), appUpdated: false, cliUpdated: false, hostReachable: false, restored: [] });
   const acquired: string[] = [];
   try {
     for (const target of [...new Set([preflight.lockDirectory, ...preflight.additionalLockDirectories])].sort()) {
@@ -67,7 +69,6 @@ export async function runUpdate(parsed: ParsedArgs): Promise<number> {
     throw error;
   }
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  writeUpdateJson(file, { id, host: preflight.machine, scope: preflight.scope, version: preflight.requestedVersion, phase: 'accepted', completed: [], updatedAt: new Date().toISOString(), appUpdated: false, cliUpdated: false, hostReachable: false, restored: [] });
   try {
     const runtime = stageUpdateRuntime(preflight.runtimeSource, path.join(directory, 'runtime'));
     const helper = stageUpdateCode(process.argv[1], path.join(directory, 'helper'));
@@ -134,6 +135,7 @@ export async function runUpdateHelper(directory: string, artifacts: UpdateArtifa
     }
     const staged = decodeBoundary(JSON.parse(fs.readFileSync(manifest, 'utf8')), stagedSchema);
     if (step === 'checkpoint' && host) {
+      assertUpdateCapacity(preflight.paneDir, host, staged.app!.installPath, preflight.cli?.prefix);
       const current = await invokeDaemon('runpane:update:host', [], updateHostSchema, options);
       if (current.bootId !== host.bootId || current.executable !== host.executable || current.endpointFingerprint !== host.endpointFingerprint) throw new Error('The target host changed after preflight. Pane remains running.');
       await invokeDaemon('runpane:update:checkpoint', [request], boundary.jsonObject, options);
@@ -148,6 +150,7 @@ export async function runUpdateHelper(directory: string, artifacts: UpdateArtifa
       const deadline = Date.now() + 30_000;
       while (processExists(host.pid) && Date.now() < deadline) await pause(200);
       if (processExists(host.pid)) throw new Error('Pane did not exit within 30 seconds. No installer was started. Inspect the host before retrying.');
+      assertUpdateQuiescence(directory, { id, bootId: host.bootId, pid: host.pid });
     }
     if (step === 'snapshot' && host) {
       const snapshot = path.join(directory, 'snapshot');
@@ -223,7 +226,16 @@ export async function runUpdateHelper(directory: string, artifacts: UpdateArtifa
       }
       throw new Error(`The new host failed its health check: ${failure}. The data snapshot is preserved; no automatic database downgrade was attempted.`);
     }
-    if (step === 'restore' && host) return invokeDaemon('runpane:update:restore', [{ id }], boundary.object({ restored: boundary.array(boundary.object({ panelId: boundary.string, outcome: boundary.string, reason: boundary.string })) }), options);
+    if (step === 'restore' && host) {
+      const deadline = Date.now() + 30 * 60_000;
+      while (Date.now() < deadline) {
+        const progress = await invokeDaemon('runpane:update:restore', [{ id }], boundary.object({ complete: boundary.boolean, restored: boundary.array(boundary.object({ panelId: boundary.string, outcome: boundary.string, reason: boundary.string })) }), options);
+        writeUpdateJson(file, { ...readUpdateJournal(file), restored: progress.restored });
+        if (progress.complete) return { restored: progress.restored };
+        await pause(500);
+      }
+      throw new Error('Panel restoration exceeded its deadline. Durable per-panel progress is preserved; inspect the operation before taking further action.');
+    }
     return {};
   } });
   if (terminal(result)) {

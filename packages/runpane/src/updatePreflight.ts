@@ -1,3 +1,4 @@
+import { assertUpdateCapacity } from './updateCapacity';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -57,6 +58,23 @@ function fail(message: string, next: string): never {
   throw new RunpaneError('ERR_UPDATE_PREFLIGHT', `${message} Nothing was changed.`, next);
 }
 
+/** Exercise directory ACLs too: fs.access(W_OK) does not check Windows ACLs. */
+export function assertUpdateDirectoryWritable(directory: string): void {
+  let probe: string | undefined;
+  try {
+    probe = fs.mkdtempSync(path.join(directory, '.pane-update-preflight-'));
+    const file = path.join(probe, 'write');
+    fs.writeFileSync(file, 'update preflight', { flag: 'wx', mode: 0o600 });
+    fs.renameSync(file, path.join(probe, 'renamed'));
+    fs.rmSync(probe, { recursive: true });
+    probe = undefined;
+  } catch {
+    fail(`The update target is not writable with the current account: ${directory}.`, 'Use the installation’s owning account or package manager; Pane has not been stopped.');
+  } finally {
+    if (probe) fs.rmSync(probe, { recursive: true, force: true });
+  }
+}
+
 /** Resolve the invoked CLI, not another runpane earlier/later on PATH. */
 function identifyUpdateCli(paneDir: string, entrypoint = process.argv[1]): UpdateCliInstallation {
   const real = fs.realpathSync(entrypoint);
@@ -105,10 +123,15 @@ export async function preflightUpdate(parsed: ParsedArgs, scope: UpdatePreflight
   checkUpdateSupervisor();
   const install = host ? (process.platform === 'darwin' ? path.resolve(host.executable, '../../..') : process.platform === 'linux' ? host.executable : path.dirname(host.executable)) : cli!.prefix;
   fs.accessSync(host ? path.dirname(install) : install, fs.constants.W_OK);
-  const disk = fs.statfsSync(path.dirname(install));
-  if (disk.bavail * disk.bsize < 2 * 1024 ** 3) fail('Less than 2 GiB is available for staging and recovery.', 'Free disk space on the installation volume and retry.');
-  const runtimeSource = findUpdateRuntime();
   fs.mkdirSync(path.join(paneDir, 'updates'), { recursive: true, mode: 0o700 });
+  const writableDirectories = new Set([
+    paneDir,
+    ...(host ? [path.dirname(install), ...(process.platform === 'win32' ? [install] : [])] : []),
+    ...(cli ? [cli.prefix, path.dirname(cli.entrypoint)] : []),
+  ]);
+  for (const directory of writableDirectories) assertUpdateDirectoryWritable(directory);
+  assertUpdateCapacity(paneDir, host, install, cli?.prefix);
+  const runtimeSource = findUpdateRuntime();
   return {
     machine: os.hostname(), paneDir, scope, requestedVersion: parsed.paneVersion, host, cli,
     runtimeSource, npmSource: cli && cli.owner !== 'pip' ? findNpm(runtimeSource) : undefined, lockDirectory: path.join(paneDir, 'updates', '.operation-lock'),
