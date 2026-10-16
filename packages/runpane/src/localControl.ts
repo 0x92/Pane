@@ -871,7 +871,14 @@ type WorkspaceEntryKind =
   | 'pane.detached'
   | 'pr.conflicted'
   | 'pr.checks'
-  | 'pr.merged';
+  | 'pr.merged'
+  | 'pr.closed'
+  | 'pr.head'
+  | 'pr.review'
+  | 'pr.comment'
+  | 'pr.stopped'
+  | 'github.unavailable'
+  | 'github.recovered';
 
 interface WorkspacePanelSummary {
   panelId: string;
@@ -924,6 +931,7 @@ interface WorkspaceStateResult {
 }
 
 interface WorkspaceWaitResult extends WorkspaceStateResult {
+  activityGeneration?: number;
   timedOut: boolean;
   dropped?: number;
   reset?: { reason: 'first-use' | 'epoch-changed' | 'cursor-truncated' | 'unknown-consumer' };
@@ -1759,6 +1767,13 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pr.conflicted',
   'pr.checks',
   'pr.merged',
+  'pr.closed',
+  'pr.head',
+  'pr.review',
+  'pr.comment',
+  'pr.stopped',
+  'github.unavailable',
+  'github.recovered',
   'agent.report',
 );
 const agentStateSchema = boundary.enumeration('blocked', 'working', 'idle', 'unknown');
@@ -1810,6 +1825,7 @@ export const workspaceStateResultSchema: BoundarySchema<WorkspaceStateResult> = 
   entries: boundary.array(workspaceEntrySchema),
 });
 const workspaceWaitResultSchema: BoundarySchema<WorkspaceWaitResult> = boundary.object({
+  activityGeneration: boundary.optional(boundary.number),
   ok: boundary.literal(true),
   epoch: boundary.string,
   generation: boundary.number,
@@ -2184,24 +2200,33 @@ export async function runWorkspaceState(parsed: ParsedArgs): Promise<number> {
   return 0;
 }
 
+export async function runPrWatchCommand(parsed: ParsedArgs): Promise<number> {
+  const action = parsed.command.split(' ')[1];
+  const paneId = parsed.paneId ?? process.env.PANE_SESSION_ID;
+  if (action !== 'list' && (!paneId || !parsed.url)) throw new Error('Pass --pane <id> and --url <PR URL> (inside a Pane, --pane defaults to this Pane).');
+  const result = await invokeDaemon(`runpane:pr:${action}`, [{ paneId, url: parsed.url, head: parsed.reportHead }], boundary.jsonObject, { paneDir: parsed.paneDir });
+  printJson(result);
+  return 0;
+}
+
 export async function runWatch(parsed: ParsedArgs): Promise<number> {
   if (parsed.watchAs && parsed.watchSince !== undefined) {
     throw new Error('runpane watch accepts either --as or --since, not both.');
   }
-  const defaults = RUNPANE_CONTRACT.defaults.watch;
+  const defaults = RUNPANE_CONTRACT.defaults.watch.follow;
   const format: WatchFormat = parsed.watchFormat ?? (parsed.json ? 'json' : 'lines');
   // --until-event takes --follow's scope defaults; it only stops after the first event.
   const keepsWaiting = parsed.follow || parsed.untilEvent;
   const heartbeatMs = effectiveWatchHeartbeatMs(
-    parsed.heartbeatSeconds ?? (parsed.follow ? defaults.heartbeatSeconds : 0),
+    parsed.heartbeatSeconds ?? 0,
   );
-  const idleAfterMs = parsed.idleAfterMs ?? (keepsWaiting ? defaults.idleAfterMs : 0);
+  const idleAfterMs = parsed.idleAfterMs ?? 0;
   const effectiveAgentsOnly = parsed.includeShells
     ? undefined
     : parsed.agentsOnly || keepsWaiting ? true : undefined;
   const includeHeldInput = parsed.includeHeldInput && !parsed.noHeldInput ? true : undefined;
   // Lines mode turns presence into STUCK; JSON mode passes heldInputPresent through as the equivalent.
-  const includeHeldInputPresence = defaults.includeHeldInputPresence
+  const includeHeldInputPresence = defaults.heldInputDetection
     && !parsed.noHeldInput && keepsWaiting ? true : undefined;
   const cadenceValueFlagPresent = hasCadenceValueFlag(parsed);
   const ownPanelId = process.env.PANE_PANEL_ID?.trim() || undefined;
@@ -2216,13 +2241,13 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
     : undefined;
   const watchAs = parsed.watchAs
     ?? (parsed.untilEvent ? untilEventCursor : undefined)
-    ?? (parsed.follow ? sessionCursor || panelCursor || (cadenceValueFlagPresent ? `follow-${process.pid}` : undefined) : undefined);
+    ?? (parsed.follow && parsed.watchSince === undefined ? sessionCursor || panelCursor || (cadenceValueFlagPresent ? `follow-${process.pid}` : undefined) : undefined);
   // Under --until-event, --timeout-ms is the deadline for the whole wait, not for one daemon call.
   const deadlineAt = parsed.untilEvent && parsed.timeoutMs !== undefined ? Date.now() + parsed.timeoutMs : undefined;
   exitWhenReaderCloses();
-  // --quiet drops lines that only prove liveness; --self-test still prints its WATCH OK result.
+  // Follow prints WATCH OK once as proof it is armed.
   const emitControlLine = (line: string): void => {
-    if (!parsed.quiet) emitWatchLine(line);
+    emitWatchLine(line);
   };
   const request = {
     as: watchAs,
@@ -2245,7 +2270,7 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
     settleMs: parsed.settleMs,
     blockedSettleMs: parsed.blockedSettleMs,
     minIntervalMs: parsed.minIntervalMs,
-    idleBackoff: parsed.idleBackoff || undefined,
+    idleBackoff: parsed.idleBackoff,
   };
 
   let armed = false;
@@ -2253,7 +2278,16 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
   let lastFailureAt = 0;
   let lastHeartbeatAt = Date.now();
   let anonymousIdleWindowStartMs = !watchAs && keepsWaiting ? 0 : undefined;
+  // --expire-after: IDLE re-fires and control lines don't count as activity.
+  const expireAfterMs = parsed.follow && parsed.expireAfterMs ? parsed.expireAfterMs : undefined;
+  let lastActivityAt = Date.now();
+  let lastActivityGeneration: number | undefined;
   do {
+    if (expireAfterMs !== undefined && Date.now() - lastActivityAt >= expireAfterMs) {
+      if (failingCode) return 1;
+      emitWatchLine(formatNonEntry('_expired', { expireAfterMs }, format));
+      return 0;
+    }
     if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
       emitControlLine(formatNonEntry('_timeout', { timeoutMs: parsed.timeoutMs }, format));
       return 124;
@@ -2264,7 +2298,8 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
     const heartbeatWaitMs = heartbeatMs > 0
       ? Math.max(0, heartbeatMs - (Date.now() - lastHeartbeatAt))
       : requestedWaitMs;
-    const timeoutMs = parsed.selfTest ? 0 : Math.min(requestedWaitMs, heartbeatWaitMs, 120_000);
+    const expiryWaitMs = expireAfterMs !== undefined ? Math.max(0, expireAfterMs - (Date.now() - lastActivityAt)) : requestedWaitMs;
+    const timeoutMs = parsed.selfTest ? 0 : Math.min(requestedWaitMs, heartbeatWaitMs, expiryWaitMs, 120_000);
     try {
       const callRequest = parsed.selfTest
         ? { ...request, as: undefined, since: undefined, from: 'now' as const, idleAfterMs: 0, timeoutMs: 0 }
@@ -2274,6 +2309,10 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
         timeoutMs: timeoutMs + 5_000,
         eventInclude: [],
       });
+      if (result.activityGeneration !== undefined) {
+        if (lastActivityGeneration !== undefined && result.activityGeneration > lastActivityGeneration) lastActivityAt = Date.now();
+        lastActivityGeneration = result.activityGeneration;
+      }
       if (request.session && !result.session) {
         // An older daemon ignores the unknown field and would watch every Pane instead.
         throw new Error('This Pane daemon does not support runpane watch --session; update Pane, or pass one --pane per Session Pane.');
@@ -2284,8 +2323,9 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
       }
       if (!armed && (keepsWaiting || parsed.selfTest)) {
         const okLine = formatNonEntry('_ok', { generation: result.generation, epoch: result.epoch }, format);
-        if (parsed.selfTest) emitWatchLine(okLine);
-        else emitControlLine(okLine);
+        // A follow monitor sees WATCH OK as proof it is armed; --until-event prints only its event.
+        if (parsed.follow || parsed.selfTest) emitWatchLine(okLine);
+
         armed = true;
         if (parsed.selfTest) return 0;
       }
@@ -2302,6 +2342,7 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
         }
       } else {
         for (const line of formatWaitResult(result, format)) emitWatchLine(line);
+        if (result.entries.some(entry => entry.kind !== 'agent.idle' && !entry.replay && !entry.baseline)) lastActivityAt = Date.now();
       }
       if (heartbeatMs > 0 && Date.now() - lastHeartbeatAt >= heartbeatMs) {
         emitControlLine(formatNonEntry('_heartbeat', {
@@ -3551,6 +3592,13 @@ function workspaceLabel(kind: WorkspaceEntryKind): string {
     'pr.conflicted': 'PR CONFLICTED',
     'pr.checks': 'PR CHECKS',
     'pr.merged': 'PR MERGED',
+    'pr.closed': 'PR.CLOSED',
+    'pr.head': 'PR.HEAD',
+    'pr.review': 'PR.REVIEW',
+    'pr.comment': 'PR.COMMENT',
+    'pr.stopped': 'PR.STOPPED',
+    'github.unavailable': 'GITHUB.UNAVAILABLE',
+    'github.recovered': 'GITHUB.RECOVERED',
     'agent.report': 'REPORT',
   } satisfies Record<WorkspaceEntryKind, string>;
   return labels[kind];

@@ -286,11 +286,11 @@ run this as a background task. It exits with the event's line; act on it, then
 run it again. The named cursor means nothing is missed between runs:
 
 ```bash
-runpane watch --pane <pane-id> --as <your-name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone
+runpane watch --pane <pane-id> --as <your-name> --until-event --json --kinds agent.report,agent.blocked,panel.exited,pane.gone
 ```
 
 Never pipe `runpane watch --follow` into `grep -m1` or `head` to wait:
-`--follow` never exits on its own. The worker's `runpane report` output says
+`--follow` streams until quiet expiry; `--until-event` ends on news. The worker's `runpane report` output says
 whether anyone received it (`Delivered to 1 waiting watcher.`).
 
 - Treat a REPORT as the completion signal. Read the whole report (state, PR,
@@ -333,3 +333,34 @@ PR state GitHub can't confirm (`pr-status-unknown`), and gives every other
 kept Pane a `skipped.code` with the next step. Adopted worktrees are kept unless
 you add `--remove-worktree`. Local branches are always kept. Never add
 `--force` to discard work without the user's approval.
+
+### Watching a PR from any Pane
+
+```bash
+runpane pr watch --pane <pane-id> --url https://github.com/owner/repo/pull/123 --head <full-sha> --json
+runpane watch --pane <pane-id> --since <generation-returned-above> --until-event --json --kinds pr.checks,pr.conflicted,pr.head,pr.review,pr.comment,pr.closed,pr.merged,pr.stopped,github.unavailable,github.recovered
+runpane pr list --pane <pane-id> --json
+runpane pr unwatch --pane <pane-id> --url https://github.com/owner/repo/pull/123 --json
+```
+
+Inside a Pane, registration defaults to its `PANE_SESSION_ID`. Keep the last
+printed event's generation for the next wait. Registration uses the full
+host/repository/number identity. It pins success to `--head`, or the first
+observed head; a new head emits `pr.head` and needs a fresh registration before
+success can be reported. Read existing discussions before arming. A wake
+means inspect the change; it never authorizes merging.
+
+The daemon batches up to 25 fingerprints per host every two minutes (plus up
+to ten seconds of jitter), reads details on changes and at a 30-minute
+backstop, and keeps 10% of GitHub quota for interactive work. It uses `gh auth
+token` for cached authentication and direct GraphQL for reads. Session PR
+branch discovery still uses Pane's existing `gh pr list` lookup.
+
+Failures emit immediately, even while other checks run. Success requires a
+complete, nonempty set of checks on the pinned head and all required checks
+passing (all checks when none are marked required). BLOCKED/UNKNOWN merge
+status conservatively withholds success, including when reviews are missing.
+Comments/reviews from the authenticated account are excluded. Merge/close,
+eight non-rate-limit failures, or ten comment-only updates stop registration;
+archiving/deleting the Pane removes it. Rate limits pause instead of consuming
+the failure budget. Outages and recovery are journal events.

@@ -20,6 +20,7 @@ interface WatchEntry {
   sessionId?: string;
   pr?: { number: number };
   checks?: string;
+  reason?: string | null;
   failingChecks?: string[];
   idleMs?: number;
   idleCount?: number;
@@ -78,6 +79,13 @@ function formatEntryLine(entry: WatchEntry): string | undefined {
     case 'pr.conflicted': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} CONFLICTED`;
     case 'pr.checks': return formatChecksLine(`PR ${name} ${pane} #${entry.pr?.number ?? '?'}`, entry);
     case 'pr.merged': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} MERGED`;
+    case 'pr.closed': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} CLOSED${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
+    case 'pr.head': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} HEAD CHANGED${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
+    case 'pr.review': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} REVIEW${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
+    case 'pr.comment': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} COMMENT${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
+    case 'pr.stopped': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} WATCH STOPPED${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
+    case 'github.unavailable': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} GITHUB UNAVAILABLE${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
+    case 'github.recovered': return `PR ${name} ${pane} #${entry.pr?.number ?? '?'} GITHUB RECOVERED${entry.reason ? ': ' + sanitizeName(entry.reason) : ''}`;
     case 'agent.report': return `REPORT ${name} ${pane}${panel} ${entry.report ? describeReport(entry.report) : 'unknown'}`;
     default: return `UNKNOWN ${name} ${pane}${panel}`;
   }
@@ -129,7 +137,7 @@ export function formatWaitResult(result: WatchResult, format: WatchFormat): stri
 }
 
 export function formatNonEntry(
-  kind: '_ok' | '_heartbeat' | '_error' | '_reconnected' | '_timeout',
+  kind: '_ok' | '_heartbeat' | '_error' | '_reconnected' | '_timeout' | '_expired',
   fields: Record<string, string | number | undefined>,
   format: WatchFormat,
 ): string {
@@ -138,5 +146,6 @@ export function formatNonEntry(
   if (kind === '_heartbeat') return `HEARTBEAT gen ${fields.generation} at ${fields.at}`;
   if (kind === '_reconnected') return `WATCH RECONNECTED gen ${fields.generation}`;
   if (kind === '_timeout') return `WATCH TIMEOUT after ${fields.timeoutMs}ms`;
+  if (kind === '_expired') return `WATCH EXPIRED after ${fields.expireAfterMs}ms quiet`;
   return `WATCH ERROR ${sanitizeName(String(fields.code))}: ${sanitizeName(String(fields.message))}`;
 }

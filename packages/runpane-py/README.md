@@ -115,79 +115,79 @@ runpane watch --self-test
 runpane watch --follow
 ```
 
-The defaults are responsive: no settle, no batching, all event kinds, `IDLE`
-every 10 minutes. Panes and shell users see every event immediately.
+`--follow` uses the unattended profile: READY settles for 3 minutes, BLOCKED
+for 30 seconds, and non-urgent events batch every 10 minutes. IDLE starts at
+10 minutes and backs off to 30 minutes, 1 hour, 3 hours, then daily. Heartbeats
+are off. WATCH OK prints once when armed; WATCH EXPIRED and exit 0 end a watch
+after 3 quiet hours. Meaningful events reset expiry; IDLE and replay do not.
 
-A consumer that pays for every line (an orchestrator that re-reads its whole
-context per wake-up) opts into cadence shaping instead. This is the recommended
-orchestrator invocation, budgeted at about 6 wake-ups per active pane per hour
-worst case, usually 1 to 3:
-
-```bash
-runpane watch --self-test
-runpane watch --follow --quiet --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff
-```
-
-When someone is waiting on the result, use the user-present profile instead:
-`--settle 60000 --blocked-settle 15000 --min-interval 120000` with no
-`--idle-backoff`, so `READY` arrives within about 3 minutes rather than 13.
-
-A Session orchestrator watches its whole Session with one command instead of
-one `--pane` per Pane. The daemon re-reads the Session's Panes on every read,
-so `sessions associate` and `sessions detach` need no re-arm, and `JOINED` and
-`LEFT` (`pane.associated`, `pane.detached`) report the change. For Session
-members with an open PR, the daemon also polls GitHub about every 3 minutes
-and reports `PR <pane-name> pane <pane-id> #<number> CONFLICTED`, `CHECKS
-PASSED` or `CHECKS FAILED <names>`, and `MERGED` (`pr.conflicted`,
-`pr.checks`, `pr.merged`) on transitions only. The cursor defaults to
-`session-<uuid>`:
+Use `--present` or `--profile present` when someone is waiting: READY settles
+for 1 minute, BLOCKED for 15 seconds, batches every 2 minutes, and IDLE does
+not back off. `--profile unattended` explicitly selects the default. Duration
+overrides accept `30s`, `3m`, `3h`, or `0`: `--ready-settle`, `--blocked-settle`,
+`--min-interval`, `--idle-after`, `--expire-after`, and `--heartbeat`.
+`--expire-after 0` disables natural expiry. Bare values retain milliseconds,
+except heartbeat's legacy seconds. `--json` selects NDJSON; otherwise lines.
 
 ```bash
-runpane watch --session <session-id> --follow --quiet --json --kinds agent.ready,agent.blocked,agent.idle,panel.exited,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged --settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff
+runpane watch --session <session-id> --follow --json
+runpane watch --session <session-id> --follow --profile present --json
+runpane watch --pane <pane-id> --until-event --json
 ```
 
-After a `RESET`, JSON baseline entries carry `replay: true`. They restate
-current state, so a replayed `agent.ready` is never `READY`.
+Session membership changes need no re-arm. Named cursors survive daemon
+restarts; the journal and PR baselines are saved together. RESET/DROPPED mean
+refresh the overview; replayed baseline entries never mean a new READY.
+`--until-event` waits for REPORT, BLOCKED, EXIT or GONE by default and exits 0
+when one arrives. Override `--kinds` for PR events. Its `--timeout-ms` is a
+total deadline (exit 124); under follow it bounds each daemon request.
 
-- `--kinds` drops `agent.busy`; `BUSY` carries no action.
-- `--settle <ms>` emits `READY` only after the panel stays idle that long. A
-  `BUSY` inside the window cancels it silently, which removes the idle/working
-  flips a pane makes while it waits on subagents.
-- `--blocked-settle <ms>` does the same for `BLOCKED`, so a prompt answered in
-  the pane within seconds wakes nobody.
-- `--min-interval <ms>` holds non-urgent lines and flushes them together at
-  most once per interval. `BLOCKED` bypasses it.
-- `--idle-backoff` fires `IDLE` at `--idle-after`, then 30m, 1h, 3h, then
-  daily, and resets on any activity.
+REPORT remains the completion signal: workers use `runpane report --state
+ready|blocked|failed|done --summary-file <path>`, adding a PR/head and a question
+when blocked. READY alone is activity evidence. Read the full report with
+`runpane agents status --panel <id> --json`. Resume stopped workers in the same
+panel with `runpane panels resume --panel <id> --wait-ready --yes --json`.
 
-These flags require `--follow`. Pane Chat arms them automatically through its
-pane-orchestrator skill, so you only need them for your own scripts. Pass
-`--quiet` to any monitor that wakes an agent: it drops `WATCH OK`, `HEARTBEAT`,
-and `WATCH RECONNECTED` (`_ok`, `_heartbeat`, `_reconnected` in JSON), while
-`WATCH ERROR`, `RESET`, and `DROPPED` always print. Judge a dead watch by a
-non-zero exit or a `WATCH ERROR` line, not by silence. `runpane agent-context
---command watch --json` lists every flag with its default.
+Do not pipe follow through `head` or `grep -m1` to wait. Run `--until-event` as
+a supported background task, act on its events, then re-arm with its cursor.
+Never sleep-poll your own background task output. WATCH ERROR/nonzero exit
+means failure: report it and re-arm once. A superseded cursor means keep the
+replacement. A normal expiry means re-arm with the next dispatch.
 
-Workers can hand back a structured report with `runpane report --state
-ready|blocked|failed|done [--pr <n>] [--head <sha>] [--summary-file <path>]
-[--question <text>]`. Watchers receive it as `agent.report`
-(`REPORT <pane> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`) only
-when `--kinds` lists it (or they watch a Session), from any panel, and it skips
-the `--min-interval` batch. The command prints how many watches were waiting
-and received it (`Delivered to 1 waiting watcher.`).
-
-`--follow` never exits on its own, so don't pipe it into `grep -m1` or `head`
-to wait. A harness that wakes an agent when a process exits (Claude Code
-background Bash, Codex) waits with `--until-event`, which exits 0 on the first
-matching event, and runs it again after acting on it:
+### Watching a PR from any Pane
 
 ```bash
-runpane watch --as <name> --until-event --quiet --json --kinds agent.report,agent.blocked,panel.exited,pane.gone
+runpane pr watch --pane <pane-id> --url https://github.com/owner/repo/pull/123 --head <full-sha> --json
+runpane watch --pane <pane-id> --since <generation-returned-above> --until-event --json --kinds pr.checks,pr.conflicted,pr.head,pr.review,pr.comment,pr.closed,pr.merged,pr.stopped,github.unavailable,github.recovered
+runpane pr list --pane <pane-id> --json
+runpane pr unwatch --pane <pane-id> --url https://github.com/owner/repo/pull/123 --json
 ```
 
-`--timeout-ms` is then the total deadline (exit 124, `WATCH TIMEOUT`).
-`runpane panels last-message --panel <panel-id>` reads an agent's last reply
-from its transcript.
+Inside a Pane, registration defaults to its `PANE_SESSION_ID`. Keep the last
+printed event's generation for the next wait. Registration uses the full
+host/repository/number identity. It pins success to `--head`, or the first
+observed head; a new head emits `pr.head` and needs a fresh registration before
+success can be reported. Read existing discussions before arming. A wake
+means inspect the change; it never authorizes merging.
+
+The daemon batches up to 25 fingerprints per host every two minutes (plus up
+to ten seconds of jitter), reads details on changes and at a 30-minute
+backstop, and keeps 10% of GitHub quota for interactive work. It uses `gh auth
+token` for cached authentication and direct GraphQL for reads. Session PR
+branch discovery still uses Pane's existing `gh pr list` lookup.
+
+Failures emit immediately, even while other checks run. Success requires a
+complete, nonempty set of checks on the pinned head and all required checks
+passing (all checks when none are marked required). BLOCKED/UNKNOWN merge
+status conservatively withholds success, including when reviews are missing.
+Comments/reviews from the authenticated account are excluded. Merge/close,
+eight non-rate-limit failures, or ten comment-only updates stop registration;
+archiving/deleting the Pane removes it. Rate limits pause instead of consuming
+the failure budget. Outages and recovery are journal events.
+
+Removed flags fail with replacement guidance: `--settle` became
+`--ready-settle`; `--format` became `--json`; all-managed/agents-only,
+quiet/no-control-lines, and idle-backoff are covered by defaults or profiles.
 
 ## Attribution
 

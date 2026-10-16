@@ -76,6 +76,8 @@ export interface ParsedArgs {
   watchExcludePaneIds?: string[];
   nameContains?: string;
   follow?: boolean;
+  present?: boolean;
+  watchProfile?: 'unattended' | 'present';
   /** Watch only: wait across daemon calls for the first matching event, print it, and exit 0. */
   untilEvent?: boolean;
   agentsOnly?: boolean;
@@ -88,6 +90,8 @@ export interface ParsedArgs {
   blockedSettleMs?: number;
   minIntervalMs?: number;
   idleBackoff?: boolean;
+  /** Watch --follow only: exit after this long with no events but IDLE. */
+  expireAfterMs?: number;
   allManaged?: boolean;
   allStopped?: boolean;
   includeShells?: boolean;
@@ -243,6 +247,13 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
 
   Object.assign(parsed, workspaceArgs, workspaceMachine ? { workspaceMachine } : {});
   args.unshift(...leadingPaneDirArgs);
+  if (parsed.command === 'watch') {
+    const removed = new Map(Object.entries({ '--settle': '--ready-settle', '--format': '--json (or omit for lines)', '--agents-only': '--include-shells to include shells; agents are the default', '--all-managed': 'omit it; all managed Panes are the default', '--quiet': 'omit it; heartbeats are off by default', '--no-control-lines': 'omit it; WATCH OK and errors always print', '--idle-backoff': 'omit it; backoff is the unattended default' }));
+    for (const token of args) {
+      const flag = token.split('=')[0];
+      if (removed.get(flag)) throw new Error(`${flag} was removed from runpane watch. Use ${removed.get(flag)}.`);
+    }
+  }
   parseFlags(args, parsed);
   if (parsed.command === 'watch' && parsed.follow && parsed.timeoutMs === 0) {
     throw new Error('--timeout-ms must be greater than 0 with --follow.');
@@ -264,14 +275,50 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
     throw new Error('runpane watch accepts either --json or --format lines, not both.');
   }
   const cadenceValueFlagPresent = hasCadenceValueFlag(parsed);
-  if (parsed.command === 'watch' && !parsed.follow && (cadenceValueFlagPresent || parsed.idleBackoff)) {
-    throw new Error('--settle, --blocked-settle, --min-interval, and --idle-backoff require --follow.');
+  if (parsed.command === 'watch' && !parsed.follow && (cadenceValueFlagPresent || parsed.present || parsed.watchProfile || parsed.expireAfterMs !== undefined)) {
+    throw new Error('--ready-settle, --blocked-settle, --min-interval, --profile, --present, and --expire-after require --follow.');
   }
   if (parsed.command === 'watch' && parsed.watchSince !== undefined && cadenceValueFlagPresent) {
-    throw new Error('runpane watch accepts either --since or --settle/--blocked-settle/--min-interval, not both (cadence needs a named cursor).');
+    throw new Error('runpane watch accepts either --since or --ready-settle/--blocked-settle/--min-interval, not both (cadence needs a named cursor).');
   }
+  if (parsed.command === 'watch') applyWatchDefaults(parsed);
   if (parsed.command === 'report') validateReportArgs(parsed);
   return parsed;
+}
+
+/** Bare values preserve the old millisecond convention (heartbeat: seconds). */
+function parseWatchDuration(flag: string, value: string, bareUnit = 1): number {
+  if (value === 'off') return 0;
+  const match = /^(\d+)(ms|s|m|h)?$/u.exec(value);
+  const units = new Map(Object.entries({ ms: 1, s: 1000, m: 60000, h: 3600000 }));
+  const duration = match ? Number(match[1]) * (match[2] ? (units.get(match[2]) ?? bareUnit) : bareUnit) : NaN;
+  if (!Number.isSafeInteger(duration) || duration < 0 || duration > 2147483647) {
+    throw new Error(`${flag} must be a duration such as 30s, 3m, 3h, or 0 (at most 2147483647ms).`);
+  }
+  return duration;
+}
+
+function applyWatchDefaults(parsed: ParsedArgs): void {
+  const defaults = RUNPANE_CONTRACT.defaults.watch;
+  if (parsed.untilEvent) parsed.watchKinds ??= [...defaults.untilEvent.kinds];
+  if (!parsed.follow) return;
+  if (parsed.present && parsed.watchProfile === 'unattended') throw new Error('--present conflicts with --profile unattended.');
+  const follow = parsed.present || parsed.watchProfile === 'present' ? { ...defaults.follow, ...defaults.present } : defaults.follow;
+  parsed.watchKinds ??= [...follow.kinds];
+  parsed.settleMs ??= parseWatchDuration('--ready-settle', follow.readySettle);
+  parsed.blockedSettleMs ??= parseWatchDuration('--blocked-settle', follow.blockedSettle);
+  parsed.minIntervalMs ??= parseWatchDuration('--min-interval', follow.minInterval);
+  parsed.idleAfterMs ??= parseWatchDuration('--idle-after', follow.idleAfter);
+  parsed.expireAfterMs ??= parseWatchDuration('--expire-after', follow.expireAfter);
+  parsed.heartbeatSeconds ??= parseWatchDuration('--heartbeat', follow.heartbeat) / 1000;
+  parsed.idleBackoff = follow.idleBackoff;
+  // Numeric --since has no durable cadence state; keep it an immediate replay.
+  if (parsed.watchSince !== undefined) {
+    parsed.settleMs = 0;
+    parsed.blockedSettleMs = 0;
+    parsed.minIntervalMs = 0;
+    parsed.idleBackoff = false;
+  }
 }
 
 function validateUntilEventArgs(parsed: ParsedArgs): void {
@@ -522,6 +569,10 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
   }
   if (flag === '--as-file-pointer') {
     parsed.asFilePointer = true;
+    return;
+  }
+  if (flag === '--present') {
+    parsed.present = true;
     return;
   }
   if (flag === '--follow') {
@@ -817,24 +868,33 @@ function parseLocalValueFlag(flag: string, value: string, parsed: ParsedArgs): v
     parsed.format = decodeBoundary(value, formatSchema);
     return;
   }
+  if (flag === '--profile') {
+    if (value !== 'unattended' && value !== 'present') throw new Error('--profile must be unattended or present.');
+    parsed.watchProfile = value;
+    return;
+  }
   if (flag === '--heartbeat') {
-    parsed.heartbeatSeconds = parseNonNegativeIntegerFlag(flag, value);
+    parsed.heartbeatSeconds = parseWatchDuration(flag, value, 1000) / 1000;
+    return;
+  }
+  if (flag === '--expire-after') {
+    parsed.expireAfterMs = parseWatchDuration(flag, value);
     return;
   }
   if (flag === '--idle-after') {
-    parsed.idleAfterMs = parseNonNegativeIntegerFlag(flag, value);
+    parsed.idleAfterMs = parseWatchDuration(flag, value);
     return;
   }
-  if (flag === '--settle') {
-    parsed.settleMs = parseNonNegativeIntegerFlag(flag, value);
+  if (flag === '--ready-settle') {
+    parsed.settleMs = parseWatchDuration(flag, value);
     return;
   }
   if (flag === '--blocked-settle') {
-    parsed.blockedSettleMs = parseNonNegativeIntegerFlag(flag, value);
+    parsed.blockedSettleMs = parseWatchDuration(flag, value);
     return;
   }
   if (flag === '--min-interval') {
-    parsed.minIntervalMs = parseNonNegativeIntegerFlag(flag, value);
+    parsed.minIntervalMs = parseWatchDuration(flag, value);
     return;
   }
   if (flag === '--body-file') {

@@ -83,27 +83,25 @@
       "--from",
       "earliest",
       "--follow",
-      "--format",
-      "lines",
       "--heartbeat",
-      "60",
+      "60s",
       "--idle-after",
       "600000",
-      "--settle",
+      "--ready-settle",
       "180000",
       "--blocked-settle",
       "30000",
       "--min-interval",
       "600000",
-      "--idle-backoff",
-      "--all-managed",
-      "--agents-only",
+      "--expire-after",
+      "10800000",
       "--exclude-pane",
       "pane-old",
       "--kinds",
       "agent.ready,agent.idle",
       "--include-held-input",
-      "--self-test"
+      "--self-test",
+      "--present"
     ],
     [
       "daemon",
@@ -512,27 +510,23 @@
     [
       "watch",
       "--follow",
-      "--quiet",
       "--json",
       "--pane-dir",
       "/tmp/pane"
     ],
     [
       "watch",
-      "--follow",
-      "--no-control-lines",
-      "--all-managed"
+      "--follow"
     ],
     [
       "watch",
       "--session",
       "__orchestration_session_1b4e28ba-2fa1-11d2-883f-0016d3cca427__",
       "--follow",
-      "--quiet",
       "--json",
       "--kinds",
       "agent.ready,agent.blocked,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged",
-      "--settle",
+      "--ready-settle",
       "180000"
     ],
     [
@@ -859,12 +853,49 @@
       "--as",
       "orch",
       "--until-event",
-      "--quiet",
       "--json",
       "--kinds",
       "agent.report,agent.blocked,panel.exited,pane.gone",
       "--timeout-ms",
       "600000"
+    ],
+    [
+      "pr",
+      "watch",
+      "--pane",
+      "worker",
+      "--url",
+      "https://github.com/acme/app/pull/7"
+    ],
+    [
+      "pr",
+      "unwatch",
+      "--pane",
+      "worker",
+      "--url",
+      "https://github.com/acme/app/pull/7"
+    ],
+    [
+      "pr",
+      "list",
+      "--pane",
+      "worker"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--profile",
+      "present",
+      "--ready-settle",
+      "5s",
+      "--expire-after",
+      "0"
+    ],
+    [
+      "watch",
+      "--follow",
+      "--profile",
+      "unattended"
     ]
   ],
   "help": {
