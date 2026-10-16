@@ -1,0 +1,45 @@
+const assert = require('node:assert/strict');
+const { parseRunpaneArgs } = require('../packages/runpane/dist/commands.js');
+const follow = parseRunpaneArgs(['watch', '--follow']);
+assert.equal(follow.settleMs, 180000);
+assert.equal(follow.blockedSettleMs, 30000);
+assert.equal(follow.minIntervalMs, 600000);
+assert.equal(follow.expireAfterMs, 10800000);
+assert.equal(follow.heartbeatSeconds, 0);
+assert.equal(follow.idleBackoff, true);
+assert.ok(follow.watchKinds.includes('agent.report'));
+const present = parseRunpaneArgs(['watch', '--follow', '--profile', 'present', '--ready-settle', '5s', '--expire-after', '0']);
+assert.equal(present.settleMs, 5000);
+assert.equal(present.blockedSettleMs, 15000);
+assert.equal(present.minIntervalMs, 120000);
+assert.equal(present.idleBackoff, false);
+assert.equal(present.expireAfterMs, 0);
+assert.deepEqual(parseRunpaneArgs(['watch', '--until-event']).watchKinds, ['agent.report', 'agent.blocked', 'panel.exited', 'pane.gone']);
+assert.throws(() => parseRunpaneArgs(['watch', '--profile', 'present']), /require.*--follow/);
+assert.equal(parseRunpaneArgs(['watch', '--until-event', '--timeout-ms', '30s']).timeoutMs, 30000);
+assert.equal(parseRunpaneArgs(['watch', '--timeout-ms', 'off']).timeoutMs, 0);
+assert.throws(() => parseRunpaneArgs(['watch', '--until-event', '--timeout-ms', 'off']), /greater than 0/);
+console.log('watch defaults passed');
+
+assert.throws(() => parseRunpaneArgs(['watch', '--epoch', 'e']), /requires --since/);
+assert.throws(() => parseRunpaneArgs(['watch', '--as', 'x', '--since', '0', '--epoch', 'e']), /cannot be combined with --as/);
+assert.throws(() => parseRunpaneArgs(['watch', '--until-event', '--profile', 'present']), /require.*--follow/);
+assert.throws(() => parseRunpaneArgs(['watch', '--follow', '--profile', 'invalid']), /must be unattended or present/);
+assert.equal(parseRunpaneArgs(['watch', '--follow', '--profile', 'unattended', '--ready-settle', '1s']).settleMs, 1000);
+assert.equal(parseRunpaneArgs(['watch', '--until-event', '--since', '1', '--epoch', 'e']).settleMs, undefined);
+
+// Explicit --present wins over either profile, independently of ordering;
+// per-setting overrides still win even when they precede the preset flags.
+for (const profile of ['unattended', 'present']) {
+  for (const flags of [['--present', '--profile', profile], ['--profile', profile, '--present']]) {
+    const selected = parseRunpaneArgs(['watch', '--follow', '--ready-settle', '5s', ...flags, '--expire-after', 'off']);
+    assert.equal(selected.settleMs, 5000);
+    assert.equal(selected.blockedSettleMs, 15000);
+    assert.equal(selected.minIntervalMs, 120000);
+    assert.equal(selected.idleBackoff, false);
+    assert.equal(selected.expireAfterMs, 0);
+  }
+}
+assert.equal(parseRunpaneArgs(['watch', '--follow', '--present']).settleMs, 60000);
+assert.throws(() => parseRunpaneArgs(['watch', '--present']), /require.*--follow/);
+assert.throws(() => parseRunpaneArgs(['watch', '--until-event', '--present']), /require.*--follow/);

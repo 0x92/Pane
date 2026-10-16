@@ -1572,6 +1572,20 @@ export function registerRunpaneHandlers(
     }, result => ({ paneId: result.paneId, panelId: result.panelId, ok: result.ok }));
   });
 
+  for (const action of ['watch', 'unwatch', 'list'] as const) {
+    commandRegistry.register(`runpane:pr:${action}`, async (request: PaneCommandValue = {}) => {
+      const input = decodeBoundary(request, boundary.object({
+        paneId: boundary.optional(boundary.string), url: boundary.optional(boundary.string), head: boundary.optional(boundary.string),
+      }));
+      const monitor = services.sessionPrMonitor;
+      if (!monitor) throw new PaneError('ERR_PR_WATCH_UNAVAILABLE', 'PR watching is unavailable in this daemon. Nothing was changed.', 'Update Pane and retry.');
+      if (action === 'list') return { ok: true, watches: monitor.list(input.paneId) };
+      if (!input.paneId || !input.url) throw new PaneError('ERR_PR_WATCH_ARGUMENT', 'PR watch needs a Pane and PR URL. Nothing was changed.', 'Pass --pane <id> --url https://github.com/owner/repo/pull/123.');
+      if (action === 'unwatch') return { ok: true, removed: monitor.unwatch(input.paneId, input.url) };
+      return { ok: true, ...monitor.watch(input.paneId, input.url, input.head) };
+    });
+  }
+
   commandRegistry.register('runpane:workspace:state', async (request: PaneCommandValue = {}): Promise<RunpaneWorkspaceStateResult> => {
     return withRunpaneAction(services, 'workspace:state', {}, () => {
       const normalized = parsePaneListRequest(request);
@@ -1658,6 +1672,10 @@ export function registerRunpaneHandlers(
           }
         }
 
+        if (normalized.epoch !== undefined && normalized.epoch !== workspaceJournal.epoch) {
+          reset = { reason: 'epoch-changed' };
+        }
+
         if (reset) {
           const silentBaseline = reset.reason === 'first-use' && normalized.from !== 'earliest';
           const baseline = silentBaseline ? [] : baselineEntries()
@@ -1667,12 +1685,13 @@ export function registerRunpaneHandlers(
           return {
             ok: true,
             epoch: workspaceJournal.epoch,
+            activityGeneration: workspaceJournal.activityGeneration(filter),
             generation: workspaceJournal.generation,
             entries,
             timedOut: false,
             reset,
             session,
-            nextCommand: workspaceNextCommand(normalized, workspaceJournal.generation, session),
+            nextCommand: workspaceNextCommand(normalized, workspaceJournal.generation, workspaceJournal.epoch, session),
           };
         }
 
@@ -1768,13 +1787,14 @@ export function registerRunpaneHandlers(
         return {
           ok: true,
           epoch: workspaceJournal.epoch,
+          activityGeneration: workspaceJournal.activityGeneration(filter),
           generation,
           entries,
           timedOut: entries.length === 0 && (cadence !== undefined || waited.timedOut),
           dropped: waited.dropped,
           reset,
           session,
-          nextCommand: workspaceNextCommand(normalized, generation, session),
+          nextCommand: workspaceNextCommand(normalized, generation, workspaceJournal.epoch, session),
         };
       } finally {
         lease.release();
@@ -4033,6 +4053,10 @@ function parseWorkspaceWaitRequest(value: PaneCommandValue): RunpaneWorkspaceWai
     throw new Error('Workspace wait as must contain 1-128 letters, numbers, dots, underscores, or hyphens');
   }
   const since = parseNonNegativeInteger(value.since, 'since');
+  const epoch = optionalString(value.epoch);
+  if (value.epoch !== undefined && (!epoch?.trim() || since === undefined || consumer)) {
+    throw new Error('Workspace wait epoch requires since and cannot be combined with as');
+  }
   if (consumer && since !== undefined) throw new Error('Workspace wait request cannot include both as and since');
   const session = optionalString(value.session)?.trim() || undefined;
   const paneIds = parseStringArray(value.paneIds, 'paneIds');
@@ -4045,6 +4069,7 @@ function parseWorkspaceWaitRequest(value: PaneCommandValue): RunpaneWorkspaceWai
 
   return {
     since,
+    epoch,
     as: consumer,
     from: value.from === 'earliest' ? 'earliest' : value.from === 'now' ? 'now' : undefined,
     timeoutMs: parseNonNegativeInteger(value.timeoutMs, 'timeoutMs'),
@@ -4083,6 +4108,13 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pr.conflicted',
   'pr.checks',
   'pr.merged',
+  'pr.closed',
+  'pr.head',
+  'pr.review',
+  'pr.comment',
+  'pr.stopped',
+  'github.unavailable',
+  'github.recovered',
   'agent.report',
 );
 
@@ -5741,9 +5773,10 @@ function workspaceCadenceOptions(
 function workspaceNextCommand(
   request: RunpaneWorkspaceWaitRequest,
   generation: number,
+  epoch: string,
   session: { id: string } | undefined,
 ): string {
-  const cursor = request.as ? `--as ${request.as}` : `--since ${generation}`;
+  const cursor = request.as ? `--as ${request.as}` : `--since ${generation} --epoch ${epoch}`;
   return `runpane watch ${cursor}${session ? ` --session ${session.id}` : ''}`;
 }
 

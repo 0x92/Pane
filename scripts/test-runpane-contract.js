@@ -239,7 +239,7 @@ print(json.dumps([format_workspace_entry_line(entry) for entry in json.loads(sys
   assert.deepStrictEqual(lines.formatWaitResult({ epoch: 'epoch-1', generation: 7, entries: [replayed] }, 'lines'), []);
   assert.deepStrictEqual(
     lines.formatWaitResult({ epoch: 'epoch-1', generation: 7, entries: [replayed] }, 'json').map(JSON.parse),
-    [replayed],
+    [{ ...replayed, epoch: 'epoch-1' }],
   );
   assert.deepStrictEqual(
     lines.formatWaitResult({
@@ -263,9 +263,9 @@ print(json.dumps([format_workspace_entry_line(entry) for entry in json.loads(sys
     'STUCK Issue 538 pane pane-1 panel panel-1 held-input-present',
   ]);
   const jsonLines = lines.formatWaitResult(result, 'json').map(JSON.parse);
-  assert.deepStrictEqual(jsonLines[0], { kind: '_reset', reason: 'cursor-truncated', epoch: 'epoch-1' });
-  assert.deepStrictEqual(jsonLines[1], { kind: '_dropped', count: 2 });
-  assert.deepStrictEqual(jsonLines[2], result.entries[0], 'JSON mode must preserve structured fields');
+  assert.deepStrictEqual(jsonLines[0], { kind: '_reset', reason: 'cursor-truncated', epoch: 'epoch-1', generation: result.generation });
+  assert.deepStrictEqual(jsonLines[1], { kind: '_dropped', count: 2, epoch: 'epoch-1', generation: result.generation });
+  assert.deepStrictEqual(jsonLines[2], { ...result.entries[0], epoch: result.epoch }, 'JSON mode must preserve structured fields');
   assert.strictEqual(lines.formatNonEntry('_ok', { generation: 7, epoch: 'epoch-1' }, 'lines'), 'WATCH OK gen 7 epoch epoch-1');
   assert.strictEqual(lines.formatNonEntry('_heartbeat', { generation: 7, at: 'T' }, 'lines'), 'HEARTBEAT gen 7 at T');
   assert.strictEqual(lines.formatNonEntry('_reconnected', { generation: 8 }, 'lines'), 'WATCH RECONNECTED gen 8');
@@ -375,7 +375,12 @@ async function withFakeDaemon(paneDir, onRequest, action, onFrame = () => {}) {
   return actionResult;
 }
 
-function runWatchCli(runtime, args, paneDir, until, timeoutMs = 8_000, extraEnv = {}) {
+/** Run watch until it exits by itself, for checking its exit code. */
+function runWatchToExit(runtime, args, paneDir, timeoutMs = 8_000) {
+  return runWatchCli(runtime, args, paneDir, () => false, timeoutMs, {}, true);
+}
+
+function runWatchCli(runtime, args, paneDir, until, timeoutMs = 8_000, extraEnv = {}, toExit = false) {
   const python = runtime === 'pip' ? findPython() : undefined;
   const command = runtime === 'npm' ? process.execPath : python;
   const commandArgs = runtime === 'npm' ? [npmCli, ...args] : ['-m', 'runpane', ...args];
@@ -411,7 +416,7 @@ function runWatchCli(runtime, args, paneDir, until, timeoutMs = 8_000, extraEnv 
     });
     child.once('close', (code, signal) => {
       clearTimeout(timer);
-      if (!matched && !until(stdout, stderr)) {
+      if (!toExit && !matched && !until(stdout, stderr)) {
         reject(new Error(`${runtime} watch exited before expected output (${code}/${signal}). stdout=${stdout} stderr=${stderr}`));
         return;
       }
@@ -599,8 +604,8 @@ async function checkWatchStreamParity() {
         return line;
       });
       assert.deepStrictEqual(markers.slice(0, 4), ['OK', 'ERROR', 'RECONNECTED', 'HEARTBEAT']);
-      assert.strictEqual(followRequests[0].idleWindowStartMs, 0);
-      assert.ok(followRequests[1].idleWindowStartMs > 0, 'anonymous follow must advance its idle window');
+      assert.ok(followRequests[0].as.startsWith('follow-'));
+      assert.strictEqual(followRequests[1].idleWindowStartMs, undefined, 'follow cadence uses a named cursor');
 
       const cadenceRequests = [];
       await withFakeDaemon(
@@ -612,7 +617,7 @@ async function checkWatchStreamParity() {
         () => runWatchCli(
           runtime,
           ['watch', '--follow', '--heartbeat', '1', '--idle-after', '0', '--no-held-input', '--timeout-ms', '1000',
-            '--kinds', 'agent.ready,agent.blocked', '--settle', '180000', '--blocked-settle', '30000', '--min-interval', '600000', '--idle-backoff'],
+            '--kinds', 'agent.ready,agent.blocked', '--ready-settle', '180000', '--blocked-settle', '30000', '--min-interval', '600000'],
           paneDir,
           stdout => stdout.includes('WATCH OK gen 3'),
         ),
@@ -638,14 +643,14 @@ async function checkWatchStreamParity() {
         },
         () => runWatchCli(
           runtime,
-          ['watch', '--follow', '--self-test', '--settle', '180000', '--min-interval', '600000', '--idle-backoff'],
+          ['watch', '--follow', '--self-test', '--ready-settle', '180000', '--min-interval', '600000'],
           paneDir,
           stdout => stdout.includes('WATCH OK gen 4'),
         ),
       );
       assert.strictEqual(selfTestRequests[0].as, undefined, 'self-test must stay anonymous so the daemon applies no cadence');
 
-      // --quiet drops OK, HEARTBEAT, and RECONNECTED but never WATCH ERROR or entries.
+      // --quiet drops HEARTBEAT and RECONNECTED but keeps WATCH OK once, WATCH ERROR, and entries.
       let quietCount = 0;
       const quiet = await withFakeDaemon(
         paneDir,
@@ -659,20 +664,63 @@ async function checkWatchStreamParity() {
         },
         () => runWatchCli(
           runtime,
-          ['watch', '--follow', '--quiet', '--heartbeat', '1', '--idle-after', '0', '--no-held-input', '--timeout-ms', '1000'],
+          ['watch', '--follow', '--heartbeat', '1', '--idle-after', '0', '--no-held-input', '--timeout-ms', '1000'],
           paneDir,
           stdout => stdout.includes('READY Quiet pane pane-1 panel panel-1'),
         ),
       );
       assertIncludes(quiet.stdout, 'WATCH ERROR');
-      for (const controlLine of ['WATCH OK', 'HEARTBEAT', 'WATCH RECONNECTED']) {
-        assert.ok(!quiet.stdout.includes(controlLine), `${runtime} --quiet must drop ${controlLine}: ${quiet.stdout}`);
+      assert.strictEqual(quiet.stdout.split('WATCH OK').length - 1, 1, `${runtime} --quiet must print WATCH OK exactly once: ${quiet.stdout}`);
+      assertIncludes(quiet.stdout, 'WATCH RECONNECTED');
+
+      // --expire-after ends a quiet follow with WATCH EXPIRED and exit 0; IDLE re-fires don't count as activity.
+      const idleOnly = await withFakeDaemon(
+        paneDir,
+        (frame) => ({ result: { ...watchResult(20), entries: [{
+          gen: 20, at: '2026-09-27T00:00:00.000Z', kind: 'agent.idle', paneId: 'pane-1', paneName: 'Idle', panelId: 'panel-1', source: 'agent',
+        }] }, delayMs: Math.min(frame.args[0].timeoutMs, 300) }),
+        () => runWatchToExit(runtime, ['watch', '--follow', '--json', '--idle-after', '0', '--no-held-input', '--expire-after', '1500'], paneDir),
+      );
+      assert.strictEqual(idleOnly.code, 0, `${runtime} --expire-after must exit 0: ${idleOnly.stdout} ${idleOnly.stderr}`);
+      const idleKinds = idleOnly.stdout.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line).kind);
+      assert.strictEqual(idleKinds[0], '_ok', `${runtime} must arm with _ok first: ${idleOnly.stdout}`);
+      assert.strictEqual(idleKinds.at(-1), '_expired', `${runtime} must end with _expired: ${idleOnly.stdout}`);
+      assert.ok(idleKinds.includes('agent.idle'), `${runtime} must still print IDLE lines: ${idleOnly.stdout}`);
+
+      // Visible events and activity hidden by output filters both reset quiet expiry.
+      for (const hiddenActivity of [false, true]) {
+      let resetCount = 0;
+      const startedAt = Date.now();
+      const reset = await withFakeDaemon(
+        paneDir,
+        (frame) => {
+          resetCount += 1;
+          const entries = !hiddenActivity && resetCount === 2 ? [{
+            gen: 21, at: '2026-09-27T00:00:00.000Z', kind: 'agent.ready', paneId: 'pane-1', paneName: 'Busy', panelId: 'panel-1', source: 'agent',
+          }] : [];
+          return { result: { ...watchResult(21), entries, activityGeneration: resetCount === 1 ? 20 : 21 }, delayMs: resetCount === 1 ? 0 : Math.min(frame.args[0].timeoutMs, 1_000) };
+        },
+        () => runWatchToExit(runtime, ['watch', '--follow', '--idle-after', '0', '--no-held-input', '--expire-after', '1500'], paneDir),
+      );
+      const elapsedMs = Date.now() - startedAt;
+      assert.strictEqual(reset.code, 0, `${runtime}: ${reset.stdout} ${reset.stderr}`);
+      if (!hiddenActivity) assertIncludes(reset.stdout, 'READY Busy pane pane-1 panel panel-1');
+      assertIncludes(reset.stdout, 'WATCH EXPIRED after 1500ms quiet');
+      assert.ok(elapsedMs >= 2_400, `${runtime} activity (hidden=${hiddenActivity}) must reset expiry (exited after ${elapsedMs}ms)`);
+      }
+
+      for (const [args, message] of [
+        [['watch', '--expire-after', '1000'], '--expire-after require --follow'],
+      ]) {
+        const invalid = await runCliOnce(runtime, args, paneDir);
+        assert.notStrictEqual(invalid.status ?? invalid.code, 0, `${runtime} ${args.join(' ')} must fail`);
+        assertIncludes(`${invalid.stdout}${invalid.stderr}`, message);
       }
 
       const quietSelfTest = await withFakeDaemon(
         paneDir,
         () => ({ result: watchResult(9) }),
-        () => runWatchCli(runtime, ['watch', '--self-test', '--no-control-lines'], paneDir, stdout => stdout.includes('WATCH OK gen 9')),
+        () => runWatchCli(runtime, ['watch', '--self-test'], paneDir, stdout => stdout.includes('WATCH OK gen 9')),
       );
       assertIncludes(quietSelfTest.stdout, 'WATCH OK gen 9');
 
@@ -692,14 +740,14 @@ async function checkWatchStreamParity() {
         },
         () => runWatchCli(
           runtime,
-          ['watch', '--follow', '--quiet', '--json', '--idle-after', '0'],
+          ['watch', '--follow', '--json', '--idle-after', '0'],
           paneDir,
           stdout => stdout.includes('"heldInputPresent":true'),
           8_000,
           { PANE_PANEL_ID: longPanelId },
         ),
       );
-      assert.ok(!jsonFollow.stdout.includes('"kind":"_ok"'), `${runtime} --quiet must drop _ok in JSON`);
+      assert.strictEqual(jsonFollow.stdout.split('"kind":"_ok"').length - 1, 1, `${runtime} --quiet must keep exactly one _ok in JSON`);
       assert.strictEqual(jsonRequests[0].includeHeldInputPresence, true, `${runtime} JSON follow must request held-input presence`);
       const expectedCursor = `panel-${require('crypto').createHash('sha256').update(longPanelId).digest('hex').slice(0, 12)}`;
       assert.strictEqual(jsonRequests[0].as, expectedCursor, `${runtime} must shorten a long derived cursor name`);
@@ -725,7 +773,7 @@ async function checkWatchStreamParity() {
         },
         () => runWatchCli(
           runtime,
-          ['watch', '--session', sessionId, '--follow', '--quiet', '--idle-after', '0', '--no-held-input'],
+          ['watch', '--session', sessionId, '--follow', '--idle-after', '0', '--no-held-input'],
           paneDir,
           stdout => stdout.includes('#747 MERGED'),
           8_000,
@@ -764,16 +812,15 @@ async function checkWatchStreamParity() {
 
       for (const badWatchArgs of [
         ['watch', '--heartbeat', 'nope'],
-        ['watch', '--follow', '--settle', 'nope'],
-        ['watch', '--settle', '5'],
-        ['watch', '--follow', '--since', '42', '--settle', '180000'],
+        ['watch', '--follow', '--ready-settle', 'nope'],
+        ['watch', '--ready-settle', '5'],
+        ['watch', '--follow', '--since', '42', '--ready-settle', '180000'],
         ['watch', '--follow', '--session', 'my-session', '--pane', 'pane-1'],
-        ['watch', '--follow', '--session', 'my-session', '--all-managed'],
         ['watch', '--until-event', '--follow'],
         ['watch', '--until-event', '--self-test'],
         ['watch', '--until-event', '--timeout-ms', '0'],
       ]) {
-        const badWatch = spawnWatchCli(runtime, badWatchArgs);
+        const badWatch = spawnWatchCli(runtime, badWatchArgs, paneDir);
         assert.strictEqual(badWatch.status, 2, `${badWatchArgs.join(' ')} must fail`);
         assertIncludes(badWatch.stdout, 'WATCH ERROR');
         assertIncludes(badWatch.stderr, 'WATCH ERROR');
@@ -805,7 +852,7 @@ function scriptedWatch(responses, requests) {
 }
 
 async function checkWatchUntilEvent() {
-  const quietJson = ['watch', '--as', 'orch', '--until-event', '--quiet', '--json', '--kinds', 'agent.report'];
+  const quietJson = ['watch', '--as', 'orch', '--until-event', '--json', '--kinds', 'agent.report'];
   for (const runtime of ['npm', 'pip']) {
     const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), `runpane-until-${runtime}-`));
     try {
@@ -816,7 +863,7 @@ async function checkWatchUntilEvent() {
         { result: { ...watchResult(6), timedOut: false, entries: [entry] }, delayMs: 200 },
       ], requests), () => runCliOnce(runtime, quietJson, paneDir));
       assert.strictEqual(run.code, 0, `${runtime} --until-event must exit 0 on its event. stdout=${run.stdout} stderr=${run.stderr}`);
-      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} --until-event --quiet --json prints exactly the event`);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify({ ...entry, epoch: watchResult(6).epoch })}\n`, `${runtime} --until-event --json prints the event and its epoch`);
       assert.strictEqual(requests.length, 1);
       assert.strictEqual(requests[0].as, 'orch');
       assert.deepStrictEqual(requests[0].kinds, ['agent.report']);
@@ -825,19 +872,44 @@ async function checkWatchUntilEvent() {
       requests = [];
       run = await withFakeDaemon(paneDir, scriptedWatch([
         { result: { ...watchResult(6), timedOut: false, entries: [entry] } },
-      ], requests), () => runCliOnce(runtime, ['watch', '--as', 'orch', '--until-event', '--quiet', '--kinds', 'agent.report'], paneDir));
+      ], requests), () => runCliOnce(runtime, ['watch', '--as', 'orch', '--until-event', '--kinds', 'agent.report'], paneDir));
       assert.strictEqual(run.code, 0);
       assert.strictEqual(lf(run.stdout), 'REPORT Worker pane pane-1 panel panel-2 blocked: q\n', `${runtime} lines mode prints the REPORT line`);
 
-      // A new cursor's RESET does not end the wait, and --quiet does not print it.
+      // A new cursor's RESET is printed and does not end the wait.
       requests = [];
       run = await withFakeDaemon(paneDir, scriptedWatch([
         { result: { ...watchResult(5), timedOut: false, reset: { reason: 'first-use' } } },
         { result: { ...watchResult(6), timedOut: false, entries: [entry] }, delayMs: 100 },
       ], requests), () => runCliOnce(runtime, quietJson, paneDir));
       assert.strictEqual(run.code, 0);
-      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} must keep waiting past RESET`);
+      assert.ok(lf(run.stdout).endsWith(`${JSON.stringify({ ...entry, epoch: watchResult(6).epoch })}\n`), `${runtime} must keep waiting past RESET`);
+      assertIncludes(run.stdout, '_reset');
       assert.deepStrictEqual(requests.map(request => request.as), ['orch', 'orch'], `${runtime} re-arms the same named cursor`);
+
+      // A numeric cursor detects epoch rollover even if the new journal has caught up.
+      requests = [];
+      run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: { ...watchResult(8), epoch: 'new-epoch', reset: { reason: 'epoch-changed' }, timedOut: false,
+          entries: [reportEntry(8, 'panel-2', { replay: true, baseline: true })] } },
+        { result: { ...watchResult(9), epoch: 'new-epoch', timedOut: false, entries: [reportEntry(9, 'panel-2')] } },
+      ], requests), () => runCliOnce(runtime, ['watch', '--since', '6', '--epoch', 'old-epoch', '--until-event', '--json', '--kinds', 'agent.report'], paneDir));
+      assert.strictEqual(run.code, 0);
+      const resetOutput = run.stdout.trim().split('\n').map(JSON.parse);
+      assert.deepStrictEqual(resetOutput[0], { kind: '_reset', reason: 'epoch-changed', epoch: 'new-epoch', generation: 8 });
+      assert.deepStrictEqual(requests.map(request => [request.since, request.epoch, request.as]), [[6, 'old-epoch', undefined], [8, 'new-epoch', undefined]]);
+      assert.strictEqual(resetOutput.at(-1).gen, 9);
+      assert.strictEqual(resetOutput.at(-1).epoch, 'new-epoch');
+
+      // A new process resumes after exactly the processed gen, not the response watermark.
+      requests = [];
+      const delivered = resetOutput.at(-1);
+      run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: { ...watchResult(11), epoch: delivered.epoch, timedOut: false, entries: [reportEntry(10, 'panel-2'), reportEntry(11, 'panel-2')] } },
+      ], requests), () => runCliOnce(runtime, ['watch', '--since', String(delivered.gen), '--epoch', delivered.epoch, '--until-event', '--json', '--kinds', 'agent.report'], paneDir));
+      assert.strictEqual(run.code, 0);
+      assert.deepStrictEqual(run.stdout.trim().split('\n').map(JSON.parse).map(event => [event.gen, event.epoch]), [[10, 'new-epoch'], [11, 'new-epoch']]);
+      assert.strictEqual(requests[0].since, 9);
 
       // Waits past the per-call cap: empty, timed-out calls re-arm with no overall limit.
       requests = [];
@@ -856,9 +928,9 @@ async function checkWatchUntilEvent() {
       run = await withFakeDaemon(paneDir, scriptedWatch([
         { result: { ...watchResult(5), timedOut: false, entries: [ownEntry] } },
         { result: { ...watchResult(6), timedOut: false, entries: [entry] } },
-      ], requests), () => runCliOnce(runtime, ['watch', '--until-event', '--quiet', '--json', '--kinds', 'agent.report'], paneDir, 20_000, { PANE_PANEL_ID: 'panel-own' }));
+      ], requests), () => runCliOnce(runtime, ['watch', '--until-event', '--json', '--kinds', 'agent.report'], paneDir, 20_000, { PANE_PANEL_ID: 'panel-own' }));
       assert.strictEqual(run.code, 0);
-      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} must drop its own panel's entries`);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify({ ...entry, epoch: watchResult(6).epoch })}\n`, `${runtime} must drop its own panel's entries`);
       assert.strictEqual(requests.length, 2);
       // Without --as, a Pane terminal gets a stable cursor apart from its --follow cursor (the panel id).
       assert.strictEqual(requests[0].as, 'until-panel-own', `${runtime} derives a stable --until-event cursor`);
@@ -871,7 +943,7 @@ async function checkWatchUntilEvent() {
         run = await withFakeDaemon(paneDir, (frame) => {
           requests.push(frame.args[0]);
           return { result: watchResult(5), delayMs: Math.min(700, frame.args[0].timeoutMs) };
-        }, () => runCliOnce(runtime, ['watch', '--until-event', '--format', format, '--timeout-ms', '2000'], paneDir));
+        }, () => runCliOnce(runtime, ['watch', '--until-event', ...(format === 'json' ? ['--json'] : []), '--timeout-ms', '2s'], paneDir));
         const elapsed = Date.now() - startedAt;
         assert.strictEqual(run.code, 124, `${runtime} --until-event deadline must exit 124. stdout=${run.stdout} stderr=${run.stderr}`);
         assertIncludes(run.stdout, expected);
@@ -879,9 +951,9 @@ async function checkWatchUntilEvent() {
         assert.ok(requests.every(request => request.timeoutMs <= 2_000), `${runtime} never waits past the deadline`);
       }
       run = await withFakeDaemon(paneDir, () => ({ result: watchResult(5), delayMs: 100 }),
-        () => runCliOnce(runtime, ['watch', '--until-event', '--quiet', '--timeout-ms', '500'], paneDir));
+        () => runCliOnce(runtime, ['watch', '--until-event', '--timeout-ms', '500'], paneDir));
       assert.strictEqual(run.code, 124);
-      assert.strictEqual(run.stdout, '', `${runtime} --quiet drops the timeout line`);
+      assertIncludes(run.stdout, 'WATCH TIMEOUT');
 
       // A closed reader ends a --follow watch at its next write, with exit 0 and no stack trace.
       let served = 0;
@@ -978,13 +1050,14 @@ async function checkReportDeliveryLine() {
   }
 }
 
-function spawnWatchCli(runtime, args) {
+function spawnWatchCli(runtime, args, paneDir) {
   return runtime === 'npm'
-    ? childProcess.spawnSync(process.execPath, [npmCli, ...args], { encoding: 'utf8', env: { ...process.env, RUNPANE_TELEMETRY_DISABLED: '1' } })
-    : childProcess.spawnSync(findPython(), ['-m', 'runpane', ...args], {
+    ? childProcess.spawnSync(process.execPath, [npmCli, ...args, '--pane-dir', paneDir], { encoding: 'utf8', timeout: 5000, env: { ...process.env, PANE_DIR: paneDir, RUNPANE_TELEMETRY_DISABLED: '1' } })
+    : childProcess.spawnSync(findPython(), ['-m', 'runpane', ...args, '--pane-dir', paneDir], {
       encoding: 'utf8',
+      timeout: 5000,
       cwd: rootDir,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', PYTHONPATH: pythonSource, RUNPANE_TELEMETRY_DISABLED: '1' },
+      env: { ...process.env, PANE_DIR: paneDir, PYTHONDONTWRITEBYTECODE: '1', PYTHONPATH: pythonSource, RUNPANE_TELEMETRY_DISABLED: '1' },
     });
 }
 
@@ -993,7 +1066,7 @@ function spawnWatchCli(runtime, args) {
 // undefined both mean an unset optional value; all populated fields are compared.
 const PARSER_DEFAULT_DIFFERENCES = {
   waitReady: false, noFocus: false, focus: false, pinned: false, noPinned: false,
-  force: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
+  force: false, present: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
   includeHeldInput: false, idleBackoff: false, allManaged: false, allStopped: false,
   includeShells: false, noHeldInput: false, selfTest: false, report: false,
   watchKinds: [], watchPaneIds: [], watchExcludePaneIds: [],
@@ -1011,6 +1084,7 @@ function normalizeParsedArgs(value) {
 }
 
 function compareParserParity() {
+  require('./test-runpane-watch-defaults.js');
   const { parseRunpaneArgs } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'commands.js'));
   const nodeOutput = parserSamples.map((args) => normalizeParsedArgs({
     ...PARSER_DEFAULT_DIFFERENCES,
@@ -1030,6 +1104,55 @@ print(json.dumps([asdict(parse_args(args)) for args in json.loads(sys.stdin.read
 
   parserSamples.forEach((args, index) => {
     assert.deepStrictEqual(pythonOutput[index], nodeOutput[index], `Parser parity: ${args.join(' ')}`);
+  });
+  const invalidWatchArgs = [
+    ['watch', '--present'],
+    ['watch', '--until-event', '--present'],
+    ['watch', '--profile', 'present'],
+    ['watch', '--until-event', '--profile', 'unattended'],
+    ['watch', '--follow', '--profile', 'invalid'],
+    ['watch', '--epoch', 'e'],
+    ['watch', '--as', 'c', '--since', '0', '--epoch', 'e'],
+    ['watch', '--since', '0', '--epoch', ''],
+  ];
+  const invalidPythonErrors = JSON.parse(runPythonSnippet(`
+import json
+import sys
+from runpane.cli import parse_args
+errors = []
+for args in json.loads(sys.stdin.read()):
+    try:
+        parse_args(args)
+        errors.append(None)
+    except ValueError as error:
+        errors.append(str(error))
+print(json.dumps(errors))
+`, JSON.stringify(invalidWatchArgs)));
+  invalidWatchArgs.forEach((args, index) => {
+    assert.throws(() => parseRunpaneArgs(args), error => {
+      assert.equal(error.message, invalidPythonErrors[index]);
+      return true;
+    });
+  });
+  const removedFlags = ['--settle', '--format', '--quiet', '--no-control-lines', '--agents-only', '--all-managed', '--idle-backoff'];
+  const pythonErrors = JSON.parse(runPythonSnippet(`
+import json
+import sys
+from runpane.cli import parse_args
+errors = []
+for flag in json.loads(sys.stdin.read()):
+    try:
+        parse_args(["watch", "--follow", flag])
+    except ValueError as error:
+        errors.append(str(error))
+print(json.dumps(errors))
+`, JSON.stringify(removedFlags)));
+  removedFlags.forEach((flag, index) => {
+    assert.throws(() => parseRunpaneArgs(['watch', '--follow', flag]), error => {
+      assert.match(error.message, /was removed.*Use /);
+      assert.equal(error.message, pythonErrors[index]);
+      return true;
+    });
   });
 }
 

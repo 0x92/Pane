@@ -35,10 +35,10 @@ Canonical repo: `greenfield-inc/Pane` (`dcouple/Pane` redirects to it).
   ([docs/lint/anti-slop.md](docs/lint/anti-slop.md)).
 - Dependencies changed: run `pnpm run generate-notices` and commit `NOTICES`.
 - Don't change build targets without discussion.
-- `runpane` CLI defaults stay responsive. Anything that makes output quieter or
-  slower for the Pane Chat orchestrator (e.g. `watch --settle`, `--min-interval`)
-  is an opt-in flag; the orchestrator's values live in the "Liveness Contract"
-  text in `main/src/services/skillCacheManager.ts`.
+- `runpane watch --follow` defaults to the unattended profile (settle, batching,
+  idle backoff, and 3h quiet expiry). `--present` / `--profile present` makes it
+  faster; explicit duration flags override the profile. Keep npm/Python,
+  contract/doctor docs, and the Liveness Contract in `skillCacheManager.ts` aligned.
 - The full terminal refresh on panel activation is load-bearing: read the
   comment above `TerminalPanel` (`frontend/src/components/panels/TerminalPanel.tsx`)
   first, and keep refits hidden behind its loading overlay (`isRefreshing`).

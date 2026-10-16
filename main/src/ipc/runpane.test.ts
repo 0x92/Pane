@@ -2020,6 +2020,39 @@ describe('runpane IPC handlers', () => {
     });
   });
 
+  it('rearms numeric cursors across batches without duplicating or skipping retained events', async () => {
+    const workspaceJournal = new WorkspaceJournal();
+    const registry = createRegistry(createServices({ workspaceJournal }));
+    const registration = { since: workspaceJournal.generation, epoch: workspaceJournal.epoch };
+    const request = { ...registration, kinds: ['pr.comment'], timeoutMs: 0, limit: 1 };
+    // Both events arrive before the first waiter starts.
+    for (const paneId of ['one', 'two']) {
+      workspaceJournal.append({ kind: 'pr.comment', paneId, paneName: paneId, source: 'session' });
+    }
+    const first = await registry.invoke('runpane:workspace:wait', [request]);
+    expect(first.entries).toMatchObject([{ gen: 1, paneId: 'one' }]);
+    const second = await registry.invoke('runpane:workspace:wait', [{ ...request, since: first.entries[0].gen }]);
+    expect(second.entries).toMatchObject([{ gen: 2, paneId: 'two' }]);
+    const third = await registry.invoke('runpane:workspace:wait', [{ ...request, since: second.entries[0].gen }]);
+    expect(third).toMatchObject({ entries: [], timedOut: true, epoch: registration.epoch });
+  });
+
+  it('resets numeric cursors on epoch mismatch even after the journal catches up', async () => {
+    const workspaceJournal = new WorkspaceJournal();
+    const registry = createRegistry(createServices({ workspaceJournal }));
+    workspaceJournal.append({ kind: 'pr.comment', paneId: 'one', paneName: 'one', source: 'session' });
+    const reset = await registry.invoke('runpane:workspace:wait', [{ since: 0, epoch: 'previous-epoch', timeoutMs: 0, kinds: ['pr.comment'] }]);
+    expect(reset).toMatchObject({ epoch: workspaceJournal.epoch, generation: 1, reset: { reason: 'epoch-changed' } });
+    expect(reset.entries.every((entry: { replay?: boolean }) => entry.replay)).toBe(true);
+    expect(reset.nextCommand).toBe(`runpane watch --since 1 --epoch ${workspaceJournal.epoch}`);
+    workspaceJournal.append({ kind: 'pr.comment', paneId: 'two', paneName: 'two', source: 'session' });
+    const next = await registry.invoke('runpane:workspace:wait', [{ since: reset.generation, epoch: reset.epoch, timeoutMs: 0, kinds: ['pr.comment'] }]);
+    expect(next.entries).toMatchObject([{ gen: 2, paneId: 'two' }]);
+    expect(next.reset).toBeUndefined();
+    await expect(registry.invoke('runpane:workspace:wait', [{ epoch: 'e', timeoutMs: 0 }])).rejects.toThrow('epoch requires since');
+    await expect(registry.invoke('runpane:workspace:wait', [{ as: 'consumer', since: 0, epoch: 'e', timeoutMs: 0 }])).rejects.toThrow('cannot be combined with as');
+  });
+
   it('accepts named cursors up to 128 characters, such as session-<full session id>', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-runpane-cursor-test-'));
     tempDirs.push(directory);

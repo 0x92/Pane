@@ -61,6 +61,7 @@ import {
   runReposAdd,
   runReposList,
   runWatch,
+  runPrWatchCommand,
   runWorkspaceState
 } from './localControl';
 import { detectPlatform } from './platform';
@@ -263,6 +264,9 @@ const commandHandlers = new Map<string, CommandHandler>(Object.entries({
   'workspace write': async (parsed) => runWorkspaceWrite(parsed),
   'workspace exec': async (parsed) => runWorkspaceExec(parsed),
   'handoff': async (parsed) => runHandoff(parsed),
+  'pr watch': async parsed => runPrWatchCommand(parsed),
+  'pr unwatch': async parsed => runPrWatchCommand(parsed),
+  'pr list': async parsed => runPrWatchCommand(parsed),
   'watch': async (parsed, telemetryContext) => {
     return runWatch(parsed);
   },

@@ -560,20 +560,17 @@ When monitoring is authorized, use one durable, named watcher per Session. Do no
 or exact name, and the daemon follows every Pane associated with it:
 
 ```text
-runpane watch --session <session-id> --follow --quiet --json \
-  --kinds agent.ready,agent.blocked,agent.idle,panel.exited,panel.stopped,pane.gone,pane.associated,pane.detached,pr.conflicted,pr.checks,pr.merged,agent.report \
-  --settle 180000 --blocked-settle 30000 --min-interval 600000 \
-  --idle-backoff
+runpane watch --session <session-id> --follow --json
 ```
 
 The daemon resolves the Session once per request and re-reads its
 associations on every journal read. A Pane associated after the watcher
 starts is included; a detached or archived Pane drops out, together with any
-line still held for it by `--settle` or `--min-interval`. The Session's own
+line still held for it by `--ready-settle` or `--min-interval`. The Session's own
 hidden owner and orchestrator panels never appear, and an association limited
 to specific panels reports only those panels. There is no re-arm after
 `sessions associate` or `sessions detach`. `--session` cannot be combined with
-`--pane` or `--all-managed`, an unknown Session fails the watch, and a daemon
+`--pane`, an unknown Session fails the watch, and a daemon
 that predates `--session` fails it with `WATCH ERROR` instead of watching every
 Pane.
 
@@ -605,36 +602,68 @@ receives them only when `--kinds` lists them, so older clients never see an
 unknown kind. Cadence state is keyed by the Session rather than its current
 Panes, so held lines survive membership changes.
 
-PR events come from the daemon's Session PR monitor
-(`main/src/services/sessionPrMonitor.ts`, decision D7). About every 3 minutes
-(jittered) it visits each Pane associated with a Session that is not
-archived. With no such Pane it runs no `gh` at all. A Pane whose PR is known to
-be open gets `gh pr view <number> --json
-number,url,state,mergeable,statusCheckRollup,headRefOid`. Any other member (no
-cached PR because nobody has looked at it, or a closed or merged one) is first
-looked up by branch with Pane's own `gh pr list --head <branch>` lookup, which
-also updates the Pane's git status, so a background worker's new or reopened PR
-is found within a round. All calls share the one-at-a-time `gh` slot Pane uses
-for its own PR lookups, so a round costs at most two calls per member. It
-appends, on transitions only:
+### Watching a PR from any Pane
 
-- `pr.conflicted` (`PR <pane-name> pane <pane-id> #<number> CONFLICTED`): the
-  PR now conflicts with its base. GitHub's transient `UNKNOWN` answer never
-  counts as a change.
-- `pr.checks` (`... CHECKS PASSED`, or `... CHECKS FAILED lint,test` with up to
-  five names): every check on the head commit finished. A new head commit
-  reports again once its checks finish.
-- `pr.merged` (`... MERGED`). A merged PR is not polled again. A closed PR stops
-  polling without an entry.
+```bash
+runpane pr watch --pane <pane-id> --url https://github.com/owner/repo/pull/123 --head <full-sha> --json
+runpane watch --pane <pane-id> --since <generation-returned-above> --epoch <epoch-returned-above> --until-event --json --kinds pr.checks,pr.conflicted,pr.head,pr.review,pr.comment,pr.closed,pr.merged,pr.stopped,github.unavailable,github.recovered
+runpane pr list --pane <pane-id> --json
+runpane pr unwatch --pane <pane-id> --url https://github.com/owner/repo/pull/123 --json
+```
 
-Entries carry `pr: {number, url, headOid}`, and `pr.checks` adds `checks` and
-`failingChecks`. The first poll of a PR after the daemon starts only records
-its state, so a restart never restates old conflicts; check `gh pr view` once
-after a restart. `pr.conflicted` and failed `pr.checks` bypass
-`--min-interval` like `BLOCKED`. The PR kinds are opt-in like `JOINED`/`LEFT`.
-Without `gh`, or while it is signed out, rate limited, or timing out, the
-monitor logs once, doubles its delay up to an hour, and resumes when `gh`
-answers again.
+Inside a Pane, registration defaults to its `PANE_SESSION_ID`. Registration
+returns `generation` and `epoch`; use both for the first wait, including events
+that arrived between registration and arming. An identical active registration
+retry returns its original generation, including after daemon restart, so a
+lost response cannot skip an unread event. A new head pin or unwatch/re-register
+starts a new registration. Process every returned NDJSON
+event, then persist its `gen` and `epoch`. Rearm with `--since <gen> --epoch
+<epoch>`; use `--limit 1` for one event per invocation. Never reuse the initial
+registration generation after delivering an event, and never combine `--as`
+with `--since` or `--epoch`. A named cursor is a separate daemon-managed mode.
+
+Ordinary daemon restarts preserve the epoch and unread retained events. On
+`_reset` or `_dropped`, resynchronize current GitHub state before accepting
+success, then persist the control record's `generation` and `epoch`. Ignore
+`replay`/`baseline` records as new events. Retention is bounded; a journal reset
+cannot recover lost history. A consumer crash before saving its cursor can
+replay an event, so actions must be idempotent. Registration uses the full
+host/repository/number identity. It pins success to `--head`, or the first
+observed head; a new head emits `pr.head` and needs a fresh registration before
+success can be reported. Read existing discussions before arming. A wake
+means inspect the change; it never authorizes merging.
+
+The daemon batches up to 25 fingerprints per host every two minutes (plus up
+to ten seconds of jitter), reads details on changes and at a 30-minute
+backstop, and keeps 10% of GitHub quota for interactive work. It uses `gh auth
+token` for cached authentication and direct GraphQL for reads. Session PR
+branch discovery still uses Pane's existing `gh pr list` lookup.
+
+Failures emit immediately, even while other checks run. Success requires a
+complete, nonempty set of checks on the pinned head and all required checks
+passing (all checks when none are marked required). BLOCKED/UNKNOWN merge
+status conservatively withholds success, including when reviews are missing.
+Feedback from every account is included: agents and people can share a login.
+Checks passing is a signal to inspect the PR, not proof of complete readiness;
+optional failures can still produce a separate failure event. Merge/close,
+eight non-rate-limit failures, or ten comment-only updates stop registration;
+archiving/deleting the Pane removes it. Rate limits pause instead of consuming
+the failure budget. Outages and recovery are journal events.
+
+Fingerprints include individual check outcomes and thread resolution state, so
+equal aggregate counts do not hide swaps or edits. When the fingerprint window
+is truncated (over 100 checks/discussion items or multiple comments in a review
+thread), the daemon reads details each round. Detail reads page through up to
+2,000 checks and retain the latest 100 comments, reviews, threads, and comments
+per thread. Truncated discussions emit `pr.review` with an incomplete-feedback
+reason and withhold success; read the full discussion on GitHub.
+
+Baselines and events are replaced atomically before readers wake. This prevents
+a process crash from advancing a baseline without its event. Delivery remains
+bounded by journal retention and cursor acknowledgments; replay after a consumer
+crash before acknowledgment is possible. This is not an exactly-once or
+power-loss durability guarantee.
+
 
 The cursor defaults to `session-<uuid>`, where `<uuid>` is the UUID inside the
 Session ID: the Session `__orchestration_session_<uuid>__` uses
@@ -653,25 +682,50 @@ never READY; re-read `sessions overview` instead of acting on it. Lines mode
 prints only `CHANGED` for them. Return blocked and decision findings to the
 Session conversation. Terminal idle or exit remains activity evidence only.
 
-`--quiet` (alias `--no-control-lines`) drops the control lines that only prove
-liveness: `_ok`, `_heartbeat`, and `_reconnected` (`WATCH OK`, `HEARTBEAT`,
-and `WATCH RECONNECTED` in lines mode). `_error`, `_reset`, and `_dropped`
-always print. Under `--follow`, JSON entries for a panel holding unsent
-composer text carry `heldInputPresent: true`, the JSON form of `STUCK`. Only
-text typed into the composer counts, read the way `panels screen` reads
-`composer.hasUndeliveredText`: an agent's dim or grey prompt suggestion or
-placeholder does not, and neither does an older queued message or quote line
-above an empty composer. `heldInput` on `agent.ready` follows the same rule.
+`--follow` uses the unattended profile: READY settles for 3 minutes, BLOCKED
+for 30 seconds, and non-urgent events batch every 10 minutes. IDLE starts at
+10 minutes and backs off to 30 minutes, 1 hour, 3 hours, then daily. Heartbeats
+are off. WATCH OK prints once when armed; WATCH EXPIRED and exit 0 end a watch
+after 3 quiet hours. Meaningful events reset expiry; IDLE and replay do not.
 
-### Watch profiles
+Use `--present` or `--profile present` when someone is waiting: READY settles
+for 1 minute, BLOCKED for 15 seconds, batches every 2 minutes, and IDLE does
+not back off. `--profile unattended` explicitly selects the default. Duration
+overrides accept `30s`, `3m`, `3h`, or `0`: `--ready-settle`, `--blocked-settle`,
+`--min-interval`, `--idle-after`, `--expire-after`, `--heartbeat`, and
+watch `--timeout-ms` (for example, `--until-event --timeout-ms 30s`).
+`--expire-after 0` disables natural expiry. Bare values retain milliseconds,
+except heartbeat's legacy seconds. `--json` selects NDJSON; otherwise lines.
 
-| Profile | When | Flags | Worst-case READY delay |
-|---|---|---|---|
-| Unattended (default) | Overnight or background runs; every wake-up costs a full context replay | `--settle 180000 --blocked-settle 30000 --min-interval 600000 --idle-backoff` | about 13 minutes |
-| User present | Someone is waiting on the result | `--settle 60000 --blocked-settle 15000 --min-interval 120000`, no `--idle-backoff` | about 3 minutes |
+With both options, `--present` selects the present preset even with
+`--profile unattended`, regardless of argument order. Individual duration
+flags override the selected preset. Both preset options require `--follow`.
 
-Both profiles use the same `--kinds` list, `--quiet`, and named cursor.
-Switch profiles by stopping the previous monitor, then re-arming the same cursor. If a monitor reports that its cursor was superseded, keep the replacement and do not re-arm the old monitor.
+```bash
+runpane watch --session <session-id> --follow --json
+runpane watch --session <session-id> --follow --profile present --json
+runpane watch --pane <pane-id> --until-event --json
+```
+
+Session membership changes need no re-arm. Named cursors survive daemon
+restarts; the journal and PR baselines are saved together. RESET/DROPPED mean
+refresh the overview; replayed baseline entries never mean a new READY.
+`--until-event` waits for REPORT, BLOCKED, EXIT or GONE by default and exits 0
+when one arrives. Override `--kinds` for PR events. Its `--timeout-ms` is a
+total deadline (exit 124); under follow it bounds each daemon request.
+
+REPORT remains the completion signal: workers use `runpane report --state
+ready|blocked|failed|done --summary-file <path>`, adding a PR/head and a question
+when blocked. READY alone is activity evidence. Read the full report with
+`runpane agents status --panel <id> --json`. Resume stopped workers in the same
+panel with `runpane panels resume --panel <id> --wait-ready --yes --json`.
+
+Do not pipe follow through `head` or `grep -m1` to wait. Run `--until-event` as
+a supported background task, act on its events, then re-arm with its cursor.
+Never sleep-poll your own background task output. WATCH ERROR/nonzero exit
+means failure: report it and re-arm once. A superseded cursor means keep the
+replacement. A normal expiry means re-arm with the next dispatch.
+
 
 ## Worker reports
 
@@ -722,7 +776,7 @@ worker can be asked to run `runpane report`.
 
 An orchestrator outside a Session, or one whose harness wakes only when a
 process exits (Claude Code background Bash, Codex), waits for a report with
-`runpane watch --pane <pane-id> --as <name> --until-event --quiet --json --kinds
+`runpane watch --pane <pane-id> --as <name> --until-event --json --kinds
 agent.report,agent.blocked,panel.exited,pane.gone`, run as a background task and run again after each
 event. `--until-event` exits 0 on the first event; a `RESET` and the caller's
 own panel never end the wait.
