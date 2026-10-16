@@ -334,6 +334,8 @@ process.stdout.write(JSON.stringify(payload) + '\\n');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('A replayed `agent.ready` is never READY');
     expect(canonicalSkill).toContain('JOINED (`pane.associated`) and LEFT (`pane.detached`)');
     expect(canonicalSkill).toContain('PR: the daemon batches GitHub fingerprints');
+    expect(canonicalSkill).toContain('--since <generation> --epoch <epoch>');
+    expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('persist its `gen` and `epoch` for the next wait');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('do not add a gh polling loop');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('at most one batch every 10 minutes');
     expect(canonicalSkill).not.toContain('Filter HEARTBEAT');
@@ -568,6 +570,9 @@ process.stdout.write(JSON.stringify(payload) + '\\n');
     const bundleRoot = path.join(__dirname, 'paneChatBundle', 'skills');
     const bundledSkills = (await fs.readdir(bundleRoot)).sort();
     const bundledRunpane = await fs.readFile(path.join(bundleRoot, 'runpane', 'SKILL.md'), 'utf8');
+    expect(bundledRunpane).toContain('--since <generation-returned-above> --epoch <epoch-returned-above>');
+    expect(bundledRunpane.replace(/\s+/g, ' ')).toContain('persist its `gen` and `epoch`');
+    expect(bundledRunpane.replace(/\s+/g, ' ')).toContain('On `_reset` or `_dropped`, resynchronize current GitHub state');
     expect((await fs.readdir(manager.paneChatSkillsRoot)).sort()).toEqual(bundledSkills);
     for (const root of [manager.codexProjectSkillsRoot, manager.claudeProjectSkillsRoot]) {
       const installed = await fs.readdir(root);

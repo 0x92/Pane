@@ -720,8 +720,12 @@ unattended, then user present):
   Head, review, comment, closed and merged changes are events. Baselines and
   events survive restarts; do not add a gh polling loop. A standalone Pane
   registers with \`runpane pr watch --url <PR URL> --head <full-sha> --json\`,
-  then waits with \`runpane watch --until-event --kinds <PR kinds>\` and the
-  returned generation. See \`runpane agent-context --command "pr watch" --json\`.
+  then waits with \`runpane watch --until-event --since <generation> --epoch <epoch> --kinds <PR kinds> --json\`.
+  Start with the registration pair; after processing each event, persist its
+  \`gen\` and \`epoch\` for the next wait. On \`_reset\`/\`_dropped\`, resynchronize
+  GitHub before accepting success, then save the control record generation and epoch.
+  Never combine \`--as\` with \`--since\`/\`--epoch\`. See
+  \`runpane agent-context --command "pr watch" --json\`.
 - GITHUB UNAVAILABLE/RECOVERED expose outages. Rate limits wait for reset;
   eight other failures or ten comment-only updates emit PR WATCH STOPPED.
   Read the reason, fix access or review the discussion, then register again.

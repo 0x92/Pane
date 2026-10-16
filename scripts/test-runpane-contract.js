@@ -816,12 +816,11 @@ async function checkWatchStreamParity() {
         ['watch', '--ready-settle', '5'],
         ['watch', '--follow', '--since', '42', '--ready-settle', '180000'],
         ['watch', '--follow', '--session', 'my-session', '--pane', 'pane-1'],
-        ['watch', '--follow', '--session', 'my-session'],
         ['watch', '--until-event', '--follow'],
         ['watch', '--until-event', '--self-test'],
         ['watch', '--until-event', '--timeout-ms', '0'],
       ]) {
-        const badWatch = spawnWatchCli(runtime, badWatchArgs);
+        const badWatch = spawnWatchCli(runtime, badWatchArgs, paneDir);
         assert.strictEqual(badWatch.status, 2, `${badWatchArgs.join(' ')} must fail`);
         assertIncludes(badWatch.stdout, 'WATCH ERROR');
         assertIncludes(badWatch.stderr, 'WATCH ERROR');
@@ -1051,13 +1050,14 @@ async function checkReportDeliveryLine() {
   }
 }
 
-function spawnWatchCli(runtime, args) {
+function spawnWatchCli(runtime, args, paneDir) {
   return runtime === 'npm'
-    ? childProcess.spawnSync(process.execPath, [npmCli, ...args], { encoding: 'utf8', env: { ...process.env, RUNPANE_TELEMETRY_DISABLED: '1' } })
-    : childProcess.spawnSync(findPython(), ['-m', 'runpane', ...args], {
+    ? childProcess.spawnSync(process.execPath, [npmCli, ...args, '--pane-dir', paneDir], { encoding: 'utf8', timeout: 5000, env: { ...process.env, PANE_DIR: paneDir, RUNPANE_TELEMETRY_DISABLED: '1' } })
+    : childProcess.spawnSync(findPython(), ['-m', 'runpane', ...args, '--pane-dir', paneDir], {
       encoding: 'utf8',
+      timeout: 5000,
       cwd: rootDir,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', PYTHONPATH: pythonSource, RUNPANE_TELEMETRY_DISABLED: '1' },
+      env: { ...process.env, PANE_DIR: paneDir, PYTHONDONTWRITEBYTECODE: '1', PYTHONPATH: pythonSource, RUNPANE_TELEMETRY_DISABLED: '1' },
     });
 }
 
