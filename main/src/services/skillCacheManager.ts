@@ -677,12 +677,15 @@ Follow has one default cadence: READY after 3m, BLOCKED after 30s, batching
 at 10m, IDLE after 10m with backoff. Individual duration flags override it,
 for example \`--ready-settle 1m --blocked-settle 15s --min-interval 2m\`.
 
-Use follow when the harness consumes streaming output. A harness that wakes
+Use a named follow consumer when the harness consumes streaming output. A harness that wakes
 only when a process exits uses \`runpane watch --as <name> --until-event --json\`
 and re-arms after each event. Single-event waits deliver immediately without
 follow settling or batching; these defaults do not slow every PR waiter.
-Numeric \`--since\` replay also bypasses follow settling and batching; use a
-named cursor for cadence.
+Cadence requires a consumer name (explicit \`--as\` or the name assigned by
+follow). \`--follow --since <generation>\` has no consumer name and also
+bypasses settling and batching. Named \`--as\` cannot be combined with numeric
+\`--since\`; switching only the wait mode does not enable cadence for a
+numeric generation/epoch cursor.
 
 What each line means under follow (the JSON \`kind\` is in parentheses):
 

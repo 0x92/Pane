@@ -141,9 +141,12 @@ restarts; the journal and PR baselines are saved together. RESET/DROPPED mean
 refresh the overview; replayed baseline entries never mean a new READY.
 `--until-event` waits for REPORT, BLOCKED, EXIT or GONE by default and exits 0
 when one arrives, immediately without follow settling or batching. A harness
-that consumes streaming follow output gets its cadence; a process-exit waiter
-keeps these immediate single-event semantics. Numeric `--since` replay also
-bypasses follow settling and batching; use a named cursor for cadence.
+that consumes a named follow stream gets its cadence; a process-exit waiter
+keeps these immediate single-event semantics. Cadence requires a named consumer
+(explicit `--as` or the name assigned by follow). `--follow --since <generation>`
+has no consumer name and also bypasses settling and batching. Named `--as`
+cannot be combined with numeric `--since`; switching only the wait mode does
+not enable cadence for a numeric generation/epoch cursor.
 Override `--kinds` for PR events. Its `--timeout-ms` is a
 total deadline (exit 124); under follow it bounds each daemon request.
 

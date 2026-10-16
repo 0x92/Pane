@@ -38,7 +38,8 @@ Canonical repo: `greenfield-inc/Pane` (`dcouple/Pane` redirects to it).
 - `runpane watch --follow` has one default cadence (READY 3m, BLOCKED 30s,
   batch 10m, IDLE after 10m with backoff, 3h quiet expiry, heartbeats off).
   Explicit duration flags override it; `--until-event` delivers immediately
-  without follow settling or batching. Keep npm/Python,
+  without follow settling or batching. Cadence requires a named follow consumer;
+  `--follow --since <generation>` also bypasses it. Keep npm/Python,
   contract/doctor docs, and the Liveness Contract in `skillCacheManager.ts` aligned.
 - The full terminal refresh on panel activation is load-bearing: read the
   comment above `TerminalPanel` (`frontend/src/components/panels/TerminalPanel.tsx`)
