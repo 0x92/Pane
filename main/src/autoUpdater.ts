@@ -9,6 +9,7 @@ const loadUpdaterDependency = createRequire(__filename);
 // is up, so it is required on first use rather than at launch.
 export function getAutoUpdater(): AppUpdater {
   const { autoUpdater }: typeof import('electron-updater') = loadUpdaterDependency('electron-updater');
+  autoUpdater.autoInstallOnAppQuit = false;
   return autoUpdater;
 }
 

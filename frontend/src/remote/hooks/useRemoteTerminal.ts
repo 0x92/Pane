@@ -218,7 +218,7 @@ export function useRemoteTerminal({
   useEffect(() => {
     if (connectionStatus !== 'connected'  || !terminalRef.current) return;
     void adapter.setTerminalVisibility(panel.id, true, TERMINAL_VIEWER_ID).catch(() => {});
-  }, [adapter, connectionStatus, panel.id, hydrateTerminal]);
+  }, [adapter, connectionStatus, panel.id]);
 
   return { containerRef, statusText, focusTerminal, sendInput, resetTerminal, scrollLines, scrollToBottom };
 }
