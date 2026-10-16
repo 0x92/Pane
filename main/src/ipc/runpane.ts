@@ -1572,6 +1572,20 @@ export function registerRunpaneHandlers(
     }, result => ({ paneId: result.paneId, panelId: result.panelId, ok: result.ok }));
   });
 
+  for (const action of ['watch', 'unwatch', 'list'] as const) {
+    commandRegistry.register(`runpane:pr:${action}`, async (request: PaneCommandValue = {}) => {
+      const input = decodeBoundary(request, boundary.object({
+        paneId: boundary.optional(boundary.string), url: boundary.optional(boundary.string), head: boundary.optional(boundary.string),
+      }));
+      const monitor = services.sessionPrMonitor;
+      if (!monitor) throw new PaneError('ERR_PR_WATCH_UNAVAILABLE', 'PR watching is unavailable in this daemon. Nothing was changed.', 'Update Pane and retry.');
+      if (action === 'list') return { ok: true, watches: monitor.list(input.paneId) };
+      if (!input.paneId || !input.url) throw new PaneError('ERR_PR_WATCH_ARGUMENT', 'PR watch needs a Pane and PR URL. Nothing was changed.', 'Pass --pane <id> --url https://github.com/owner/repo/pull/123.');
+      if (action === 'unwatch') return { ok: true, removed: monitor.unwatch(input.paneId, input.url) };
+      return { ok: true, ...monitor.watch(input.paneId, input.url, input.head) };
+    });
+  }
+
   commandRegistry.register('runpane:workspace:state', async (request: PaneCommandValue = {}): Promise<RunpaneWorkspaceStateResult> => {
     return withRunpaneAction(services, 'workspace:state', {}, () => {
       const normalized = parsePaneListRequest(request);
@@ -1667,6 +1681,7 @@ export function registerRunpaneHandlers(
           return {
             ok: true,
             epoch: workspaceJournal.epoch,
+            activityGeneration: workspaceJournal.activityGeneration(filter),
             generation: workspaceJournal.generation,
             entries,
             timedOut: false,
@@ -1768,6 +1783,7 @@ export function registerRunpaneHandlers(
         return {
           ok: true,
           epoch: workspaceJournal.epoch,
+          activityGeneration: workspaceJournal.activityGeneration(filter),
           generation,
           entries,
           timedOut: entries.length === 0 && (cadence !== undefined || waited.timedOut),
@@ -4083,6 +4099,13 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pr.conflicted',
   'pr.checks',
   'pr.merged',
+  'pr.closed',
+  'pr.head',
+  'pr.review',
+  'pr.comment',
+  'pr.stopped',
+  'github.unavailable',
+  'github.recovered',
   'agent.report',
 );
 

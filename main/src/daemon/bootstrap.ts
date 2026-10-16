@@ -264,6 +264,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
   });
 
   const workspaceJournal = new WorkspaceJournal({
+    filePath: path.join(getAppDirectory(), 'workspace-journal.json'),
     resolvePane: (paneId) => {
       const session = sessionManager.getSession(paneId);
       if (!session) return undefined;
@@ -355,6 +356,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
     spotlightManager,
     workspaceJournal,
     workspaceStateReader,
+    sessionPrMonitor,
     workspaceCursorStore,
     namedLockService,
   };

@@ -147,12 +147,19 @@ export type RunpaneWorkspaceEntryKind =
   | 'pane.associated'
   /** The Pane left a Session (`sessions detach`). */
   | 'pane.detached'
-  /** A Session member's open PR became conflicting with its base. */
+  /** A watched open PR became conflicting with its base. */
   | 'pr.conflicted'
-  /** A Session member's PR checks settled (`checks: passed | failed`) for its head commit. */
+  /** A watched PR has a new failed check or complete passing checks for its head commit. */
   | 'pr.checks'
-  /** A Session member's PR was merged. */
-  | 'pr.merged';
+  /** A watched PR was merged. */
+  | 'pr.merged'
+  | 'pr.closed'
+  | 'pr.head'
+  | 'pr.review'
+  | 'pr.comment'
+  | 'pr.stopped'
+  | 'github.unavailable'
+  | 'github.recovered';
 
 /** The PR a `pr.*` entry reports on. */
 export interface RunpaneWorkspacePullRequest {
@@ -251,6 +258,7 @@ export type RunpaneWorkspaceResetReason =
   | 'unknown-consumer';
 
 export interface RunpaneWorkspaceWaitResult {
+  activityGeneration?: number;
   ok: true;
   epoch: string;
   generation: number;
