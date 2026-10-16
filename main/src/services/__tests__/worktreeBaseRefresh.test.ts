@@ -114,7 +114,9 @@ describe('creating a worktree Pane on a remote-tracking base', () => {
   it('stops waiting for a hanging fetch at the cap, without prompting or holding the repository lock', async () => {
     const fixture = remoteFixture();
     git(fixture.project, 'remote', 'set-url', 'origin', 'ssh://pane.invalid/remote.git');
-    git(fixture.project, 'config', 'core.sshCommand', 'sleep 20 #');
+    // Leave the project first: on Windows, stopping git at the cap leaves this command running,
+    // and a process whose folder is inside the fixture keeps it from being deleted (EBUSY).
+    git(fixture.project, 'config', 'core.sshCommand', 'cd / && exec sleep 20 #');
     const fetches = fetchCalls(fixture.runner);
     const started = Date.now();
 
