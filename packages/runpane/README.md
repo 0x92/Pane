@@ -123,14 +123,19 @@ not count as updating either package.
 Run `runpane update --dry-run --json` to inspect the machine, executable, CLI
 owner, and supervisor capability. App updates require a running host supporting
 the continuity protocol and a release with a matching `continuity.json` manifest.
-Older releases require the normal manual installer. Cached/local npm installs,
+Both the running app and the requested target must support this protocol.
+Existing 2.4.182 releases do not provide this upgrade path; install a future
+continuity-capable release manually first. See the
+[prerequisites and recovery guide](../../docs/UPDATE_RECOVERY.md). Cached/local npm installs,
 system-managed Linux packages, non-stable/daemon installer options, custom download
 directories, missing standalone Node, and unwritable targets
 are refused before downtime. Python delegates to the managed engine installed
 by Pane and records the invoking Python environment.
 
 The command returns an operation ID after the independent helper acknowledges
-startup. That is acceptance, not completion. Use
+startup. That is acceptance, not completion. The
+[status fields, terminal phases and exit codes](../../docs/UPDATE_RECOVERY.md#status-and-exit-codes)
+distinguish installed components from a healthy host and restored panels. Use
 `runpane update --status <id> --wait --json` with the same `--pane-dir` to inspect
 installed components, host health, and each panel's restoration outcome. A
 current-user launchd, Task Scheduler, or systemd service owns the helper; its
@@ -160,7 +165,14 @@ installation work. To choose another machine explicitly, run
 `runpane workspace <machine> exec -- runpane update`; the UI's selected host does
 not change the default update target.
 
-### Common Options
+### Installer options
+
+The following options apply to `install client` and `install daemon`. For
+`update`, `--version` and `--dry-run` apply; `--pane-path` only verifies the
+running executable and cannot select another installation. `--download-dir`
+is refused; `--format` must be `auto` or the native update format (`zip` on
+macOS, `exe` on Windows, `appimage` on Linux).
+
 
 ```bash
 --version <latest|vX.Y.Z>

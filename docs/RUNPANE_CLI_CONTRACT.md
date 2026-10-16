@@ -159,7 +159,7 @@ runpane pr list [--pane <id>] [--json] [--pane-dir <path>]
 
 The wrapper must stream Pane stdout/stderr without reformatting because `pane --remote-setup` prints the one-time `pane-remote://...` connection code.
 
-`runpane update` defaults to both app and active supported CLI, with independent supervision, staging, durable status, and explicit restoration outcomes.
+`runpane update` defaults to both app and active supported CLI, with independent supervision, staging, durable status, and explicit restoration outcomes. Prerequisites, status fields/exit codes, draft handling and manual recovery are documented in [Update recovery](UPDATE_RECOVERY.md).
 
 `runpane version` prints only wrapper package metadata and does not contact, launch, or focus the Pane app or daemon.
 

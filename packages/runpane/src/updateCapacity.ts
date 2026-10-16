@@ -1,19 +1,33 @@
-import fs from 'node:fs';
+import nodeFs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { RunpaneError } from './errors';
 
-/** Mirrors snapshot exclusions and verifies every copied entry is readable before downtime. */
-function updateSnapshotBytes(source: string, excludeUpdates = false): number {
+// Electron virtualizes app.asar as a directory. Capacity and snapshots concern
+// physical files; the staged standalone Node helper has these semantics too.
+// SAFETY: Electron's built-in original-fs exposes the unchanged Node fs API.
+const fs: typeof nodeFs = process.versions.electron
+  ? createRequire(__filename)('original-fs') as typeof nodeFs
+  : nodeFs;
+
+/** Live Chromium files may be exclusively locked until clean shutdown on Windows. */
+function updateSnapshotBytes(source: string, excludeUpdates = false, liveProfile = false): number {
   let total = 0;
   for (const entry of fs.readdirSync(source)) {
     if ((excludeUpdates && entry === 'updates') || entry.startsWith('Singleton')) continue;
     const file = path.join(source, entry);
     const stat = fs.lstatSync(file);
     if (stat.isSocket()) continue;
-    if (stat.isDirectory()) total += updateSnapshotBytes(file);
+    if (stat.isDirectory()) total += updateSnapshotBytes(file, false, liveProfile);
     else if (stat.isSymbolicLink()) { fs.readlinkSync(file); total += stat.size; }
     else if (stat.isFile()) {
-      const fd = fs.openSync(file, 'r'); fs.closeSync(fd); total += stat.size;
+      try { const fd = fs.openSync(file, 'r'); fs.closeSync(fd); }
+      catch (error) {
+        // A sharing violation is not an ACL denial. Count the physical size
+        // now; the post-quiescence snapshot must read/copy it before install.
+        if (!(liveProfile && process.platform === 'win32' && error instanceof Error && 'code' in error && error.code === 'EBUSY')) throw error;
+      }
+      total += stat.size;
     } else throw new RunpaneError('ERR_UPDATE_SNAPSHOT_ENTRY', `The recovery snapshot cannot copy ${file}. Pane remains running.`, 'Move the unsupported special file outside Pane data and retry.');
   }
   return total;
@@ -22,7 +36,7 @@ function updateSnapshotBytes(source: string, excludeUpdates = false): number {
 export function assertUpdateCapacity(paneDir: string, host: { paneDir: string; userData: string } | null, install: string, cliPrefix?: string): void {
   const GiB = 1024 ** 3;
   const installBytes = host ? (fs.statSync(install).isDirectory() ? updateSnapshotBytes(install) : fs.statSync(install).size) : 0;
-  const snapshotBytes = host ? updateSnapshotBytes(host.paneDir, true) + updateSnapshotBytes(host.userData) : 0;
+  const snapshotBytes = host ? updateSnapshotBytes(host.paneDir, true) + updateSnapshotBytes(host.userData, false, true) : 0;
   const requirements = [
     { directory: paneDir, bytes: snapshotBytes * 1.2 + (host ? installBytes * 3 : 0) + 2 * GiB },
     ...(host ? [{ directory: path.dirname(install), bytes: installBytes * 2 }] : []),
