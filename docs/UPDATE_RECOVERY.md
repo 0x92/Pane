@@ -10,9 +10,9 @@ CLI owner and supervisor capability without starting an update.
 
 Both the running app and the requested app release must support continuity
 protocol 1. No existing 2.4.182 release has the required `continuity.json`
-manifest; there is no currently released minimum version to recommend. Install
-a future continuity-capable release with its normal installer before using this
-path. A requested older target without that manifest is refused before shutdown.
+manifest. To bootstrap this feature, install a continuity-capable release with
+its normal installer before using this path; installing the CLI alone does not
+add support to an older running app. A requested older target without that manifest is refused before shutdown.
 
 Use an account that owns the app and CLI directories, in an interactive login
 with launchd (macOS), Task Scheduler (Windows), or user systemd (Linux). The app

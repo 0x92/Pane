@@ -124,7 +124,7 @@ Run `runpane update --dry-run --json` to inspect the machine, executable, CLI
 owner, and supervisor capability. App updates require a running host supporting
 the continuity protocol and a release with a matching `continuity.json` manifest.
 Both the running app and the requested target must support this protocol.
-Existing 2.4.182 releases do not provide this upgrade path; install a future
+Existing 2.4.182 releases do not provide this upgrade path; install a
 continuity-capable release manually first. See the
 [prerequisites and recovery guide](../../docs/UPDATE_RECOVERY.md). Cached/local npm installs,
 system-managed Linux packages, non-stable/daemon installer options, custom download
