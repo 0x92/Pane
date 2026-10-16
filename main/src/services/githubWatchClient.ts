@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { boundary, decodeBoundary, type JsonObject } from '../../../shared/validation/boundaryDecoder';
 
 export interface GithubPrTarget { host: string; owner: string; repo: string; number: number }
@@ -46,10 +47,11 @@ export class GithubWatchClient {
         const batch = group.slice(offset, offset + BATCH_SIZE);
         const selections = batch.map((pr, i) => `p${i}: repository(owner:${JSON.stringify(pr.owner)},name:${JSON.stringify(pr.repo)}) {
           pullRequest(number:${pr.number}) { state mergeable mergeStateStatus headRefOid updatedAt reviewDecision
-            comments(last:100) { totalCount nodes { id lastEditedAt } }
-            reviews(last:100) { totalCount nodes { id lastEditedAt state } }
-            reviewThreads(last:100) { totalCount nodes { comments(last:1) { nodes { id updatedAt } } } }
-            commits(last:1) { nodes { commit { oid statusCheckRollup { state contexts { totalCount
+            comments(last:100) { totalCount pageInfo { hasPreviousPage } nodes { id updatedAt } }
+            reviews(last:100) { totalCount pageInfo { hasPreviousPage } nodes { id lastEditedAt state } }
+            reviewThreads(last:100) { totalCount pageInfo { hasPreviousPage } nodes { id isResolved isOutdated comments(last:1) { totalCount nodes { id updatedAt } } } }
+            commits(last:1) { nodes { commit { oid statusCheckRollup { state contexts(first:100) { totalCount pageInfo { hasNextPage }
+              nodes { ... on CheckRun { id name status conclusion } ... on StatusContext { id context state } }
               checkRunCountsByState { state count } statusContextCountsByState { state count }
             } } } } }
           }
@@ -57,7 +59,15 @@ export class GithubWatchClient {
         const data = await this.query(host, `query { ${selections} }`, true);
         batch.forEach((pr, i) => {
           const repo = decodeBoundary(data[`p${i}`], boundary.nullable(boundary.object({ pullRequest: boundary.nullable(boundary.jsonObject) })));
-          if (repo?.pullRequest) result.set(githubPrKey(pr), JSON.stringify(repo.pullRequest));
+          if (repo?.pullRequest) {
+            const limits = decodeBoundary(repo.pullRequest, fingerprintLimitsSchema);
+            const truncated = limits.comments?.pageInfo.hasPreviousPage || limits.reviews?.pageInfo.hasPreviousPage
+              || limits.reviewThreads?.pageInfo.hasPreviousPage || limits.reviewThreads?.nodes.some(thread => thread.comments.totalCount > 1)
+              || limits.commits?.nodes.some(node => node.commit.statusCheckRollup?.contexts.pageInfo.hasNextPage);
+            // A bounded fingerprint must not hide changes outside its window. Such PRs
+            // get a full read each round; ordinary small PRs retain the cheap path.
+            result.set(githubPrKey(pr), JSON.stringify(repo.pullRequest) + (truncated ? `:${randomUUID()}` : ''));
+          }
         });
       }
     }
@@ -70,13 +80,12 @@ export class GithubWatchClient {
     // Bound pathological repositories; incomplete checks can never report success.
     for (let page = 0; page < 20; page++) {
       const data = await this.query(target.host, `query {
-        viewer { login }
         repository(owner:${JSON.stringify(target.owner)},name:${JSON.stringify(target.repo)}) {
           pullRequest(number:${target.number}) {
             number url state mergeable mergeStateStatus headRefOid
-            comments(last:100) { nodes { id updatedAt author { login } } }
-            reviews(last:100) { nodes { id submittedAt lastEditedAt state author { login } } }
-            reviewThreads(last:100) { nodes { comments(last:100) { nodes { id updatedAt author { login } } } } }
+            comments(last:100) { pageInfo { hasPreviousPage } nodes { id updatedAt } }
+            reviews(last:100) { pageInfo { hasPreviousPage } nodes { id submittedAt lastEditedAt state } }
+            reviewThreads(last:100) { pageInfo { hasPreviousPage } nodes { id isResolved isOutdated comments(last:100) { pageInfo { hasPreviousPage } nodes { id updatedAt } } } }
             commits(last:1) { nodes { commit { oid statusCheckRollup { contexts(first:100${cursor ? `,after:${JSON.stringify(cursor)}` : ''}) {
               pageInfo { hasNextPage endCursor }
               nodes {
@@ -99,11 +108,12 @@ export class GithubWatchClient {
       if (!detail) detail = {
         number: pr.number, url: pr.url, state: pr.state, mergeable: pr.mergeable,
         headRefOid: pr.headRefOid, mergeStateStatus: pr.mergeStateStatus, checks: [], complete: false,
+        feedbackComplete: !pr.comments.pageInfo.hasPreviousPage && !pr.reviews.pageInfo.hasPreviousPage
+          && !pr.reviewThreads.pageInfo.hasPreviousPage && pr.reviewThreads.nodes.every(thread => !thread.comments.pageInfo.hasPreviousPage),
         comments: [...pr.comments.nodes, ...pr.reviewThreads.nodes.flatMap(thread => thread.comments.nodes)]
-          .filter(comment => comment.author?.login !== response.viewer.login)
           .map(comment => `${comment.id}:${comment.updatedAt}`),
-        reviews: pr.reviews.nodes.filter(review => review.author?.login !== response.viewer.login)
-          .map(review => `${review.id}:${review.submittedAt}:${review.lastEditedAt}:${review.state}`),
+        reviews: [...pr.reviews.nodes.map(review => `${review.id}:${review.submittedAt}:${review.lastEditedAt}:${review.state}`),
+          ...pr.reviewThreads.nodes.map(thread => `thread:${thread.id}:${thread.isResolved}:${thread.isOutdated}`)],
       };
       detail.checks.push(...(contexts?.nodes ?? []));
       if (!contexts?.pageInfo.hasNextPage) { detail.complete = true; return detail; }
@@ -177,23 +187,35 @@ export class GithubWatchClient {
   }
 }
 
-const authorSchema = boundary.nullable(boundary.object({ login: boundary.string }));
-const commentSchema = boundary.object({ id: boundary.string, updatedAt: boundary.string, author: authorSchema });
+const previousPageSchema = boundary.object({ hasPreviousPage: boundary.boolean });
+const fingerprintLimitsSchema = boundary.object({
+  comments: boundary.optional(boundary.object({ pageInfo: previousPageSchema })),
+  reviews: boundary.optional(boundary.object({ pageInfo: previousPageSchema })),
+  reviewThreads: boundary.optional(boundary.object({ pageInfo: previousPageSchema,
+    nodes: boundary.array(boundary.object({ comments: boundary.object({ totalCount: boundary.number }) })),
+  })),
+  commits: boundary.optional(boundary.object({ nodes: boundary.array(boundary.object({ commit: boundary.object({
+    statusCheckRollup: boundary.nullable(boundary.object({ contexts: boundary.object({ pageInfo: boundary.object({ hasNextPage: boundary.boolean }) }) })),
+  }) })) })),
+});
+const commentSchema = boundary.object({ id: boundary.string, updatedAt: boundary.string });
 const checkSchema = boundary.object({
   __typename: boundary.string, name: boundary.optional(boundary.string), context: boundary.optional(boundary.string),
   status: boundary.optional(boundary.string), conclusion: boundary.optional(boundary.nullable(boundary.string)),
   state: boundary.optional(boundary.string), isRequired: boundary.boolean,
 });
 const detailResponseSchema = boundary.object({
-  viewer: boundary.object({ login: boundary.string }),
   repository: boundary.nullable(boundary.object({ pullRequest: boundary.nullable(boundary.object({
     number: boundary.number, url: boundary.string, state: boundary.string,
     mergeable: boundary.string, mergeStateStatus: boundary.string, headRefOid: boundary.string,
-    comments: boundary.object({ nodes: boundary.array(commentSchema) }),
-    reviews: boundary.object({ nodes: boundary.array(boundary.object({
-      id: boundary.string, submittedAt: boundary.nullable(boundary.string), lastEditedAt: boundary.nullable(boundary.string), state: boundary.string, author: authorSchema,
+    comments: boundary.object({ pageInfo: previousPageSchema, nodes: boundary.array(commentSchema) }),
+    reviews: boundary.object({ pageInfo: previousPageSchema, nodes: boundary.array(boundary.object({
+      id: boundary.string, submittedAt: boundary.nullable(boundary.string), lastEditedAt: boundary.nullable(boundary.string), state: boundary.string,
     })) }),
-    reviewThreads: boundary.object({ nodes: boundary.array(boundary.object({ comments: boundary.object({ nodes: boundary.array(commentSchema) }) })) }),
+    reviewThreads: boundary.object({ pageInfo: previousPageSchema, nodes: boundary.array(boundary.object({
+      id: boundary.string, isResolved: boundary.boolean, isOutdated: boundary.boolean,
+      comments: boundary.object({ pageInfo: previousPageSchema, nodes: boundary.array(commentSchema) }),
+    })) }),
     commits: boundary.object({ nodes: boundary.array(boundary.object({ commit: boundary.object({
       oid: boundary.string,
       statusCheckRollup: boundary.nullable(boundary.object({ contexts: boundary.object({
@@ -207,5 +229,6 @@ export interface GithubPrDetails {
   number: number; url: string; state: string; mergeable: string; headRefOid: string;
   mergeStateStatus: string;
   checks: Array<ReturnType<typeof checkSchema.decode>>; complete: boolean;
+  feedbackComplete: boolean;
   comments: string[]; reviews: string[];
 }

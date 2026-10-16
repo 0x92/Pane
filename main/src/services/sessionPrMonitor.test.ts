@@ -8,7 +8,7 @@ import { WorkspaceJournal } from './workspaceJournal';
 
 const url = 'https://github.com/acme/app/pull/7';
 const check = (name: string, status = 'COMPLETED', conclusion = 'SUCCESS', isRequired = true) => ({ __typename: 'CheckRun', name, status, conclusion, isRequired });
-const details = (): GithubPrDetails => ({ number: 7, url, state: 'OPEN', mergeable: 'MERGEABLE', headRefOid: 'a'.repeat(40), checks: [], complete: true, comments: [], reviews: [], mergeStateStatus: 'CLEAN' });
+const details = (): GithubPrDetails => ({ number: 7, url, state: 'OPEN', mergeable: 'MERGEABLE', headRefOid: 'a'.repeat(40), checks: [], complete: true, feedbackComplete: true, comments: [], reviews: [], mergeStateStatus: 'CLEAN' });
 function setup(filePath?: string) {
   let pr = details();
   let error: GithubWatchError | undefined;
@@ -32,6 +32,28 @@ function setup(filePath?: string) {
 }
 
 describe('PR monitoring through the journal', () => {
+  it('does not pass while an unregistered required context keeps the PR blocked', async () => {
+    const s = setup(); s.monitor.watch('worker', url);
+    s.set({ checks: [check('optional', 'COMPLETED', 'SUCCESS', false)], mergeStateStatus: 'BLOCKED' });
+    await s.monitor.pollOnce();
+    expect(s.journal.readAfter(0, { kinds: ['pr.checks'] }).entries).toEqual([]);
+    s.set({ checks: [check('required'), check('optional', 'COMPLETED', 'FAILURE', false)], mergeStateStatus: 'UNSTABLE' });
+    await s.monitor.pollOnce();
+    expect(s.journal.readAfter(0, { kinds: ['pr.checks'] }).entries).toMatchObject([
+      { checks: 'failed', failingChecks: ['optional'] }, { checks: 'passed' },
+    ]);
+  });
+
+  it('exposes truncated discussions and withholds success until feedback is complete', async () => {
+    const s = setup(); s.monitor.watch('worker', url);
+    s.set({ checks: [check('required')], feedbackComplete: false });
+    await s.monitor.pollOnce(); await s.monitor.pollOnce();
+    expect(s.journal.readAfter(0, { kinds: ['pr.checks'] }).entries).toEqual([]);
+    expect(s.journal.readAfter(0, { kinds: ['pr.review'] }).entries).toMatchObject([{ reason: expect.stringContaining('incomplete') }]);
+    s.set({ feedbackComplete: true }); await s.monitor.pollOnce();
+    expect(s.journal.readAfter(0, { kinds: ['pr.checks'] }).entries).toMatchObject([{ checks: 'passed' }]);
+  });
+
   it('recovers Session discovery, keeps an explicit watch alongside it, and rediscovers a reopened PR', async () => {
     let unavailable = true;
     let now = 1000;

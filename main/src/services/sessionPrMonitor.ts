@@ -19,6 +19,7 @@ const discoverySchema = boundary.object({ paneId: boundary.string, failures: bou
 const baselineSchema = boundary.object({
   state: boundary.string, head: boundary.string, mergeable: boundary.string,
   failed: boundary.array(boundary.string), passed: boundary.boolean,
+  feedbackComplete: boundary.optional(boundary.boolean),
   comments: boundary.array(boundary.string), reviews: boundary.array(boundary.string),
 });
 const recordSchema = boundary.object({
@@ -208,7 +209,7 @@ export class SessionPrMonitor {
       : Boolean(check.conclusion && failedConclusions.has(check.conclusion))).map(check => check.name ?? check.context ?? 'check'))].sort();
     const required = pr.checks.filter(check => check.isRequired);
     const relevant = required.length ? required : pr.checks;
-    const passed = pr.complete && relevant.length > 0 && ['CLEAN', 'UNSTABLE'].includes(pr.mergeStateStatus)
+    const passed = pr.complete && pr.feedbackComplete && relevant.length > 0 && ['CLEAN', 'UNSTABLE'].includes(pr.mergeStateStatus)
       && relevant.every(check => check.__typename === 'StatusContext' ? check.state === 'SUCCESS'
         : check.status === 'COMPLETED' && ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(check.conclusion ?? ''));
     if (record.explicit && !record.head) record.head = pr.headRefOid;
@@ -221,10 +222,13 @@ export class SessionPrMonitor {
       if (previous?.state !== pr.state) events.push(event(pr.state === 'MERGED' ? 'pr.merged' : 'pr.closed'));
       record.stopped = pr.state === 'MERGED' ? 'merged' : 'closed';
     } else {
+      if (!pr.feedbackComplete && previous?.feedbackComplete !== false) events.push(event('pr.review', 'Discussion exceeds the watch read limit. Feedback is incomplete and success is withheld; read the full PR discussion on GitHub.'));
       if (pr.mergeable === 'CONFLICTING' && previous?.mergeable !== 'CONFLICTING') events.push(event('pr.conflicted'));
       const newFailures = failures.filter(name => previous?.head !== pr.headRefOid || !previous.failed.includes(name));
       if (newFailures.length) events.push({ ...event('pr.checks'), checks: 'failed', failingChecks: newFailures });
-      if (passed && (!record.head || record.head === pr.headRefOid) && (!previous?.passed || previous.head !== pr.headRefOid)) events.push({ ...event('pr.checks'), checks: 'passed' });
+      if (passed && (!record.head || record.head === pr.headRefOid) && (!previous?.passed || previous.head !== pr.headRefOid)) events.push({
+        ...event('pr.checks', 'Checks passed on the pinned head. Review any optional failures and remaining merge requirements.'), checks: 'passed',
+      });
       if (previous && pr.reviews.some(review => !previous.reviews.includes(review))) events.push(event('pr.review', 'A review changed; read the PR review before acting.'));
       if (previous && pr.comments.some(comment => !previous.comments.includes(comment))) events.push(event('pr.comment', 'A comment changed; read the PR discussion before acting.'));
       const news = events.filter(entry => !entry.kind.startsWith('github.'));
@@ -235,7 +239,7 @@ export class SessionPrMonitor {
       }
     }
     record.baseline = { state: pr.state, head: pr.headRefOid, mergeable: pr.mergeable === 'UNKNOWN' ? previous?.mergeable ?? 'UNKNOWN' : pr.mergeable,
-      failed: failures, passed: passed && (!record.head || record.head === pr.headRefOid), comments: pr.comments, reviews: pr.reviews };
+      failed: failures, passed: passed && (!record.head || record.head === pr.headRefOid), feedbackComplete: pr.feedbackComplete, comments: pr.comments, reviews: pr.reviews };
     record.fingerprint = fingerprint; record.fullReadAt = this.now(); record.errors = 0; record.retryAt = 0; record.unavailable = false;
     this.commit(events);
   }

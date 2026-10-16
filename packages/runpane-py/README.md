@@ -181,10 +181,26 @@ Failures emit immediately, even while other checks run. Success requires a
 complete, nonempty set of checks on the pinned head and all required checks
 passing (all checks when none are marked required). BLOCKED/UNKNOWN merge
 status conservatively withholds success, including when reviews are missing.
-Comments/reviews from the authenticated account are excluded. Merge/close,
+Feedback from every account is included: agents and people can share a login.
+Checks passing is a signal to inspect the PR, not proof of complete readiness;
+optional failures can still produce a separate failure event. Merge/close,
 eight non-rate-limit failures, or ten comment-only updates stop registration;
 archiving/deleting the Pane removes it. Rate limits pause instead of consuming
 the failure budget. Outages and recovery are journal events.
+
+Fingerprints include individual check outcomes and thread resolution state, so
+equal aggregate counts do not hide swaps or edits. When the fingerprint window
+is truncated (over 100 checks/discussion items or multiple comments in a review
+thread), the daemon reads details each round. Detail reads page through up to
+2,000 checks and retain the latest 100 comments, reviews, threads, and comments
+per thread. Truncated discussions emit `pr.review` with an incomplete-feedback
+reason and withhold success; read the full discussion on GitHub.
+
+Baselines and events are replaced atomically before readers wake. This prevents
+a process crash from advancing a baseline without its event. Delivery remains
+bounded by journal retention and cursor acknowledgments; replay after a consumer
+crash before acknowledgment is possible. This is not an exactly-once or
+power-loss durability guarantee.
 
 Removed flags fail with replacement guidance: `--settle` became
 `--ready-settle`; `--format` became `--json`; all-managed/agents-only,

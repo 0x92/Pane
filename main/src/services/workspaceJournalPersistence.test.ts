@@ -1,10 +1,35 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { WorkspaceJournal } from './workspaceJournal';
 
 describe('durable PR event delivery', () => {
+  it('keeps the old baseline and cursor on rename failure, then publishes a readable snapshot before waking', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'pane-journal-'));
+    try {
+      const filePath = path.join(directory, 'journal.json');
+      const journal = new WorkspaceJournal({ filePath });
+      journal.commitGithubState({ head: 'old' }, []);
+      const wake = journal.waitAfter(0, { kinds: ['pr.head'] }, 1000).then(result => {
+        const disk = new WorkspaceJournal({ filePath });
+        expect(disk.githubState).toEqual({ head: 'new' });
+        expect(disk.readAfter(0, { kinds: ['pr.head'] }).entries).toEqual(result.entries);
+        return result;
+      });
+      const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw new Error('disk failure'); });
+      expect(() => journal.commitGithubState({ head: 'new' }, [{ paneId: 'worker', kind: 'pr.head', source: 'github' }])).toThrow('disk failure');
+      rename.mockRestore();
+      expect(journal.generation).toBe(0);
+      expect(journal.githubState).toEqual({ head: 'old' });
+      expect(new WorkspaceJournal({ filePath }).githubState).toEqual({ head: 'old' });
+      journal.commitGithubState({ head: 'new' }, [{ paneId: 'worker', kind: 'pr.head', source: 'github' }]);
+      expect((await wake).entries).toHaveLength(1);
+      journal.dispose();
+    } finally { vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }); }
+  });
+
   it('retries agent and exit transitions after a failed durable write', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'pane-journal-'));
     const filePath = path.join(directory, 'journal.json');
