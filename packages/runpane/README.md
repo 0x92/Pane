@@ -255,8 +255,18 @@ watchers that list `agent.report.missing` get `MISSING REPORT <pane> pane
 example `--until-event --kinds
 agent.report,agent.report.missing,agent.blocked,panel.exited,pane.gone`.
 `runpane inbox [--session <id|name>]` lists the reports, missing reports, and
-on-screen questions a Session has not acknowledged, and `runpane inbox ack
-<id>...` clears them.
+on-screen questions a Session has not acknowledged (an orchestrator reads it
+when it starts or resumes), and `runpane inbox ack <id>...` clears them.
+
+To dispatch and get the result in one call, add `--wait`. It blocks on that
+panel and prints one line of JSON when the worker reports (exit 0), ends
+without a report (3, with `lastOutput`), waits on a prompt (4, with
+`screenLines`), or exits (5); `--timeout 30m` gives up with exit 124. Run it as
+a background task:
+
+```bash
+runpane panels submit --panel <panel-id> --input-file prompt.md --as-file-pointer --wait --yes
+```
 
 Do not pipe follow through `head` or `grep -m1` to wait. Run `--until-event` as
 a supported background task, act on its events, then re-arm with its cursor.

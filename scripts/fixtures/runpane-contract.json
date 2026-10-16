@@ -981,12 +981,6 @@
     ],
     [
       "inbox",
-      "--hook",
-      "--pane-dir",
-      "/tmp/pane"
-    ],
-    [
-      "inbox",
       "ack",
       "in-1a2b3c4d",
       "in-5e6f7a8b",
@@ -1010,6 +1004,52 @@
       "fyi",
       "--no-expect-report",
       "--yes"
+    ],
+    [
+      "panels",
+      "submit",
+      "--panel",
+      "panel-1",
+      "--input-file",
+      "prompt.md",
+      "--as-file-pointer",
+      "--wait",
+      "--yes"
+    ],
+    [
+      "panels",
+      "submit",
+      "--panel",
+      "panel-1",
+      "--text",
+      "Red",
+      "--wait",
+      "--timeout",
+      "30m",
+      "--yes",
+      "--json"
+    ],
+    [
+      "panes",
+      "create",
+      "--repo",
+      "active",
+      "--name",
+      "feat",
+      "--agent",
+      "claude",
+      "--prompt-file",
+      "task.md",
+      "--wait",
+      "--yes"
+    ],
+    [
+      "lock",
+      "acquire",
+      "--name",
+      "deploy",
+      "--wait",
+      "5000"
     ]
   ],
   "help": {

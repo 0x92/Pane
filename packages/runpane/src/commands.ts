@@ -115,13 +115,15 @@ export interface ParsedArgs {
   summary?: string;
   summaryFile?: string;
   question?: string;
+  /** panels create|submit, panes create `--wait`: block until that panel reports, misses its report, is blocked, or exits. */
+  waitForResult?: boolean;
+  /** `--timeout` with `--wait`: give up after this long (exit 124). */
+  waitTimeoutMs?: number;
   /**
    * panels create|submit, panes create: whether the sender waits for a `runpane report`.
    * Unset leaves it to the daemon, which expects one for work an agent sent.
    */
   expectReport?: boolean;
-  /** inbox: print Claude Code UserPromptSubmit hook output. */
-  hook?: boolean;
   /** inbox ack: clear every item of the Session. */
   all?: boolean;
   /** inbox ack: the item ids to clear. */
@@ -312,6 +314,7 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
   }
   if (parsed.command === 'watch') applyWatchDefaults(parsed);
   if (parsed.command === 'report') validateReportArgs(parsed);
+  validateWaitForResultArgs(parsed);
   if (parsed.command === 'inbox ack' && !parsed.all && !parsed.inboxIds?.length) {
     throw new Error('runpane inbox ack needs the item ids to clear, or --all --session <id|name>.');
   }
@@ -319,6 +322,20 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
     throw new Error('runpane inbox ack accepts either item ids or --all, not both.');
   }
   return parsed;
+}
+
+/** The commands that dispatch work and accept `--wait` for its result. */
+const WAIT_FOR_RESULT_COMMANDS: ReadonlySet<string> = new Set(['panels submit', 'panels create', 'panes create']);
+
+function validateWaitForResultArgs(parsed: ParsedArgs): void {
+  if (parsed.waitTimeoutMs !== undefined && !parsed.waitForResult) {
+    throw new Error('--timeout only applies with --wait.');
+  }
+  if (!parsed.waitForResult) return;
+  if (parsed.expectReport === false) {
+    throw new Error('--wait waits for the worker\'s report, so it cannot be combined with --no-expect-report.');
+  }
+  parsed.expectReport = true;
 }
 
 /** Bare values preserve the old millisecond convention (heartbeat: seconds). */
@@ -488,6 +505,11 @@ function parseFlags(rawArgs: string[], parsed: ParsedArgs): void {
     // Offline commands accept --pane-dir and ignore it, so one --pane-dir works for every command.
     if ((isAgentContextCommand || parsed.command === 'version') && arg === '--pane-dir') {
       parsed.paneDir = readValue(args, ++index, arg, literalValues);
+      continue;
+    }
+    // `lock acquire --wait <ms>` takes a value; on a dispatch command `--wait` is a switch.
+    if (isLocalCommand && arg === '--wait' && WAIT_FOR_RESULT_COMMANDS.has(parsed.command)) {
+      parsed.waitForResult = true;
       continue;
     }
     if (isLocalCommand && LOCAL_BOOLEAN_FLAGS.has(arg)) {
@@ -690,10 +712,6 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
     const expectReport = flag === '--expect-report';
     if (parsed.expectReport === !expectReport) throw new Error('Pass either --expect-report or --no-expect-report, not both.');
     parsed.expectReport = expectReport;
-    return;
-  }
-  if (flag === '--hook') {
-    parsed.hook = true;
     return;
   }
   if (flag === '--all') {
@@ -1019,6 +1037,10 @@ function parseLocalValueFlag(flag: string, value: string, parsed: ParsedArgs): v
   }
   if (flag === '--ttl') {
     parsed.lockTtlMs = parseLockTtl(value);
+    return;
+  }
+  if (flag === '--timeout') {
+    parsed.waitTimeoutMs = parseWatchDuration(flag, value);
     return;
   }
   if (flag === '--wait') {

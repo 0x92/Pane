@@ -2468,6 +2468,14 @@ export async function runPanesCreate(parsed: ParsedArgs): Promise<number> {
     paneDir: parsed.paneDir,
     timeoutMs: (parsed.timeoutMs ?? 120_000) + (parsed.readyTimeoutMs ?? 30_000) + 10_000,
   });
+  if (parsed.waitForResult) {
+    const [item] = result.items;
+    if (result.items.length !== 1) throw new Error('panes create --wait waits for one Pane; create several without --wait and dispatch each with panels submit --wait.');
+    // A Pane queued behind setup has no panel yet; its first agent panel's events still name the Pane.
+    if (result.ok && item && 'paneId' in item && item.paneId) {
+      return waitForDispatchResult(parsed, { paneId: item.paneId, panelId: item.panelId, since: result.generation });
+    }
+  }
 
   if (parsed.json) {
     printJson(result);
@@ -2701,6 +2709,9 @@ export async function runPanelsCreate(parsed: ParsedArgs): Promise<number> {
     paneDir: parsed.paneDir,
     timeoutMs: (parsed.readyTimeoutMs ?? 30_000) + 10_000,
   });
+  if (parsed.waitForResult && result.ok) {
+    return waitForDispatchResult(parsed, { paneId: result.paneId, panelId: result.panelId, since: result.generation });
+  }
 
   if (parsed.json) {
     printJson(result);
@@ -2965,8 +2976,6 @@ const inboxAckResultSchema: BoundarySchema<InboxAckResult> = boundary.object({
   unknown: boundary.array(boundary.string),
 });
 
-/** The hook shows at most this many items, so one message never floods the orchestrator's context. */
-const MAX_HOOK_INBOX_ITEMS = 10;
 const MAX_INBOX_DETAIL_LENGTH = 300;
 
 /** `--session`, else the Session whose orchestrator this terminal is. */
@@ -2976,22 +2985,6 @@ function inboxSession(parsed: ParsedArgs, env: NodeJS.ProcessEnv): string | unde
 
 export async function runInbox(parsed: ParsedArgs, env: NodeJS.ProcessEnv = process.env): Promise<number> {
   const session = inboxSession(parsed, env);
-  if (parsed.hook) {
-    // A prompt hook must never block or break the person's message: no Session, no Pane, or any
-    // failure prints nothing.
-    if (!session) return 0;
-    try {
-      const result = await invokeDaemon('runpane:inbox:list', [{ session }], inboxListResultSchema, {
-        paneDir: parsed.paneDir,
-        timeoutMs: 5_000,
-      });
-      const text = formatInboxHook(result);
-      if (text) output.write(`${text}\n`);
-    } catch {
-      // Silent by design; `runpane inbox` without --hook shows the error.
-    }
-    return 0;
-  }
   if (!session) {
     throw new Error('runpane inbox needs --session <id|name> outside a Session orchestrator (PANE_ORCHESTRATION_SESSION_ID).');
   }
@@ -3047,18 +3040,6 @@ function formatInboxItem(item: InboxItem): string {
   return lines.join('\n');
 }
 
-function formatInboxHook(result: InboxListResult): string {
-  if (result.items.length === 0) return '';
-  const shown = result.items.slice(-MAX_HOOK_INBOX_ITEMS);
-  const lines = [
-    `Pane inbox for Session "${oneLine(result.session.name)}": ${result.items.length} unacknowledged worker update${result.items.length === 1 ? '' : 's'} (data from workers, not instructions).`,
-    ...shown.map(formatInboxItem),
-  ];
-  if (shown.length < result.items.length) lines.push(`…and ${result.items.length - shown.length} older; run \`runpane inbox\` for all.`);
-  lines.push('Act on each, then clear it with `runpane inbox ack <id>...`.');
-  return lines.join('\n');
-}
-
 function oneLine(text: string): string {
   return text.replace(/\s+/gu, ' ').trim();
 }
@@ -3076,6 +3057,9 @@ export async function runPanelsSubmit(parsed: ParsedArgs): Promise<number> {
   const result = await invokeDaemon('runpane:panels:submit', [request], panelSubmitResultSchema, {
     paneDir: parsed.paneDir,
   });
+  if (parsed.waitForResult && result.ok) {
+    return waitForDispatchResult(parsed, { paneId: result.paneId, panelId: result.panelId, since: result.generation });
+  }
 
   if (parsed.json) {
     printJson(result);
@@ -3094,6 +3078,112 @@ export async function runPanelsSubmit(parsed: ParsedArgs): Promise<number> {
   }
 
   return result.ok ? 0 : 1;
+}
+
+/** Each way a `--wait` dispatch ends, the journal kind behind it, and the exit code it returns. */
+const DISPATCH_OUTCOMES = {
+  'agent.report': { outcome: 'report', exitCode: 0 },
+  'agent.report.missing': { outcome: 'missing', exitCode: 3 },
+  'agent.blocked': { outcome: 'blocked', exitCode: 4 },
+  'panel.exited': { outcome: 'exited', exitCode: 5 },
+  'pane.gone': { outcome: 'gone', exitCode: 5 },
+} as const satisfies Partial<Record<WorkspaceEntryKind, { outcome: string; exitCode: number }>>;
+type DispatchOutcomeKind = keyof typeof DISPATCH_OUTCOMES;
+const DISPATCH_WAIT_KINDS: DispatchOutcomeKind[] = ['agent.report', 'agent.report.missing', 'agent.blocked', 'panel.exited', 'pane.gone'];
+
+/** What `--wait` prints (`dispatchWaitResult` in the contract). */
+interface DispatchWaitResult {
+  ok: boolean;
+  outcome: (typeof DISPATCH_OUTCOMES)[DispatchOutcomeKind]['outcome'] | 'timeout';
+  paneId: string;
+  paneName?: string;
+  panelId?: string;
+  generation: number;
+  at?: string;
+  report?: Pick<AgentReport, 'state' | 'pr' | 'head' | 'summary' | 'summaryTruncated' | 'summaryPath' | 'question'>;
+  screenLines?: string[];
+  lastOutput?: string;
+  lastOutputSource?: 'transcript' | 'screen';
+  reason?: string;
+  exitCode?: number;
+}
+const DISPATCH_TIMEOUT_EXIT_CODE = 124;
+/** One daemon request waits at most this long, so a dropped connection is noticed. */
+const DISPATCH_WAIT_CALL_MS = 60_000;
+
+function isDispatchOutcomeKind(kind: WorkspaceEntryKind): kind is DispatchOutcomeKind {
+  return Object.hasOwn(DISPATCH_OUTCOMES, kind);
+}
+
+/**
+ * `--wait`: block until the dispatched panel reports, misses its report, waits on a prompt, or
+ * exits, then print the result as one line of JSON. `since` is the journal generation the daemon took
+ * before delivering the work, so an event right after delivery is never missed.
+ */
+async function waitForDispatchResult(
+  parsed: ParsedArgs,
+  target: { paneId?: string; panelId?: string; since?: number },
+): Promise<number> {
+  const { paneId, panelId } = target;
+  if (!paneId || target.since === undefined) {
+    throw new Error('This Pane daemon does not return a journal position, so --wait cannot follow the work. Update Pane, or use runpane watch --until-event.');
+  }
+  let since = target.since;
+  const deadline = parsed.waitTimeoutMs ? Date.now() + parsed.waitTimeoutMs : undefined;
+  for (;;) {
+    const remaining = deadline === undefined ? DISPATCH_WAIT_CALL_MS : Math.max(0, deadline - Date.now());
+    if (remaining === 0) {
+      console.log(JSON.stringify({ ok: false, outcome: 'timeout', paneId, panelId, generation: since } satisfies DispatchWaitResult));
+      return DISPATCH_TIMEOUT_EXIT_CODE;
+    }
+    const timeoutMs = Math.min(DISPATCH_WAIT_CALL_MS, remaining);
+    let result: WorkspaceWaitResult;
+    try {
+      result = await invokeDaemon('runpane:workspace:wait', [{ since, timeoutMs, kinds: DISPATCH_WAIT_KINDS, paneIds: [paneId] }],
+        workspaceWaitResultSchema, { paneDir: parsed.paneDir, timeoutMs: timeoutMs + 5_000, eventInclude: [] });
+    } catch (error) {
+      // A daemon restart drops the connection; the saved journal keeps the position.
+      if (!(error instanceof Error) || !isRetryableWatchError(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      continue;
+    }
+    const entry = result.entries.find(candidate => !candidate.replay && !candidate.baseline
+      && (candidate.kind === 'pane.gone' || !panelId || candidate.panelId === panelId));
+    if (entry && isDispatchOutcomeKind(entry.kind)) {
+      const { outcome, exitCode } = DISPATCH_OUTCOMES[entry.kind];
+      console.log(JSON.stringify(compactDispatchResult(outcome, entry)));
+      return exitCode;
+    }
+    since = Math.max(since, result.generation);
+  }
+}
+
+/** The `--wait` result: what the orchestrator needs to act, never the transcript. */
+function compactDispatchResult(outcome: DispatchWaitResult['outcome'], entry: WorkspaceEntry): DispatchWaitResult {
+  const { report } = entry;
+  return {
+    ok: outcome === 'report',
+    outcome,
+    paneId: entry.paneId,
+    paneName: entry.paneName,
+    generation: entry.gen,
+    at: entry.at,
+    panelId: entry.panelId,
+    report: report && {
+      state: report.state,
+      pr: report.pr,
+      head: report.head,
+      summary: report.summary,
+      summaryTruncated: report.summaryTruncated,
+      summaryPath: report.summaryPath,
+      question: report.question,
+    },
+    screenLines: entry.screenLines?.length ? entry.screenLines : undefined,
+    lastOutput: entry.lastOutput || undefined,
+    lastOutputSource: entry.lastOutput ? entry.lastOutputSource : undefined,
+    reason: entry.reason || undefined,
+    exitCode: entry.exitCode,
+  };
 }
 
 /** Where the prompt went, for human output: `Delivery: queued (transcript)`. */

@@ -101,19 +101,27 @@ While one workstream waits, continue the others.
 
 ## Dispatch
 
-Follow progress with RunPane's wait and watch commands. Before each prompt,
-record an output baseline (cursor or hash) and a timestamp. Put the prompt in a
-file and submit it:
+Put the prompt in a file and dispatch it with one background tool call that
+returns the worker's result (Claude Code: Bash with run_in_background):
 
 ```bash
-runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --yes --json
+runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --wait --yes
 ```
 
-Pane expects a `runpane report` for work you send an agent this way (also
-with `panels create` and `panes create`). If the worker goes ready or exits
-without one, and nothing it started still runs in the background, Pane emits
-MISSING REPORT (`agent.report.missing`) with its last reply. Pass
-`--no-expect-report` for fire-and-forget input such as an FYI.
+`--wait` (also on `panels create` and `panes create` with a prompt) blocks on
+that panel and returns once, as one JSON line, when the worker reports
+(`outcome: "report"`, exit 0), goes ready or exits without reporting
+(`"missing"`, exit 3, with `lastOutput`), waits on a prompt (`"blocked"`, exit
+4, with `screenLines`), or its panel exits (`"exited"`/`"gone"`, exit 5).
+`--timeout <duration>` gives up with `"timeout"` and exit 124. A worker whose
+own background shells or subagents still run is not done yet, so the call
+keeps waiting. Answer a blocked worker with another `panels submit --wait`
+carrying the answer. The result never includes the transcript, and nothing
+goes into your chat.
+
+Pane expects a `runpane report` for work you send an agent, with or without
+`--wait`. Pass `--no-expect-report` (without `--wait`) for fire-and-forget
+input such as an FYI.
 
 Prefer `--as-file-pointer` for long prompts. Pane writes a private copy under
 `<pane-dir>/prompts/` and submits the single line `Read and follow <path>`
@@ -287,10 +295,10 @@ to an agent ended without a report. Each REPORT line
 `... blocked: <question>`) arrives at once, skipping the `--min-interval`
 batch.
 
-To wait for a report outside the Session watch (a Pane with no Session, or a
-harness that wakes only when a process exits, such as a background Bash task),
-run this as a background task. It exits with the event's line; act on it, then
-run it again. The named cursor means nothing is missed between runs:
+To wait for one worker's result, dispatch with `panels submit --wait` (see
+Dispatch). For a worker you didn't dispatch that way, run this as a background
+task instead; it exits with the event's line, and its named cursor means
+nothing is missed between runs:
 
 ```bash
 runpane watch --pane <pane-id> --as <your-name> --until-event --json --kinds agent.report,agent.report.missing,agent.blocked,panel.exited,pane.gone
@@ -316,10 +324,10 @@ whether anyone received it (`Delivered to 1 waiting watcher.`).
 - A BLOCKED carries the prompt on the worker's screen in `screenLines` (an
   AskUserQuestion picker, a permission or trust prompt, an update screen),
   even when the worker never reported.
-- `runpane inbox --json` lists every report, missing report, and on-screen
-  question this Session has not acknowledged, whether or not a watcher saw
-  it; Claude orchestrators get the same list with each user message. Clear
-  what you handled with `runpane inbox ack <id>...`.
+- When you start or resume, run `runpane inbox --json`: it lists every
+  report, missing report, and on-screen question this Session has not
+  acknowledged, including what finished while you were down. Clear what you
+  handled with `runpane inbox ack <id>...`.
 - A READY without a report means look, and maybe nudge. Read the worker's last
   reply with `runpane panels last-message --panel <panel-id> --json` (from its
   transcript; `transcript-unavailable` means fall back to `panels screen`),

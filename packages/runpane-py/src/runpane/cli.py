@@ -220,7 +220,8 @@ class ParsedArgs:
     summary_file: Optional[str] = None
     question: Optional[str] = None
     expect_report: Optional[bool] = None
-    hook: bool = False
+    wait_for_result: bool = False
+    wait_timeout_ms: Optional[int] = None
     all: bool = False
     inbox_ids: List[str] = field(default_factory=list)
     lock_ttl_ms: Optional[int] = None
@@ -492,11 +493,26 @@ def parse_args(argv: List[str]) -> ParsedArgs:
         apply_watch_defaults(parsed)
     if parsed.command == "report":
         validate_report_args(parsed)
+    validate_wait_for_result_args(parsed)
     if parsed.command == "inbox ack" and not parsed.all and not parsed.inbox_ids:
         raise ValueError("runpane inbox ack needs the item ids to clear, or --all --session <id|name>.")
     if parsed.command == "inbox ack" and parsed.all and parsed.inbox_ids:
         raise ValueError("runpane inbox ack accepts either item ids or --all, not both.")
     return parsed
+
+
+# The commands that dispatch work and accept `--wait` for its result.
+WAIT_FOR_RESULT_COMMANDS = {"panels submit", "panels create", "panes create"}
+
+
+def validate_wait_for_result_args(parsed: ParsedArgs) -> None:
+    if parsed.wait_timeout_ms is not None and not parsed.wait_for_result:
+        raise ValueError("--timeout only applies with --wait.")
+    if not parsed.wait_for_result:
+        return
+    if parsed.expect_report is False:
+        raise ValueError("--wait waits for the worker's report, so it cannot be combined with --no-expect-report.")
+    parsed.expect_report = True
 
 
 def parse_watch_duration(flag: str, value: str, bare_unit: int = 1) -> int:
@@ -664,6 +680,9 @@ def parse_flags(raw_args: List[str], parsed: ParsedArgs) -> None:
             # Offline commands accept --pane-dir and ignore it, so one --pane-dir works for every command.
             index += 1
             parsed.pane_dir = read_value(args, index, arg, literal_values)
+        elif is_local_command and arg == "--wait" and parsed.command in WAIT_FOR_RESULT_COMMANDS:
+            # `lock acquire --wait <ms>` takes a value; on a dispatch command `--wait` is a switch.
+            parsed.wait_for_result = True
         elif is_local_command and arg in LOCAL_BOOLEAN_FLAGS:
             parse_local_boolean_flag(parsed, arg)
         elif is_local_command and arg in LOCAL_VALUE_FLAGS:
@@ -806,9 +825,6 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
         if parsed.expect_report is (not expect_report):
             raise ValueError("Pass either --expect-report or --no-expect-report, not both.")
         parsed.expect_report = expect_report
-        return
-    if flag == "--hook":
-        parsed.hook = True
         return
     if flag == "--all":
         parsed.all = True
@@ -1065,6 +1081,9 @@ def parse_local_value_flag(parsed: ParsedArgs, flag: str, value: str) -> None:
         return
     if flag == "--ttl":
         parsed.lock_ttl_ms = parse_lock_ttl(value)
+        return
+    if flag == "--timeout":
+        parsed.wait_timeout_ms = parse_watch_duration(flag, value)
         return
     if flag == "--wait":
         wait_ms = parse_non_negative_int_flag(flag, value)

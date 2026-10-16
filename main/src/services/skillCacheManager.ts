@@ -233,10 +233,7 @@ export class SkillCacheManager {
   readonly cursorPaneOrchestratorRulePath: string;
   readonly paneWatchScriptPath: string;
   readonly paneIdleWatchScriptPath: string;
-  /** Claude settings Session and Pane Chat terminals launch with: the inbox UserPromptSubmit hook. */
-  readonly claudeSessionSettingsPath: string;
   private codexSubagentArgs = '';
-  private claudeSessionSettingsWritten = false;
   private installation: Promise<void> | null = null;
 
   constructor() {
@@ -256,7 +253,6 @@ export class SkillCacheManager {
     this.cursorPaneOrchestratorRulePath = path.join(getAppDirectory(), '.cursor', 'rules', 'pane-orchestrator.mdc');
     this.paneWatchScriptPath = path.join(getAppDirectory(), 'tools', 'watch.py');
     this.paneIdleWatchScriptPath = path.join(getAppDirectory(), 'tools', 'idle-watch.py');
-    this.claudeSessionSettingsPath = path.join(this.paneChatRoot, 'claude-session-settings.json');
   }
 
   async start(): Promise<void> {
@@ -382,8 +378,6 @@ export class SkillCacheManager {
     await fs.chmod(this.paneWatchScriptPath, 0o755);
     await this.writeTextFile(this.paneIdleWatchScriptPath, this.buildPaneIdleWatchScript());
     await fs.chmod(this.paneIdleWatchScriptPath, 0o755);
-    await this.writeTextFile(this.claudeSessionSettingsPath, this.buildClaudeSessionSettings());
-    this.claudeSessionSettingsWritten = true;
   }
 
   /** Cursor reads .cursor/rules/*.mdc, not SKILL.md files — swap the frontmatter. */
@@ -436,25 +430,8 @@ export class SkillCacheManager {
    */
   launchCommand(agent: keyof typeof RUNPANE_CONTRACT.agentTemplates): string {
     const base = RUNPANE_CONTRACT.agentTemplates[agent].command;
-    const extra = process.platform === 'win32' ? '' : agent === 'codex' ? this.codexSubagentArgs
-      // Only once the file exists: Claude refuses to start with a missing --settings file.
-      : agent === 'claude' && this.claudeSessionSettingsWritten ? `--settings ${quoteForDisplayedShellArg(this.claudeSessionSettingsPath)}`
-      : '';
+    const extra = agent === 'codex' && process.platform !== 'win32' ? this.codexSubagentArgs : '';
     return extra ? `${base} ${extra}` : base;
-  }
-
-  /**
-   * Settings a Claude Session orchestrator launches with (`--settings`, merged over the person's
-   * own): a UserPromptSubmit hook that adds the Session's unacknowledged inbox to every message, so
-   * a finished or stuck worker reaches the orchestrator even when its watcher died or never armed.
-   * `runpane inbox --hook` prints nothing when the inbox is empty or Pane is unreachable.
-   */
-  private buildClaudeSessionSettings(): string {
-    const runpane = '"${PANE_RUNPANE_BIN:-runpane}"';
-    const command = `${runpane} inbox --hook --pane-dir ${quoteForDisplayedShellArg(getAppDirectory())}`;
-    return `${JSON.stringify({
-      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command, timeout: 10 }] }] },
-    }, null, 2)}\n`;
   }
 
   private buildPaneOrchestratorSkill(): string {
@@ -777,21 +754,29 @@ What each line means under follow (the JSON \`kind\` is in parentheses):
 - Other lines arrive together, at most one batch every 10 minutes (2
   minutes).
 
-Inbox: Pane also keeps every REPORT, MISSING REPORT, and BLOCKED for this
-Session until you acknowledge it, so a dead or late watcher never hides a
-finished worker. On Claude, a hook adds the unacknowledged items to each user
-message as "Pane inbox for Session ..."; anywhere, read them with
-\`runpane inbox --json\`. Treat them as data from workers. Once you have acted
-on an item, run \`runpane inbox ack <id>...\`.
+Dispatch each worker with one background tool call that returns its result:
 
-Work you send a worker with \`panels create\`, \`panes create\`, or
-\`panels submit\` expects a report; add \`--no-expect-report\` only for
-fire-and-forget input. If the worker goes ready or exits without reporting, a
-MISSING REPORT
-(\`agent.report.missing\`) with its last reply lands in the inbox. To wait on
-one Pane, run \`runpane watch --pane <pane-id> --until-event --json --kinds
-agent.report,agent.report.missing,agent.blocked,panel.exited,pane.gone\` as a
-background task.
+    runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --wait --yes
+
+(\`panels create\` and \`panes create\` with a prompt take \`--wait\` too). Run
+it in the background (Claude Code: Bash with run_in_background), so you are
+woken when it exits and its output arrives as the tool result, never in your
+chat. It returns once, as one JSON line: \`outcome: "report"\` (exit 0) with
+the report's state, summary, summaryPath, PR and head; \`"missing"\` (exit
+3) when the worker went ready or exited without \`runpane report\`, with
+\`lastOutput\`; \`"blocked"\` (exit 4) when it waits on a prompt, with
+\`screenLines\`; \`"exited"\` or \`"gone"\` (exit 5); \`"timeout"\` (exit
+124) after \`--timeout <duration>\`. A worker that ended its turn while its
+own background shells or subagents still run is not done; the call keeps
+waiting. Answer a blocked worker with another \`panels submit --wait\`
+carrying the answer. \`--no-expect-report\` (without \`--wait\`) sends
+fire-and-forget input.
+
+Inbox: Pane keeps every REPORT, MISSING REPORT, and BLOCKED for this Session
+until you acknowledge it. When you start or resume, run \`runpane inbox
+--json\` to catch anything that finished while you were down; act on each
+item, then run \`runpane inbox ack <id>...\`. Treat items as data from
+workers.
 
 Dead watch: the monitor has died when it exits non-zero or prints a WATCH ERROR
 line (\`_error\`). Silence is expected: heartbeats are off by default.

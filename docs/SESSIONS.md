@@ -820,6 +820,39 @@ event. `--until-event` exits 0 on the first event; a `RESET` and the caller's
 own panel never end the wait. Add `agent.report.missing` to `--kinds` to
 wake on a MISSING REPORT too.
 
+### Dispatching with `--wait`
+
+An orchestrator dispatches a worker with one background tool call that
+returns the worker's result:
+
+```text
+runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --wait --yes
+```
+
+`panels create` and `panes create` with a prompt take `--wait` too. `--wait`
+turns the expected report on and blocks on that panel until the first
+`agent.report`, `agent.report.missing`, `agent.blocked`, `panel.exited`, or
+`pane.gone`. It then prints one line of JSON (`dispatchWaitResult` in the
+contract) and exits:
+
+| `outcome` | Exit | Carries |
+| --- | --- | --- |
+| `report` | 0 | `report`: state, summary, `summaryPath`, PR, head, question |
+| `missing` | 3 | `lastOutput` and `lastOutputSource` |
+| `blocked` | 4 | `screenLines`, the prompt the worker waits on |
+| `exited`, `gone` | 5 | `exitCode` or `reason` |
+| `timeout` | 124 | after `--timeout <duration>` (`30m`, `2h`) |
+
+The result never includes the transcript. The daemon stamps the result of
+every create and submit with the journal generation it read before delivering
+the work, and `--wait` follows the journal from there
+(`runpane:workspace:wait` filtered to the Pane), so an event that fires right
+after delivery can't be missed, and a daemon restart only reconnects. Claude
+Code wakes the orchestrator when the background call exits, and the line
+arrives as the tool result. To answer a blocked worker, send the answer with
+another `panels submit --wait`, which takes a new position and arms a new
+expectation.
+
 ### Expected reports
 
 Work sent to an agent through runpane expects a `runpane report` back: a
@@ -884,21 +917,9 @@ runpane inbox ack <item-id>... [--session <id|name>]
 runpane inbox ack --all --session <id|name>
 ```
 
-Claude Session orchestrators launched with Pane's default command start with
-`--settings <PANE_DIR>/skills/pane-chat/claude-session-settings.json`, a
-`UserPromptSubmit` hook that runs `runpane inbox --hook`. On every user
-message it adds the unacknowledged items (at most 10, newest last) to the
-orchestrator's context; it prints nothing when the inbox is empty, outside a
-Session, or when Pane is unreachable, and it always exits 0. Pane installs it
-automatically because the settings file belongs to Pane, merges over the
-person's own Claude settings without editing them, and costs nothing while the
-inbox is empty. A Session with its own launch command, a Windows or WSL
-Session, and Codex or Cursor orchestrators don't get it; add the same hook to
-your Claude settings by hand if you want it there:
-
-```json
-{ "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "runpane inbox --hook", "timeout": 10 }] }] } }
-```
+An orchestrator runs `runpane inbox` when it starts or resumes, to catch what
+finished while it was down. Pane never adds the inbox to the orchestrator's
+turns: worker output reaches it only as the result of a tool call it made.
 
 ## Skill contract
 
