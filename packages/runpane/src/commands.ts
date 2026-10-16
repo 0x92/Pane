@@ -70,13 +70,13 @@ export interface ParsedArgs {
   launch?: boolean;
   watchAs?: string;
   watchSince?: number;
+  watchEpoch?: string;
   watchFrom?: 'now' | 'earliest';
   watchKinds?: string[];
   watchPaneIds?: string[];
   watchExcludePaneIds?: string[];
   nameContains?: string;
   follow?: boolean;
-  present?: boolean;
   watchProfile?: 'unattended' | 'present';
   /** Watch only: wait across daemon calls for the first matching event, print it, and exit 0. */
   untilEvent?: boolean;
@@ -248,7 +248,7 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
   Object.assign(parsed, workspaceArgs, workspaceMachine ? { workspaceMachine } : {});
   args.unshift(...leadingPaneDirArgs);
   if (parsed.command === 'watch') {
-    const removed = new Map(Object.entries({ '--settle': '--ready-settle', '--format': '--json (or omit for lines)', '--agents-only': '--include-shells to include shells; agents are the default', '--all-managed': 'omit it; all managed Panes are the default', '--quiet': 'omit it; heartbeats are off by default', '--no-control-lines': 'omit it; WATCH OK and errors always print', '--idle-backoff': 'omit it; backoff is the unattended default' }));
+    const removed = new Map(Object.entries({ '--present': '--profile present', '--settle': '--ready-settle', '--format': '--json (or omit for lines)', '--agents-only': '--include-shells to include shells; agents are the default', '--all-managed': 'omit it; all managed Panes are the default', '--quiet': 'omit it; heartbeats are off by default', '--no-control-lines': 'omit it; WATCH OK and errors always print', '--idle-backoff': 'omit it; backoff is the unattended default' }));
     for (const token of args) {
       const flag = token.split('=')[0];
       if (removed.get(flag)) throw new Error(`${flag} was removed from runpane watch. Use ${removed.get(flag)}.`);
@@ -275,11 +275,14 @@ export function parseRunpaneArgs(argv: string[]): ParsedArgs {
     throw new Error('runpane watch accepts either --json or --format lines, not both.');
   }
   const cadenceValueFlagPresent = hasCadenceValueFlag(parsed);
-  if (parsed.command === 'watch' && !parsed.follow && (cadenceValueFlagPresent || parsed.present || parsed.watchProfile || parsed.expireAfterMs !== undefined)) {
-    throw new Error('--ready-settle, --blocked-settle, --min-interval, --profile, --present, and --expire-after require --follow.');
+  if (parsed.command === 'watch' && !parsed.follow && (cadenceValueFlagPresent || parsed.watchProfile || parsed.expireAfterMs !== undefined)) {
+    throw new Error('--ready-settle, --blocked-settle, --min-interval, --profile, and --expire-after require --follow.');
   }
   if (parsed.command === 'watch' && parsed.watchSince !== undefined && cadenceValueFlagPresent) {
     throw new Error('runpane watch accepts either --since or --ready-settle/--blocked-settle/--min-interval, not both (cadence needs a named cursor).');
+  }
+  if (parsed.command === 'watch' && parsed.watchEpoch !== undefined && (parsed.watchSince === undefined || parsed.watchAs)) {
+    throw new Error('--epoch requires --since and cannot be combined with --as.');
   }
   if (parsed.command === 'watch') applyWatchDefaults(parsed);
   if (parsed.command === 'report') validateReportArgs(parsed);
@@ -302,8 +305,7 @@ function applyWatchDefaults(parsed: ParsedArgs): void {
   const defaults = RUNPANE_CONTRACT.defaults.watch;
   if (parsed.untilEvent) parsed.watchKinds ??= [...defaults.untilEvent.kinds];
   if (!parsed.follow) return;
-  if (parsed.present && parsed.watchProfile === 'unattended') throw new Error('--present conflicts with --profile unattended.');
-  const follow = parsed.present || parsed.watchProfile === 'present' ? { ...defaults.follow, ...defaults.present } : defaults.follow;
+  const follow = parsed.watchProfile === 'present' ? { ...defaults.follow, ...defaults.present } : defaults.follow;
   parsed.watchKinds ??= [...follow.kinds];
   parsed.settleMs ??= parseWatchDuration('--ready-settle', follow.readySettle);
   parsed.blockedSettleMs ??= parseWatchDuration('--blocked-settle', follow.blockedSettle);
@@ -571,10 +573,6 @@ function parseLocalBooleanFlag(flag: string, parsed: ParsedArgs): void {
     parsed.asFilePointer = true;
     return;
   }
-  if (flag === '--present') {
-    parsed.present = true;
-    return;
-  }
   if (flag === '--follow') {
     parsed.follow = true;
     return;
@@ -833,6 +831,11 @@ function parseLocalValueFlag(flag: string, value: string, parsed: ParsedArgs): v
   }
   if (flag === '--as') {
     parsed.watchAs = value;
+    return;
+  }
+  if (flag === '--epoch') {
+    if (!value.trim()) throw new Error('--epoch must not be empty.');
+    parsed.watchEpoch = value;
     return;
   }
   if (flag === '--since') {

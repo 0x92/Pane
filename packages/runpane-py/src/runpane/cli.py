@@ -172,13 +172,13 @@ class ParsedArgs:
     merged: bool = False
     watch_as: Optional[str] = None
     watch_since: Optional[int] = None
+    watch_epoch: Optional[str] = None
     watch_from: Optional[str] = None
     watch_kinds: List[str] = field(default_factory=list)
     watch_pane_ids: List[str] = field(default_factory=list)
     watch_exclude_pane_ids: List[str] = field(default_factory=list)
     name_contains: Optional[str] = None
     follow: bool = False
-    present: bool = False
     watch_profile: Optional[str] = None
     until_event: bool = False
     agents_only: bool = False
@@ -468,12 +468,14 @@ def parse_args(argv: List[str]) -> ParsedArgs:
     if parsed.command == "watch" and parsed.json and parsed.watch_format == "lines":
         raise ValueError("runpane watch accepts either --json or --format lines, not both.")
     cadence_value_flag_present = has_cadence_value_flag(parsed)
-    if parsed.command == "watch" and not parsed.follow and (cadence_value_flag_present or parsed.present or parsed.watch_profile or parsed.expire_after_ms is not None):
-        raise ValueError("--ready-settle, --blocked-settle, --min-interval, --profile, --present, and --expire-after require --follow.")
+    if parsed.command == "watch" and not parsed.follow and (cadence_value_flag_present or parsed.watch_profile or parsed.expire_after_ms is not None):
+        raise ValueError("--ready-settle, --blocked-settle, --min-interval, --profile, and --expire-after require --follow.")
     if parsed.command == "watch" and parsed.watch_since is not None and cadence_value_flag_present:
         raise ValueError(
             "runpane watch accepts either --since or --ready-settle/--blocked-settle/--min-interval, not both (cadence needs a named cursor)."
         )
+    if parsed.command == "watch" and parsed.watch_epoch is not None and (parsed.watch_since is None or parsed.watch_as):
+        raise ValueError("--epoch requires --since and cannot be combined with --as.")
     if parsed.command == "watch":
         apply_watch_defaults(parsed)
     if parsed.command == "report":
@@ -498,9 +500,7 @@ def apply_watch_defaults(parsed: ParsedArgs) -> None:
         parsed.watch_kinds = list(defaults["untilEvent"]["kinds"])
     if not parsed.follow:
         return
-    if parsed.present and parsed.watch_profile == "unattended":
-        raise ValueError("--present conflicts with --profile unattended.")
-    follow = {**defaults["follow"], **(defaults["present"] if parsed.present or parsed.watch_profile == "present" else {})}
+    follow = {**defaults["follow"], **(defaults["present"] if parsed.watch_profile == "present" else {})}
     if not parsed.watch_kinds:
         parsed.watch_kinds = list(follow["kinds"])
     for field, key in [("settle_ms", "readySettle"), ("blocked_settle_ms", "blockedSettle"),
@@ -595,6 +595,7 @@ def split_inline_values(raw_args: List[str]) -> Tuple[List[str], Set[int]]:
 def parse_flags(raw_args: List[str], parsed: ParsedArgs) -> None:
     if parsed.command == "watch":
         removed = {
+            "--present": "--profile present",
             "--settle": "--ready-settle",
             "--format": "--json (or omit for lines)",
             "--agents-only": "--include-shells to include shells; agents are the default",
@@ -723,9 +724,6 @@ def parse_local_boolean_flag(parsed: ParsedArgs, flag: str) -> None:
         return
     if flag == "--merged":
         parsed.merged = True
-        return
-    if flag == "--present":
-        parsed.present = True
         return
     if flag == "--follow":
         parsed.follow = True
@@ -917,6 +915,11 @@ def parse_local_value_flag(parsed: ParsedArgs, flag: str, value: str) -> None:
         return
     if flag == "--as":
         parsed.watch_as = value
+        return
+    if flag == "--epoch":
+        if not value.strip():
+            raise ValueError("--epoch must not be empty.")
+        parsed.watch_epoch = value
         return
     if flag == "--since":
         try:

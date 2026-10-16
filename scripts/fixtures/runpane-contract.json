@@ -101,7 +101,8 @@
       "agent.ready,agent.idle",
       "--include-held-input",
       "--self-test",
-      "--present"
+      "--profile",
+      "present"
     ],
     [
       "daemon",
@@ -907,6 +908,15 @@
       "watch",
       "--timeout-ms",
       "off"
+    ],
+    [
+      "watch",
+      "--since",
+      "42",
+      "--epoch",
+      "test-epoch",
+      "--until-event",
+      "--json"
     ]
   ],
   "help": {

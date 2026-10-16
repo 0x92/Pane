@@ -1672,6 +1672,10 @@ export function registerRunpaneHandlers(
           }
         }
 
+        if (normalized.epoch !== undefined && normalized.epoch !== workspaceJournal.epoch) {
+          reset = { reason: 'epoch-changed' };
+        }
+
         if (reset) {
           const silentBaseline = reset.reason === 'first-use' && normalized.from !== 'earliest';
           const baseline = silentBaseline ? [] : baselineEntries()
@@ -1687,7 +1691,7 @@ export function registerRunpaneHandlers(
             timedOut: false,
             reset,
             session,
-            nextCommand: workspaceNextCommand(normalized, workspaceJournal.generation, session),
+            nextCommand: workspaceNextCommand(normalized, workspaceJournal.generation, workspaceJournal.epoch, session),
           };
         }
 
@@ -1790,7 +1794,7 @@ export function registerRunpaneHandlers(
           dropped: waited.dropped,
           reset,
           session,
-          nextCommand: workspaceNextCommand(normalized, generation, session),
+          nextCommand: workspaceNextCommand(normalized, generation, workspaceJournal.epoch, session),
         };
       } finally {
         lease.release();
@@ -4049,6 +4053,10 @@ function parseWorkspaceWaitRequest(value: PaneCommandValue): RunpaneWorkspaceWai
     throw new Error('Workspace wait as must contain 1-128 letters, numbers, dots, underscores, or hyphens');
   }
   const since = parseNonNegativeInteger(value.since, 'since');
+  const epoch = optionalString(value.epoch);
+  if (value.epoch !== undefined && (!epoch?.trim() || since === undefined || consumer)) {
+    throw new Error('Workspace wait epoch requires since and cannot be combined with as');
+  }
   if (consumer && since !== undefined) throw new Error('Workspace wait request cannot include both as and since');
   const session = optionalString(value.session)?.trim() || undefined;
   const paneIds = parseStringArray(value.paneIds, 'paneIds');
@@ -4061,6 +4069,7 @@ function parseWorkspaceWaitRequest(value: PaneCommandValue): RunpaneWorkspaceWai
 
   return {
     since,
+    epoch,
     as: consumer,
     from: value.from === 'earliest' ? 'earliest' : value.from === 'now' ? 'now' : undefined,
     timeoutMs: parseNonNegativeInteger(value.timeoutMs, 'timeoutMs'),
@@ -5764,9 +5773,10 @@ function workspaceCadenceOptions(
 function workspaceNextCommand(
   request: RunpaneWorkspaceWaitRequest,
   generation: number,
+  epoch: string,
   session: { id: string } | undefined,
 ): string {
-  const cursor = request.as ? `--as ${request.as}` : `--since ${generation}`;
+  const cursor = request.as ? `--as ${request.as}` : `--since ${generation} --epoch ${epoch}`;
   return `runpane watch ${cursor}${session ? ` --session ${session.id}` : ''}`;
 }
 

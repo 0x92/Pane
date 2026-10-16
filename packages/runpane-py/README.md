@@ -121,7 +121,7 @@ for 30 seconds, and non-urgent events batch every 10 minutes. IDLE starts at
 are off. WATCH OK prints once when armed; WATCH EXPIRED and exit 0 end a watch
 after 3 quiet hours. Meaningful events reset expiry; IDLE and replay do not.
 
-Use `--present` or `--profile present` when someone is waiting: READY settles
+Use `--profile present` when someone is waiting: READY settles
 for 1 minute, BLOCKED for 15 seconds, batches every 2 minutes, and IDLE does
 not back off. `--profile unattended` explicitly selects the default. Duration
 overrides accept `30s`, `3m`, `3h`, or `0`: `--ready-settle`, `--blocked-settle`,
@@ -159,13 +159,25 @@ replacement. A normal expiry means re-arm with the next dispatch.
 
 ```bash
 runpane pr watch --pane <pane-id> --url https://github.com/owner/repo/pull/123 --head <full-sha> --json
-runpane watch --pane <pane-id> --since <generation-returned-above> --until-event --json --kinds pr.checks,pr.conflicted,pr.head,pr.review,pr.comment,pr.closed,pr.merged,pr.stopped,github.unavailable,github.recovered
+runpane watch --pane <pane-id> --since <generation-returned-above> --epoch <epoch-returned-above> --until-event --json --kinds pr.checks,pr.conflicted,pr.head,pr.review,pr.comment,pr.closed,pr.merged,pr.stopped,github.unavailable,github.recovered
 runpane pr list --pane <pane-id> --json
 runpane pr unwatch --pane <pane-id> --url https://github.com/owner/repo/pull/123 --json
 ```
 
-Inside a Pane, registration defaults to its `PANE_SESSION_ID`. Keep the last
-printed event's generation for the next wait. Registration uses the full
+Inside a Pane, registration defaults to its `PANE_SESSION_ID`. Registration
+returns `generation` and `epoch`; use both for the first wait, including events
+that arrived between registration and arming. Process every returned NDJSON
+event, then persist its `gen` and `epoch`. Rearm with `--since <gen> --epoch
+<epoch>`; use `--limit 1` for one event per invocation. Never reuse the initial
+registration generation after delivering an event, and never combine `--as`
+with `--since` or `--epoch`. A named cursor is a separate daemon-managed mode.
+
+Ordinary daemon restarts preserve the epoch and unread retained events. On
+`_reset` or `_dropped`, resynchronize current GitHub state before accepting
+success, then persist the control record's `generation` and `epoch`. Ignore
+`replay`/`baseline` records as new events. Retention is bounded; a journal reset
+cannot recover lost history. A consumer crash before saving its cursor can
+replay an event, so actions must be idempotent. Registration uses the full
 host/repository/number identity. It pins success to `--head`, or the first
 observed head; a new head emits `pr.head` and needs a fresh registration before
 success can be reported. Read existing discussions before arming. A wake

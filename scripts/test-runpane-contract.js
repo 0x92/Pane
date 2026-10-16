@@ -239,7 +239,7 @@ print(json.dumps([format_workspace_entry_line(entry) for entry in json.loads(sys
   assert.deepStrictEqual(lines.formatWaitResult({ epoch: 'epoch-1', generation: 7, entries: [replayed] }, 'lines'), []);
   assert.deepStrictEqual(
     lines.formatWaitResult({ epoch: 'epoch-1', generation: 7, entries: [replayed] }, 'json').map(JSON.parse),
-    [replayed],
+    [{ ...replayed, epoch: 'epoch-1' }],
   );
   assert.deepStrictEqual(
     lines.formatWaitResult({
@@ -263,9 +263,9 @@ print(json.dumps([format_workspace_entry_line(entry) for entry in json.loads(sys
     'STUCK Issue 538 pane pane-1 panel panel-1 held-input-present',
   ]);
   const jsonLines = lines.formatWaitResult(result, 'json').map(JSON.parse);
-  assert.deepStrictEqual(jsonLines[0], { kind: '_reset', reason: 'cursor-truncated', epoch: 'epoch-1' });
-  assert.deepStrictEqual(jsonLines[1], { kind: '_dropped', count: 2 });
-  assert.deepStrictEqual(jsonLines[2], result.entries[0], 'JSON mode must preserve structured fields');
+  assert.deepStrictEqual(jsonLines[0], { kind: '_reset', reason: 'cursor-truncated', epoch: 'epoch-1', generation: result.generation });
+  assert.deepStrictEqual(jsonLines[1], { kind: '_dropped', count: 2, epoch: 'epoch-1', generation: result.generation });
+  assert.deepStrictEqual(jsonLines[2], { ...result.entries[0], epoch: result.epoch }, 'JSON mode must preserve structured fields');
   assert.strictEqual(lines.formatNonEntry('_ok', { generation: 7, epoch: 'epoch-1' }, 'lines'), 'WATCH OK gen 7 epoch epoch-1');
   assert.strictEqual(lines.formatNonEntry('_heartbeat', { generation: 7, at: 'T' }, 'lines'), 'HEARTBEAT gen 7 at T');
   assert.strictEqual(lines.formatNonEntry('_reconnected', { generation: 8 }, 'lines'), 'WATCH RECONNECTED gen 8');
@@ -864,7 +864,7 @@ async function checkWatchUntilEvent() {
         { result: { ...watchResult(6), timedOut: false, entries: [entry] }, delayMs: 200 },
       ], requests), () => runCliOnce(runtime, quietJson, paneDir));
       assert.strictEqual(run.code, 0, `${runtime} --until-event must exit 0 on its event. stdout=${run.stdout} stderr=${run.stderr}`);
-      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} --until-event --quiet --json prints exactly the event`);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify({ ...entry, epoch: watchResult(6).epoch })}\n`, `${runtime} --until-event --json prints the event and its epoch`);
       assert.strictEqual(requests.length, 1);
       assert.strictEqual(requests[0].as, 'orch');
       assert.deepStrictEqual(requests[0].kinds, ['agent.report']);
@@ -877,16 +877,40 @@ async function checkWatchUntilEvent() {
       assert.strictEqual(run.code, 0);
       assert.strictEqual(lf(run.stdout), 'REPORT Worker pane pane-1 panel panel-2 blocked: q\n', `${runtime} lines mode prints the REPORT line`);
 
-      // A new cursor's RESET does not end the wait, and --quiet does not print it.
+      // A new cursor's RESET is printed and does not end the wait.
       requests = [];
       run = await withFakeDaemon(paneDir, scriptedWatch([
         { result: { ...watchResult(5), timedOut: false, reset: { reason: 'first-use' } } },
         { result: { ...watchResult(6), timedOut: false, entries: [entry] }, delayMs: 100 },
       ], requests), () => runCliOnce(runtime, quietJson, paneDir));
       assert.strictEqual(run.code, 0);
-      assert.ok(lf(run.stdout).endsWith(`${JSON.stringify(entry)}\n`), `${runtime} must keep waiting past RESET`);
+      assert.ok(lf(run.stdout).endsWith(`${JSON.stringify({ ...entry, epoch: watchResult(6).epoch })}\n`), `${runtime} must keep waiting past RESET`);
       assertIncludes(run.stdout, '_reset');
       assert.deepStrictEqual(requests.map(request => request.as), ['orch', 'orch'], `${runtime} re-arms the same named cursor`);
+
+      // A numeric cursor detects epoch rollover even if the new journal has caught up.
+      requests = [];
+      run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: { ...watchResult(8), epoch: 'new-epoch', reset: { reason: 'epoch-changed' }, timedOut: false,
+          entries: [reportEntry(8, 'panel-2', { replay: true, baseline: true })] } },
+        { result: { ...watchResult(9), epoch: 'new-epoch', timedOut: false, entries: [reportEntry(9, 'panel-2')] } },
+      ], requests), () => runCliOnce(runtime, ['watch', '--since', '6', '--epoch', 'old-epoch', '--until-event', '--json', '--kinds', 'agent.report'], paneDir));
+      assert.strictEqual(run.code, 0);
+      const resetOutput = run.stdout.trim().split('\n').map(JSON.parse);
+      assert.deepStrictEqual(resetOutput[0], { kind: '_reset', reason: 'epoch-changed', epoch: 'new-epoch', generation: 8 });
+      assert.deepStrictEqual(requests.map(request => [request.since, request.epoch, request.as]), [[6, 'old-epoch', undefined], [8, 'new-epoch', undefined]]);
+      assert.strictEqual(resetOutput.at(-1).gen, 9);
+      assert.strictEqual(resetOutput.at(-1).epoch, 'new-epoch');
+
+      // A new process resumes after exactly the processed gen, not the response watermark.
+      requests = [];
+      const delivered = resetOutput.at(-1);
+      run = await withFakeDaemon(paneDir, scriptedWatch([
+        { result: { ...watchResult(11), epoch: delivered.epoch, timedOut: false, entries: [reportEntry(10, 'panel-2'), reportEntry(11, 'panel-2')] } },
+      ], requests), () => runCliOnce(runtime, ['watch', '--since', String(delivered.gen), '--epoch', delivered.epoch, '--until-event', '--json', '--kinds', 'agent.report'], paneDir));
+      assert.strictEqual(run.code, 0);
+      assert.deepStrictEqual(run.stdout.trim().split('\n').map(JSON.parse).map(event => [event.gen, event.epoch]), [[10, 'new-epoch'], [11, 'new-epoch']]);
+      assert.strictEqual(requests[0].since, 9);
 
       // Waits past the per-call cap: empty, timed-out calls re-arm with no overall limit.
       requests = [];
@@ -907,7 +931,7 @@ async function checkWatchUntilEvent() {
         { result: { ...watchResult(6), timedOut: false, entries: [entry] } },
       ], requests), () => runCliOnce(runtime, ['watch', '--until-event', '--json', '--kinds', 'agent.report'], paneDir, 20_000, { PANE_PANEL_ID: 'panel-own' }));
       assert.strictEqual(run.code, 0);
-      assert.strictEqual(lf(run.stdout), `${JSON.stringify(entry)}\n`, `${runtime} must drop its own panel's entries`);
+      assert.strictEqual(lf(run.stdout), `${JSON.stringify({ ...entry, epoch: watchResult(6).epoch })}\n`, `${runtime} must drop its own panel's entries`);
       assert.strictEqual(requests.length, 2);
       // Without --as, a Pane terminal gets a stable cursor apart from its --follow cursor (the panel id).
       assert.strictEqual(requests[0].as, 'until-panel-own', `${runtime} derives a stable --until-event cursor`);
@@ -1042,7 +1066,7 @@ function spawnWatchCli(runtime, args) {
 // undefined both mean an unset optional value; all populated fields are compared.
 const PARSER_DEFAULT_DIFFERENCES = {
   waitReady: false, noFocus: false, focus: false, pinned: false, noPinned: false,
-  force: false, present: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
+  force: false, follow: false, untilEvent: false, agentsOnly: false, ackNow: false,
   includeHeldInput: false, idleBackoff: false, allManaged: false, allStopped: false,
   includeShells: false, noHeldInput: false, selfTest: false, report: false,
   watchKinds: [], watchPaneIds: [], watchExcludePaneIds: [],
@@ -1081,7 +1105,34 @@ print(json.dumps([asdict(parse_args(args)) for args in json.loads(sys.stdin.read
   parserSamples.forEach((args, index) => {
     assert.deepStrictEqual(pythonOutput[index], nodeOutput[index], `Parser parity: ${args.join(' ')}`);
   });
-  const removedFlags = ['--settle', '--format', '--quiet', '--no-control-lines', '--agents-only', '--all-managed', '--idle-backoff'];
+  const invalidWatchArgs = [
+    ['watch', '--profile', 'present'],
+    ['watch', '--until-event', '--profile', 'unattended'],
+    ['watch', '--follow', '--profile', 'invalid'],
+    ['watch', '--epoch', 'e'],
+    ['watch', '--as', 'c', '--since', '0', '--epoch', 'e'],
+    ['watch', '--since', '0', '--epoch', ''],
+  ];
+  const invalidPythonErrors = JSON.parse(runPythonSnippet(`
+import json
+import sys
+from runpane.cli import parse_args
+errors = []
+for args in json.loads(sys.stdin.read()):
+    try:
+        parse_args(args)
+        errors.append(None)
+    except ValueError as error:
+        errors.append(str(error))
+print(json.dumps(errors))
+`, JSON.stringify(invalidWatchArgs)));
+  invalidWatchArgs.forEach((args, index) => {
+    assert.throws(() => parseRunpaneArgs(args), error => {
+      assert.equal(error.message, invalidPythonErrors[index]);
+      return true;
+    });
+  });
+  const removedFlags = ['--present', '--settle', '--format', '--quiet', '--no-control-lines', '--agents-only', '--all-managed', '--idle-backoff'];
   const pythonErrors = JSON.parse(runPythonSnippet(`
 import json
 import sys

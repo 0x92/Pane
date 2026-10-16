@@ -223,6 +223,8 @@ export interface RunpaneWorkspacePanelSummary {
 
 export interface RunpaneWorkspaceWaitRequest {
   since?: number;
+  /** Expected journal epoch for a numeric cursor; mismatch requires resynchronization. */
+  epoch?: string;
   as?: string;
   from?: 'now' | 'earliest';
   timeoutMs?: number;

@@ -116,10 +116,10 @@ export function formatWaitResult(result: WatchResult, format: WatchFormat): stri
   if (format === 'json') {
     const lines: string[] = [];
     if (result.reset) {
-      lines.push(JSON.stringify({ kind: '_reset', reason: result.reset.reason, epoch: result.epoch }));
+      lines.push(JSON.stringify({ kind: '_reset', reason: result.reset.reason, epoch: result.epoch, generation: result.generation }));
     }
-    if (result.dropped !== undefined) lines.push(JSON.stringify({ kind: '_dropped', count: result.dropped }));
-    lines.push(...result.entries.map(entry => JSON.stringify(entry)));
+    if (result.dropped !== undefined) lines.push(JSON.stringify({ kind: '_dropped', count: result.dropped, epoch: result.epoch, generation: result.generation }));
+    lines.push(...result.entries.map(entry => JSON.stringify({ ...entry, epoch: result.epoch })));
     return lines;
   }
 

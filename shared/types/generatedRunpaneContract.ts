@@ -62,7 +62,7 @@ export const RUNPANE_CONTRACT = {
         "heldInputDetection": true
       },
       "present": {
-        "summary": "What `--present` changes: a person is waiting on the result, so updates arrive faster and idle reminders don't back off.",
+        "summary": "What `--profile present` changes: a person is waiting on the result, so updates arrive faster and idle reminders don't back off.",
         "readySettle": "1m",
         "blockedSettle": "15s",
         "minInterval": "2m",
@@ -428,7 +428,7 @@ export const RUNPANE_CONTRACT = {
       "name": "watch",
       "summary": "Wait for workspace agent and Pane transitions using a daemon-held cursor.",
       "usage": [
-        "runpane watch [--follow|--until-event] [--present] [--session <id|name>|--pane <id>] [--json] [overrides]"
+        "runpane watch [--follow|--until-event] [--profile unattended|present] [--session <id|name>|--pane <id>] [--json] [overrides]"
       ],
       "toolsets": [
         "agents"
@@ -1782,17 +1782,17 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--ready-settle",
         "value": "<duration>",
-        "description": "Quiet time before READY under --follow (a duration; default 3m, 1m with --present)."
+        "description": "Quiet time before READY under --follow (a duration; default 3m, 1m with --profile present)."
       },
       {
         "name": "--blocked-settle",
         "value": "<duration>",
-        "description": "Time before BLOCKED under --follow (a duration; default 30s, 15s with --present)."
+        "description": "Time before BLOCKED under --follow (a duration; default 30s, 15s with --profile present)."
       },
       {
         "name": "--min-interval",
         "value": "<duration>",
-        "description": "Batch window for non-urgent lines under --follow (a duration; default 10m, 2m with --present)."
+        "description": "Batch window for non-urgent lines under --follow (a duration; default 10m, 2m with --profile present)."
       },
       {
         "name": "--body-file",
@@ -1902,7 +1902,12 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--profile",
         "value": "<unattended|present>",
-        "description": "Follow preset. Default unattended; present matches --present. Explicit duration flags override the preset."
+        "description": "Follow preset. Default unattended; present uses faster updates without idle backoff. Explicit duration flags override the preset."
+      },
+      {
+        "name": "--epoch",
+        "value": "<epoch>",
+        "description": "Journal epoch paired with --since; a mismatch emits _reset instead of silently skipping events."
       }
     ],
     "localBoolean": [
@@ -2013,10 +2018,6 @@ export const RUNPANE_CONTRACT = {
       {
         "name": "--interrupt",
         "description": "Stop the current agent turn, wait for an empty idle composer, then submit and verify the replacement."
-      },
-      {
-        "name": "--present",
-        "description": "Watch --follow only: a person is waiting on the result, so updates arrive faster and IDLE reminders don't back off."
       }
     ]
   },
@@ -2326,8 +2327,8 @@ export const RUNPANE_CONTRACT = {
         "its line, then run it again; its named cursor means nothing is missed between runs.",
         "",
         "Options:",
-        "  --present                      A person is waiting: READY after 1m, BLOCKED after 15s,",
-        "                                 batches every 2m, no IDLE backoff (--follow only)",
+        "  --profile <unattended|present> Follow preset (default unattended); explicit overrides win",
+        "                                 present: READY 1m, BLOCKED 15s, batch 2m, no IDLE backoff",
         "  --session <id|name>            Watch every Pane in a Session; associate/detach apply live",
         "  --pane <id>                    Watch one Pane; repeatable (default: every managed Pane)",
         "  --exclude-pane <id>            Leave out a Pane; repeatable",
@@ -2338,17 +2339,18 @@ export const RUNPANE_CONTRACT = {
         "  --json                         One JSON object per line",
         "  --as <name>                    Name the cursor (default: from --session or this panel)",
         "  --since <generation>           Use an explicit cursor instead of a name",
+        "  --epoch <epoch>                Pair with --since to detect journal resets",
         "  --from <now|earliest>          Where a new named cursor starts (default: now)",
         "  --self-test                    Check the daemon watch path and exit",
         "",
         "Overrides (durations such as 30s, 10m, 3h; a bare number is milliseconds; 0 turns it off):",
-        "  --ready-settle <duration>      Quiet time before READY (default 3m, --present 1m)",
-        "  --blocked-settle <duration>    Time before BLOCKED (default 30s, --present 15s)",
-        "  --min-interval <duration>      Batch window for non-urgent lines (default 10m, --present 2m)",
+        "  --ready-settle <duration>      Quiet time before READY (default 3m, --profile present 1m)",
+        "  --blocked-settle <duration>    Time before BLOCKED (default 30s, --profile present 15s)",
+        "  --min-interval <duration>      Batch window for non-urgent lines (default 10m, --profile present 2m)",
         "  --idle-after <duration>        First IDLE reminder (default 10m)",
         "  --expire-after <duration>      End after this long with nothing but IDLE (default 3h)",
         "  --heartbeat <duration>         Print a HEARTBEAT line this often (default off)",
-        "  --timeout-ms <ms>              Per-request wait; with --until-event, the total deadline (exit 124)",
+        "  --timeout-ms <duration>        Per-request wait; with --until-event, the total deadline (exit 124)",
         "  --limit <count>                Maximum entries per response",
         "  --ack-now                      At-most-once cursor delivery",
         "  --include-held-input           Include unsubmitted composer text in JSON",
@@ -2358,8 +2360,7 @@ export const RUNPANE_CONTRACT = {
         "How a watch ends: WATCH EXPIRED (exit 0) means nothing happened; arm a new one with the next",
         "dispatch. A non-zero exit or a WATCH ERROR line means it failed: say so and re-arm once. Judge",
         "a watch by WATCH OK and these endings, never by silence. Never pipe --follow into grep -m1 or head.",
-        "STUCK means real unsubmitted composer text; a prompt suggestion never counts.",
-        "  --profile <unattended|present> Follow preset; explicit flags override it"
+        "STUCK means real unsubmitted composer text; a prompt suggestion never counts."
       ],
       "panes create": [
         "Usage:",
@@ -3601,8 +3602,8 @@ export const RUNPANE_CONTRACT = {
         "its line, then run it again; its named cursor means nothing is missed between runs.",
         "",
         "Options:",
-        "  --present                      A person is waiting: READY after 1m, BLOCKED after 15s,",
-        "                                 batches every 2m, no IDLE backoff (--follow only)",
+        "  --profile <unattended|present> Follow preset (default unattended); explicit overrides win",
+        "                                 present: READY 1m, BLOCKED 15s, batch 2m, no IDLE backoff",
         "  --session <id|name>            Watch every Pane in a Session; associate/detach apply live",
         "  --pane <id>                    Watch one Pane; repeatable (default: every managed Pane)",
         "  --exclude-pane <id>            Leave out a Pane; repeatable",
@@ -3613,17 +3614,18 @@ export const RUNPANE_CONTRACT = {
         "  --json                         One JSON object per line",
         "  --as <name>                    Name the cursor (default: from --session or this panel)",
         "  --since <generation>           Use an explicit cursor instead of a name",
+        "  --epoch <epoch>                Pair with --since to detect journal resets",
         "  --from <now|earliest>          Where a new named cursor starts (default: now)",
         "  --self-test                    Check the daemon watch path and exit",
         "",
         "Overrides (durations such as 30s, 10m, 3h; a bare number is milliseconds; 0 turns it off):",
-        "  --ready-settle <duration>      Quiet time before READY (default 3m, --present 1m)",
-        "  --blocked-settle <duration>    Time before BLOCKED (default 30s, --present 15s)",
-        "  --min-interval <duration>      Batch window for non-urgent lines (default 10m, --present 2m)",
+        "  --ready-settle <duration>      Quiet time before READY (default 3m, --profile present 1m)",
+        "  --blocked-settle <duration>    Time before BLOCKED (default 30s, --profile present 15s)",
+        "  --min-interval <duration>      Batch window for non-urgent lines (default 10m, --profile present 2m)",
         "  --idle-after <duration>        First IDLE reminder (default 10m)",
         "  --expire-after <duration>      End after this long with nothing but IDLE (default 3h)",
         "  --heartbeat <duration>         Print a HEARTBEAT line this often (default off)",
-        "  --timeout-ms <ms>              Per-request wait; with --until-event, the total deadline (exit 124)",
+        "  --timeout-ms <duration>        Per-request wait; with --until-event, the total deadline (exit 124)",
         "  --limit <count>                Maximum entries per response",
         "  --ack-now                      At-most-once cursor delivery",
         "  --include-held-input           Include unsubmitted composer text in JSON",
@@ -3633,8 +3635,7 @@ export const RUNPANE_CONTRACT = {
         "How a watch ends: WATCH EXPIRED (exit 0) means nothing happened; arm a new one with the next",
         "dispatch. A non-zero exit or a WATCH ERROR line means it failed: say so and re-arm once. Judge",
         "a watch by WATCH OK and these endings, never by silence. Never pipe --follow into grep -m1 or head.",
-        "STUCK means real unsubmitted composer text; a prompt suggestion never counts.",
-        "  --profile <unattended|present> Follow preset; explicit flags override it"
+        "STUCK means real unsubmitted composer text; a prompt suggestion never counts."
       ],
       "panes create": [
         "Usage:",
@@ -4631,7 +4632,7 @@ export const RUNPANE_CONTRACT = {
       "runpane watch --until-event",
       "runpane watch --follow",
       "runpane watch --session <id|name> --follow",
-      "runpane watch --session <id|name> --follow --present",
+      "runpane watch --session <id|name> --follow --profile present",
       "runpane pr watch [--pane <id>] --url <PR URL> [--head <full-sha>] [--json] [--pane-dir <path>]",
       "runpane pr unwatch [--pane <id>] --url <PR URL> [--json] [--pane-dir <path>]",
       "runpane pr list [--pane <id>] [--json] [--pane-dir <path>]"
@@ -4667,7 +4668,7 @@ export const RUNPANE_CONTRACT = {
       "`runpane panes adopt --launch` accepts `--prompt`, `--prompt-file`, `--wait-ready`, and `--ready-timeout-ms`, and reports `readiness`, `initialInput`, and `nextCommand` like `panes create`. A prompt without `--launch` is an error rather than being dropped.",
       "If composer submission cannot be verified without risking a duplicate, the create item is unsuccessful with `initialInput.staged`, `initialInput.attempts`, `initialInput.blocked.kind: submission_unverified`, and an actionable `nextCommand`. The CLI-facing `--prompt` alias maps to this canonical `initialInput` result.",
       "When running from WSL while Pane is installed on Windows, the Linux wrapper may look for a missing `/tmp/pane-daemon.../daemon.sock` or resolve to a Windows shim such as Volta. In that case invoke the Windows wrapper through PowerShell from a Windows cwd, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane repos list --json'`.",
-      "`runpane watch` waits for agent, Pane, panel, and PR events from the daemon journal without polling. `--follow` keeps watching with defaults tuned for an agent watching unattended (quiet, batched, and it ends itself after 3 hours with nothing happening); `--present` makes it faster when a person is waiting. `--until-event` waits for one event worth waking for, prints it, and exits 0. The defaults are listed in the contract under defaults.watch.",
+      "`runpane watch` waits for agent, Pane, panel, and PR events from the daemon journal without polling. `--follow` keeps watching with defaults tuned for an agent watching unattended (quiet, batched, and it ends itself after 3 hours with nothing happening); `--profile present` makes it faster when a person is waiting. `--until-event` waits for one event worth waking for, prints it, and exits 0. The defaults are listed in the contract under defaults.watch.",
       "A watch releases its pending slot when its client socket or named pipe disconnects. Re-arming the same named cursor takes over the previous request; the superseded watcher exits with a WATCH ERROR instead of competing for the cursor. Anonymous concurrent watchers retain the eight-wait limit. Each request also has a 125-second lease (slightly longer than the maximum 120-second long poll), so an abandoned request is reclaimed even if no disconnect arrives.",
       "`sessions list` list durable named orchestration Sessions.",
       "`sessions create` create a durable named orchestration Session and its hidden terminal owner.",
@@ -4812,7 +4813,8 @@ export const RUNPANE_CONTRACT = {
         "agent.ready,agent.idle",
         "--include-held-input",
         "--self-test",
-        "--present"
+        "--profile",
+        "present"
       ],
       [
         "daemon",
@@ -5618,6 +5620,15 @@ export const RUNPANE_CONTRACT = {
         "watch",
         "--timeout-ms",
         "off"
+      ],
+      [
+        "watch",
+        "--since",
+        "42",
+        "--epoch",
+        "test-epoch",
+        "--until-event",
+        "--json"
       ]
     ],
     "topLevelHelpIncludes": [
@@ -7590,6 +7601,10 @@ export const RUNPANE_CONTRACT = {
         "report": {
           "$ref": "#/jsonSchemas/agentReport",
           "description": "Report of an agent.report entry; its summary is cut to 2,000 characters (the panel keeps up to 16,000)."
+        },
+        "epoch": {
+          "type": "string",
+          "description": "Added to watch --json NDJSON events. Persist with gen after processing for numeric rearm."
         }
       },
       "additionalProperties": false
@@ -7734,6 +7749,10 @@ export const RUNPANE_CONTRACT = {
         },
         "idleBackoff": {
           "type": "boolean"
+        },
+        "epoch": {
+          "type": "string",
+          "description": "Expected epoch for since. Requires since and cannot be combined with as. Mismatch returns epoch-changed reset."
         }
       },
       "additionalProperties": false
@@ -10920,6 +10939,9 @@ export const RUNPANE_CONTRACT = {
         },
         "removed": {
           "type": "boolean"
+        },
+        "epoch": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -11228,7 +11250,7 @@ export const RUNPANE_CONTRACT = {
           "arguments": [
             "--follow",
             "--until-event",
-            "--present",
+            "--profile <unattended|present>",
             "--session <id|name>",
             "--self-test",
             "--kinds <kind,...>",
@@ -13086,7 +13108,7 @@ export const RUNPANE_CONTRACT = {
       "watch": {
         "name": "watch",
         "summary": "Wait for workspace transitions using the daemon journal.",
-        "details": "`runpane watch --follow` is the monitor for an agent: with no other flags it prints WATCH OK once, then one line per event (reports, ready, blocked, idle, exits, Session membership, and PR conflicts, checks, and merges), batches non-urgent lines, and ends itself with WATCH EXPIRED after 3 hours with nothing happening. Add `--present` when a person is waiting on the result. `--until-event` is for harnesses that wake an agent when a process exits (Claude Code background Bash, Codex): it prints the first event worth waking for and exits 0, and its named cursor means nothing is missed between runs. Every default is listed in the contract under defaults.watch; each override flag replaces one value.",
+        "details": "`runpane watch --follow` is the monitor for an agent: with no other flags it prints WATCH OK once, then one line per event (reports, ready, blocked, idle, exits, Session membership, and PR conflicts, checks, and merges), batches non-urgent lines, and ends itself with WATCH EXPIRED after 3 hours with nothing happening. Add `--profile present` when a person is waiting on the result. `--until-event` is for harnesses that wake an agent when a process exits (Claude Code background Bash, Codex): it prints the first event worth waking for and exits 0, and its named cursor means nothing is missed between runs. Every default is listed in the contract under defaults.watch; each override flag replaces one value.",
         "requiresPaneDaemon": true,
         "mutates": false,
         "arguments": [
@@ -13099,11 +13121,6 @@ export const RUNPANE_CONTRACT = {
             "name": "--until-event",
             "required": false,
             "description": "Wait for the first event in defaults.watch.untilEvent.kinds (agent.report, agent.blocked, panel.exited, pane.gone), print that one line, and exit 0. Inside a Pane terminal the cursor defaults to until-<panel id>, so a re-run resumes where the last stopped. A RESET and the caller's own panel never end the wait. With --timeout-ms, exit 124 with WATCH TIMEOUT when the deadline passes. Cannot be combined with --follow or --self-test."
-          },
-          {
-            "name": "--present",
-            "required": false,
-            "description": "Follow only: a person is waiting on the result. READY after 1m, BLOCKED after 15s, batches at most every 2m, and IDLE reminders every --idle-after instead of backing off (defaults.watch.present)."
           },
           {
             "name": "--session",
@@ -13178,25 +13195,25 @@ export const RUNPANE_CONTRACT = {
             "name": "--ready-settle",
             "value": "<duration>",
             "required": false,
-            "description": "Override: how long a panel must stay quiet before READY. Default 3m, 1m with --present. A BUSY, BLOCKED, UNKNOWN, EXIT, or GONE inside the window cancels it. 0 turns it off."
+            "description": "Override: how long a panel must stay quiet before READY. Default 3m, 1m with --profile present. A BUSY, BLOCKED, UNKNOWN, EXIT, or GONE inside the window cancels it. 0 turns it off."
           },
           {
             "name": "--blocked-settle",
             "value": "<duration>",
             "required": false,
-            "description": "Override: how long before BLOCKED is printed; an in-pane answer inside it cancels the line. Default 30s, 15s with --present. 0 turns it off."
+            "description": "Override: how long before BLOCKED is printed; an in-pane answer inside it cancels the line. Default 30s, 15s with --profile present. 0 turns it off."
           },
           {
             "name": "--min-interval",
             "value": "<duration>",
             "required": false,
-            "description": "Override: batch READY, IDLE, NEW, GONE, EXIT, and UNKNOWN lines at most once per interval; REPORT, BLOCKED, pr.conflicted, and failed pr.checks arrive at once and carry the held lines. Default 10m, 2m with --present. 0 turns batching off."
+            "description": "Override: batch READY, IDLE, NEW, GONE, EXIT, and UNKNOWN lines at most once per interval; REPORT, BLOCKED, pr.conflicted, and failed pr.checks arrive at once and carry the held lines. Default 10m, 2m with --profile present. 0 turns batching off."
           },
           {
             "name": "--idle-after",
             "value": "<duration>",
             "required": false,
-            "description": "Override: the first IDLE reminder after a READY panel stays idle. Default 10m. Later reminders back off to 30m, 1h, 3h, then daily (every multiple of this with --present). 0 turns IDLE off."
+            "description": "Override: the first IDLE reminder after a READY panel stays idle. Default 10m. Later reminders back off to 30m, 1h, 3h, then daily (every multiple of this with --profile present). 0 turns IDLE off."
           },
           {
             "name": "--expire-after",
@@ -13246,7 +13263,13 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--profile",
             "value": "<unattended|present>",
-            "description": "Follow preset. Default unattended; present matches --present. Explicit duration flags override the preset.",
+            "description": "Follow preset. Default unattended; present uses faster updates without idle backoff. Explicit duration flags override the preset.",
+            "required": false
+          },
+          {
+            "name": "--epoch",
+            "value": "<epoch>",
+            "description": "Journal epoch paired with --since; a mismatch emits _reset instead of silently skipping events.",
             "required": false
           }
         ],
@@ -13255,11 +13278,11 @@ export const RUNPANE_CONTRACT = {
           "runpane watch --until-event",
           "runpane watch --follow",
           "runpane watch --session <id|name> --follow",
-          "runpane watch --session <id|name> --follow --present",
+          "runpane watch --session <id|name> --follow --profile present",
           "runpane watch --follow --json --kinds agent.report,agent.blocked"
         ],
         "notes": [
-          "Every default is in the contract under defaults.watch: follow (what --follow does), present (what --present changes), and untilEvent (what --until-event waits for). An override flag replaces one value; nothing else needs remembering.",
+          "Every default is in the contract under defaults.watch: follow (what --follow does), present (what --profile present changes), and untilEvent (what --until-event waits for). An override flag replaces one value; nothing else needs remembering.",
           "Arming: wait for WATCH OK before relying on a --follow monitor. It prints once when the watch is armed. Run the monitor under your harness's background monitor (one line = one notification).",
           "Ending: WATCH EXPIRED (exit 0) means nothing happened for --expire-after: say so, and arm a new watch with the next dispatch. A non-zero exit or a WATCH ERROR line means it failed: tell the user and re-arm once; if it dies again, file runpane doctor --report. If the message says the cursor was superseded, keep the replacement monitor and leave the old one stopped. Judge a watch by these lines, never by silence.",
           "--until-event prints exactly one line: the event (exit 0), WATCH TIMEOUT (exit 124, only with --timeout-ms), or WATCH ERROR (exit 2).",
@@ -13275,7 +13298,8 @@ export const RUNPANE_CONTRACT = {
           "A daemon that predates --session returns no session field; runpane then fails with WATCH ERROR instead of watching every Pane.",
           "Replay: after a reset (RESET/_reset), the baseline restates current state. In JSON, those entries carry replay: true (and changedWhileAway: true after an epoch change). A replayed agent.ready is never READY: re-read runpane sessions overview instead of acting on it. Lines mode prints only CHANGED for them.",
           "agent.report (REPORT <pane-name> pane <pane-id> panel <panel-id> <state> [pr#<n>] [<head>][: <question>]) is a worker's `runpane report`. It is in the default kinds of --follow and --until-event, and arrives from any panel: a shell tab or a wrapper launch whose agent is not yet detected included. It bypasses --min-interval, and orchestrators treat it as the completion signal; a READY without a report means look, and maybe nudge.",
-          "Never pipe --follow into grep -m1, head, or any other exit-on-match reader: it does not exit when its reader does until its next write. To wait for one event, use --until-event."
+          "Never pipe --follow into grep -m1, head, or any other exit-on-match reader: it does not exit when its reader does until its next write. To wait for one event, use --until-event.",
+          "Registration returns generation and epoch. Initially arm watch --until-event --since <generation> --epoch <epoch> --pane <id> --json --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Process every NDJSON event, then persist its gen and epoch for the next --since/--epoch; --limit 1 delivers one event per run. Never mix --as with --since/--epoch. On _reset or _dropped, resynchronize GitHub state, then use the control record generation and epoch; replay/baseline records are not new events. No merge or GitHub write is performed."
         ]
       },
       "panes git-status": {
@@ -15099,7 +15123,7 @@ export const RUNPANE_CONTRACT = {
           "prWatchResult"
         ],
         "notes": [
-          "Registration returns generation. Arm watch --until-event --since <generation> --pane <id> --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Keep the returned generation for subsequent waits. No merge or GitHub write is performed.",
+          "Registration returns generation and epoch. Initially arm watch --until-event --since <generation> --epoch <epoch> --pane <id> --json --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Process every NDJSON event, then persist its gen and epoch for the next --since/--epoch; --limit 1 delivers one event per run. Never mix --as with --since/--epoch. On _reset or _dropped, resynchronize GitHub state, then use the control record generation and epoch; replay/baseline records are not new events. No merge or GitHub write is performed.",
           "Watches stop on merge/close, 8 non-rate-limit errors, or 10 comment-only updates. Archived/deleted Panes are removed. Re-register after resolving the reason. Session member PR discovery remains automatic."
         ]
       },
@@ -15141,7 +15165,7 @@ export const RUNPANE_CONTRACT = {
           "prWatchResult"
         ],
         "notes": [
-          "Registration returns generation. Arm watch --until-event --since <generation> --pane <id> --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Keep the returned generation for subsequent waits. No merge or GitHub write is performed.",
+          "Registration returns generation and epoch. Initially arm watch --until-event --since <generation> --epoch <epoch> --pane <id> --json --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Process every NDJSON event, then persist its gen and epoch for the next --since/--epoch; --limit 1 delivers one event per run. Never mix --as with --since/--epoch. On _reset or _dropped, resynchronize GitHub state, then use the control record generation and epoch; replay/baseline records are not new events. No merge or GitHub write is performed.",
           "Watches stop on merge/close, 8 non-rate-limit errors, or 10 comment-only updates. Archived/deleted Panes are removed. Re-register after resolving the reason. Session member PR discovery remains automatic."
         ]
       },
@@ -15177,7 +15201,7 @@ export const RUNPANE_CONTRACT = {
           "prWatchResult"
         ],
         "notes": [
-          "Registration returns generation. Arm watch --until-event --since <generation> --pane <id> --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Keep the returned generation for subsequent waits. No merge or GitHub write is performed.",
+          "Registration returns generation and epoch. Initially arm watch --until-event --since <generation> --epoch <epoch> --pane <id> --json --kinds pr.checks,pr.head,pr.comment,pr.review,pr.closed,pr.merged,pr.conflicted,pr.stopped,github.unavailable,github.recovered. Process every NDJSON event, then persist its gen and epoch for the next --since/--epoch; --limit 1 delivers one event per run. Never mix --as with --since/--epoch. On _reset or _dropped, resynchronize GitHub state, then use the control record generation and epoch; replay/baseline records are not new events. No merge or GitHub write is performed.",
           "Watches stop on merge/close, 8 non-rate-limit errors, or 10 comment-only updates. Archived/deleted Panes are removed. Re-register after resolving the reason. Session member PR discovery remains automatic."
         ]
       }

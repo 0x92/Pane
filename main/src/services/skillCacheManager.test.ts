@@ -338,7 +338,7 @@ process.stdout.write(JSON.stringify(payload) + '\\n');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('at most one batch every 10 minutes');
     expect(canonicalSkill).not.toContain('Filter HEARTBEAT');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('WATCH ERROR, WATCH RECONNECTED, RESET and DROPPED remain visible');
-    expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('`--present` or `--profile present`: 1m/15s/2m and no idle backoff');
+    expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('`--profile present`: 1m/15s/2m and no idle backoff');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('an entry with `heldInputPresent: true`');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('Read and follow <absolute-path-to-prompt-file>');
     expect(canonicalSkill.replace(/\s+/g, ' ')).toContain('wait for the resource instead of taking it over');

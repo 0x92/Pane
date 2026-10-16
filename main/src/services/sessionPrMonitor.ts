@@ -31,7 +31,7 @@ const recordSchema = boundary.object({
 });
 type DecodedRecord = ReturnType<typeof recordSchema.decode>;
 type WatchRecord = { -readonly [K in keyof DecodedRecord]: DecodedRecord[K] };
-interface WatchRegistration { generation: number; watch: WatchRecord }
+interface WatchRegistration { epoch: string; generation: number; watch: WatchRecord }
 type Event = Omit<RunpaneWorkspaceEntry, 'gen' | 'at' | 'paneName'>;
 interface Options {
   sessions: Pick<OrchestrationSessionManager, 'activeMemberPaneIds'>;
@@ -87,7 +87,7 @@ export class SessionPrMonitor {
     const identity = key(paneId, target);
     const existing = this.records.get(identity);
     if (existing?.explicit && !existing.stopped && ((!head && existing.head === existing.baseline?.head) || head?.toLowerCase() === existing.head)) {
-      return { generation: this.options.journal.generation, watch: existing };
+      return { epoch: this.options.journal.epoch, generation: this.options.journal.generation, watch: existing };
     }
     if (!existing && this.records.size >= MAX_WATCHES) {
       const finished = [...this.records].find(([, value]) => value.stopped);
@@ -101,7 +101,7 @@ export class SessionPrMonitor {
     const generation = this.options.journal.generation;
     // Registration returns its cursor before the first observation; no network call blocks the CLI.
     if (!this.stopped) this.schedule(0);
-    return { generation, watch: record };
+    return { epoch: this.options.journal.epoch, generation, watch: record };
   }
 
   unwatch(paneId: string, url: string): boolean {

@@ -451,6 +451,7 @@ def watch_until_done(parsed: Any) -> int:
     request: Dict[str, Any] = {
         **optional_value("as", watch_as),
         **optional_value("since", parsed.watch_since),
+        **optional_value("epoch", parsed.watch_epoch),
         **optional_value("from", parsed.watch_from),
         **optional_value("timeoutMs", parsed.timeout_ms),
         **optional_value("limit", parsed.limit),
@@ -513,6 +514,7 @@ def watch_until_done(parsed: Any) -> int:
                 if parsed.self_test:
                     call_request.pop("as", None)
                     call_request.pop("since", None)
+                    call_request.pop("epoch", None)
                     call_request.update({"from": "now", "idleAfterMs": 0, "timeoutMs": 0})
                 elif anonymous_idle_window_start_ms is not None:
                     call_request["idleWindowStartMs"] = anonymous_idle_window_start_ms
@@ -599,6 +601,7 @@ def watch_until_done(parsed: Any) -> int:
                 last_heartbeat_at = now_ms
             if not watch_as:
                 request["since"] = result.get("generation")
+                request["epoch"] = result.get("epoch")
                 if keeps_waiting:
                     anonymous_idle_window_start_ms = time.time() * 1_000
             if not keeps_waiting:
@@ -1635,19 +1638,20 @@ def print_workspace_wait_result(result: Dict[str, Any], output_format: str) -> N
                 "kind": "_reset",
                 "reason": reset.get("reason"),
                 "epoch": result.get("epoch"),
+                "generation": result.get("generation"),
             }, separators=(",", ":")), flush=True)
         else:
             print(f"RESET {sanitize_watch_value(reset.get('reason'))} epoch {sanitize_watch_value(result.get('epoch'))}", flush=True)
 
     if result.get("dropped") is not None:
         if output_format == "json":
-            print(json.dumps({"kind": "_dropped", "count": result.get("dropped")}, separators=(",", ":")), flush=True)
+            print(json.dumps({"kind": "_dropped", "count": result.get("dropped"), "epoch": result.get("epoch"), "generation": result.get("generation")}, separators=(",", ":")), flush=True)
         else:
             print(f"DROPPED {result.get('dropped')}", flush=True)
 
     for entry in result.get("entries", []):
         if output_format == "json":
-            print(json.dumps(entry, separators=(",", ":")), flush=True)
+            print(json.dumps({**entry, "epoch": result.get("epoch")}, separators=(",", ":")), flush=True)
             continue
         line = format_workspace_entry_line(entry)
         if line:

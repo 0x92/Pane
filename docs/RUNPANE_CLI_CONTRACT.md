@@ -143,7 +143,7 @@ runpane <command> --help
 runpane watch --until-event
 runpane watch --follow
 runpane watch --session <id|name> --follow
-runpane watch --session <id|name> --follow --present
+runpane watch --session <id|name> --follow --profile present
 runpane pr watch [--pane <id>] --url <PR URL> [--head <full-sha>] [--json] [--pane-dir <path>]
 runpane pr unwatch [--pane <id>] --url <PR URL> [--json] [--pane-dir <path>]
 runpane pr list [--pane <id>] [--json] [--pane-dir <path>]
@@ -209,7 +209,7 @@ If composer submission cannot be verified without risking a duplicate, the creat
 
 When running from WSL while Pane is installed on Windows, the Linux wrapper may look for a missing `/tmp/pane-daemon.../daemon.sock` or resolve to a Windows shim such as Volta. In that case invoke the Windows wrapper through PowerShell from a Windows cwd, for example `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane repos list --json'`.
 
-`runpane watch` waits for agent, Pane, panel, and PR events from the daemon journal without polling. `--follow` keeps watching with defaults tuned for an agent watching unattended (quiet, batched, and it ends itself after 3 hours with nothing happening); `--present` makes it faster when a person is waiting. `--until-event` waits for one event worth waking for, prints it, and exits 0. The defaults are listed in the contract under defaults.watch.
+`runpane watch` waits for agent, Pane, panel, and PR events from the daemon journal without polling. `--follow` keeps watching with defaults tuned for an agent watching unattended (quiet, batched, and it ends itself after 3 hours with nothing happening); `--profile present` makes it faster when a person is waiting. `--until-event` waits for one event worth waking for, prints it, and exits 0. The defaults are listed in the contract under defaults.watch.
 
 A watch releases its pending slot when its client socket or named pipe disconnects. Re-arming the same named cursor takes over the previous request; the superseded watcher exits with a WATCH ERROR instead of competing for the cursor. Anonymous concurrent watchers retain the eight-wait limit. Each request also has a 125-second lease (slightly longer than the maximum 120-second long poll), so an abandoned request is reclaimed even if no disconnect arrives.
 
@@ -368,7 +368,7 @@ runpane workspace [<machine>] write <path> [--json]
 runpane workspace <machine> exec [--cwd <path>] [--timeout-ms <ms>] [--json] -- <command>
 runpane handoff --template
 runpane handoff "<destination>" --note-file <path|-> [--machine <name>] [--agent <codex|claude|cursor>] [--model <model>] [--effort <level>] [--repo <selector>] [--push] [--dry-run] [--json]
-runpane watch [--follow|--until-event] [--present] [--session <id|name>|--pane <id>] [--json] [overrides]
+runpane watch [--follow|--until-event] [--profile unattended|present] [--session <id|name>|--pane <id>] [--json] [overrides]
 runpane panes create --repo <selector> --name <name> --agent <codex|claude|cursor> [--source user|agent] [--focus|--no-focus] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [options] [--pane-dir <path>]
 runpane panes create --repo <selector> --name <name> --tool-command <command> [--agent <codex|claude|cursor>] [--source user|agent] [--focus|--no-focus] [--base <ref>] [--branch <name>] [--prompt-file <path|->] [options] [--pane-dir <path>]
 runpane panes create --from-json <path|-> [--yes] [--json] [--pane-dir <path>]
@@ -586,6 +586,7 @@ These flags are consumed by local daemon-control commands:
 --model <model>
 --effort <level>
 --profile <unattended|present>
+--epoch <epoch>
 --json
 --wait-ready
 --no-focus
@@ -613,7 +614,6 @@ These flags are consumed by local daemon-control commands:
 --template
 --push
 --interrupt
---present
 ```
 
 `runpane doctor --json`, `runpane repos list`, `runpane panes ...`, and `runpane panels ...` commands use or describe the local framed daemon socket/pipe for a running Pane app. `--pane-dir` points the wrapper at a non-default Pane data directory, such as `PANE_DIR=~/.pane_test` in development. `runpane agent-context` is local/offline and can be used before Pane is running. `agent-context` and `version` accept and ignore `--pane-dir`, so one `--pane-dir` can be passed to every runpane command. In a Pane repository checkout, if `runpane` is not on PATH, build the local wrapper with `pnpm --filter runpane build` and run it with Node 22 or newer, for example `node packages/runpane/dist/cli.js doctor --json`. From WSL, if the user runs Windows Pane, call the Windows wrapper through `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane ...'` so the command can reach the Windows named-pipe daemon and avoid UNC cwd issues.

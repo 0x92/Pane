@@ -32,6 +32,18 @@ function setup(filePath?: string) {
 }
 
 describe('PR monitoring through the journal', () => {
+  it('returns the epoch and pre-observation generation for registration-to-wait races', async () => {
+    const s = setup();
+    const registration = s.monitor.watch('worker', url);
+    expect(registration).toMatchObject({ epoch: s.journal.epoch, generation: 0 });
+    s.set({ checks: [check('required')] });
+    await s.monitor.pollOnce();
+    const delivered = s.journal.readAfter(registration.generation, { kinds: ['pr.checks'] }).entries;
+    expect(delivered).toMatchObject([{ kind: 'pr.checks', checks: 'passed' }]);
+    expect(s.journal.readAfter(delivered[0].gen, { kinds: ['pr.checks'] }).entries).toEqual([]);
+    expect(s.monitor.watch('worker', url).epoch).toBe(registration.epoch);
+  });
+
   it('does not pass while an unregistered required context keeps the PR blocked', async () => {
     const s = setup(); s.monitor.watch('worker', url);
     s.set({ checks: [check('optional', 'COMPLETED', 'SUCCESS', false)], mergeStateStatus: 'BLOCKED' });

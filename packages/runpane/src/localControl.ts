@@ -2252,6 +2252,7 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
   const request = {
     as: watchAs,
     since: parsed.watchSince,
+    epoch: parsed.watchEpoch,
     from: parsed.watchFrom,
     timeoutMs: parsed.timeoutMs,
     limit: parsed.limit,
@@ -2302,7 +2303,7 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
     const timeoutMs = parsed.selfTest ? 0 : Math.min(requestedWaitMs, heartbeatWaitMs, expiryWaitMs, 120_000);
     try {
       const callRequest = parsed.selfTest
-        ? { ...request, as: undefined, since: undefined, from: 'now' as const, idleAfterMs: 0, timeoutMs: 0 }
+        ? { ...request, as: undefined, since: undefined, epoch: undefined, from: 'now' as const, idleAfterMs: 0, timeoutMs: 0 }
         : { ...request, timeoutMs, idleWindowStartMs: anonymousIdleWindowStartMs };
       const result = await invokeDaemon('runpane:workspace:wait', [callRequest], workspaceWaitResultSchema, {
         paneDir: parsed.paneDir,
@@ -2353,6 +2354,7 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
       }
       if (!watchAs) {
         request.since = result.generation;
+        request.epoch = result.epoch;
         if (keepsWaiting) anonymousIdleWindowStartMs = Date.now();
       }
     } catch (error) {
