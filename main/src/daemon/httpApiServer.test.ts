@@ -1,5 +1,6 @@
 import http from 'http';
 import zlib from 'zlib';
+import WebSocket from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultRemoteDaemonConfig, type RemoteDaemonConfig } from '../../../shared/types/remoteDaemon';
 import { PaneCommandRegistry } from './commandRegistry';
@@ -992,6 +993,29 @@ describe('workspace identity mode', () => {
     const tagged = await requestJson(server, 'POST', invokePath, invoke);
     expect(tagged.statusCode).toBe(403);
     expect(JSON.stringify(tagged.body)).toContain('ERR_WORKSPACE_IDENTITY_REQUIRED');
+  });
+
+  it('admits the voice stream upgrade, checking the same identity', async () => {
+    vi.stubEnv('DEEPGRAM_API_KEY', '');
+    const server = await startOwnerServer(owner);
+    const address = server.getAddress();
+    if (!address) throw new Error('Remote HTTP API server is not listening');
+    const upgradeStatus = (headers: RequestHeaders) => new Promise<number>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${address.port}/serve-secret/voice/deepgram-stream`, { headers });
+      socket.once('unexpected-response', (_request, response) => {
+        resolve(response.statusCode ?? 0);
+        socket.terminate();
+      });
+      socket.once('open', () => {
+        socket.terminate();
+        reject(new Error('voice stream opened without a Deepgram key'));
+      });
+      socket.once('error', reject);
+    });
+    expect(await upgradeStatus(as(teammate))).toBe(403);
+    // Past the workspace and identity checks, the host reports the missing key rather than dropping the socket.
+    expect(await upgradeStatus(as(owner))).toBe(503);
+    vi.unstubAllEnvs();
   });
 
   it('refuses everyone while the owner is unknown', async () => {

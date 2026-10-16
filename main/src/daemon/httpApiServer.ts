@@ -444,7 +444,7 @@ export class PaneRemoteHttpApiServer {
       this.handlePortStreamUpgrade(request, socket, head, Number(portMatch[1]), url);
       return;
     }
-    if (this.workspace || url.pathname !== VOICE_DEEPGRAM_STREAM_PATH) {
+    if (url.pathname !== VOICE_DEEPGRAM_STREAM_PATH) {
       socket.destroy();
       return;
     }
