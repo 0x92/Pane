@@ -364,6 +364,13 @@ export function decodeRemoteDaemonEventEnvelope<Value>(value: Value): RemoteDaem
   return decodeBoundary(value, remoteDaemonEventEnvelopeSchema);
 }
 
+/**
+ * The Origin the native app sends on its WebSockets. React Native always sends an Origin on a
+ * WebSocket and workspaces refuse browser origins, so the app names itself with a value no browser
+ * can send: browsers send only "null" or scheme://host.
+ */
+export const NATIVE_APP_WEBSOCKET_ORIGIN = 'runpane-native-app';
+
 export const DEFAULT_REMOTE_DAEMON_HOST_CONFIG: RemoteDaemonHostConfig = {
   enabled: false,
   listenHost: '127.0.0.1',

@@ -208,7 +208,7 @@ The CLI setup command prints the same connection code and, for SSH mode, the for
 
 For agents reaching your own machines from the CLI, see [Pane Workspaces](#pane-workspaces) below.
 
-Integration keys (voice dictation, iPhone notifications) set on one host reach your other hosts through the devices you paired. See [Shared integration keys](docs/SHARED_CREDENTIALS.md).
+Integration keys (voice dictation, iPhone notifications) set on one host reach your other hosts through your devices that have them saved. See [Shared integration keys](docs/SHARED_CREDENTIALS.md).
 
 ---
 

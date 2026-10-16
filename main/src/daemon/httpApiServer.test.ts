@@ -2,7 +2,7 @@ import http from 'http';
 import zlib from 'zlib';
 import WebSocket from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDefaultRemoteDaemonConfig, type RemoteDaemonConfig } from '../../../shared/types/remoteDaemon';
+import { createDefaultRemoteDaemonConfig, NATIVE_APP_WEBSOCKET_ORIGIN, type RemoteDaemonConfig } from '../../../shared/types/remoteDaemon';
 import { PaneCommandRegistry } from './commandRegistry';
 import { hashRemoteDaemonToken } from './auth';
 import { boundary, decodeBoundary, type JsonValue } from '../../../shared/validation/boundaryDecoder';
@@ -995,6 +995,29 @@ describe('workspace identity mode', () => {
     expect(JSON.stringify(tagged.body)).toContain('ERR_WORKSPACE_IDENTITY_REQUIRED');
   });
 
+  it.each(['credentials:shared:get', 'credentials:shared:apply'])(
+    'shares keys over %s with the owner only, even when teammates can connect', async (channel) => {
+      const registry = new PaneCommandRegistry();
+      const handler = vi.fn(async () => ({}));
+      registry.register(channel, handler);
+      const server = new PaneRemoteHttpApiServer(registry, createConfigManagerStub(), {
+        workspace: { listenPort: 0, pathSecret: 'serve-secret', access: () => ownerOnly({ visibility: 'tailnet' }) },
+      });
+      activeServers.push(server);
+      await server.start();
+      const request = { channel, args: [{}, { clientId: 'forged' }] };
+
+      const refused = await requestJson(server, 'POST', invokePath, request, undefined, as(teammate));
+      expect(refused.statusCode).toBe(403);
+      expect(refused.body).toMatchObject({ error: { code: 'ERR_SHARED_CREDENTIALS_OWNER_REQUIRED' } });
+      expect(handler).not.toHaveBeenCalled();
+
+      const allowed = await requestJson(server, 'POST', invokePath, request, undefined, as(owner.toUpperCase()));
+      expect(allowed).toEqual({ statusCode: 200, body: { ok: true, result: {} } });
+      expect(handler).toHaveBeenCalledWith({}, { clientId: `tailnet:${owner}` });
+    },
+  );
+
   it('admits the voice stream upgrade, checking the same identity', async () => {
     vi.stubEnv('DEEPGRAM_API_KEY', '');
     const server = await startOwnerServer(owner);
@@ -1012,9 +1035,12 @@ describe('workspace identity mode', () => {
       });
       socket.once('error', reject);
     });
-    expect(await upgradeStatus(as(teammate))).toBe(403);
+    // React Native always sends an Origin on a WebSocket; the app names itself with one no browser can send.
+    const fromApp = { Origin: NATIVE_APP_WEBSOCKET_ORIGIN };
+    expect(await upgradeStatus({ ...as(teammate), ...fromApp })).toBe(403);
+    expect(await upgradeStatus({ ...as(owner), Origin: 'https://attacker.example' })).toBe(403);
     // Past the workspace and identity checks, the host reports the missing key rather than dropping the socket.
-    expect(await upgradeStatus(as(owner))).toBe(503);
+    expect(await upgradeStatus({ ...as(owner), ...fromApp })).toBe(503);
     vi.unstubAllEnvs();
   });
 
