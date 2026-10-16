@@ -44,6 +44,41 @@ describe('PR monitoring through the journal', () => {
     expect(s.monitor.watch('worker', url).epoch).toBe(registration.epoch);
   });
 
+  it.each([undefined, 'a'.repeat(40)])('keeps unread events after a lost registration response and restart (pin %s)', async head => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'pane-pr-registration-'));
+    try {
+      const file = path.join(directory, 'journal.json');
+      const first = setup(file);
+      first.monitor.watch('worker', url, head); // Response lost before the caller saves its cursor.
+      first.set({ checks: [check('required')] });
+      await first.monitor.pollOnce();
+      const retry = first.monitor.watch('worker', url, head);
+      expect(retry.generation).toBe(0);
+      expect(first.journal.readAfter(retry.generation, { kinds: ['pr.checks'] }).entries).toMatchObject([{ checks: 'passed' }]);
+      const restarted = setup(file);
+      const recovered = restarted.monitor.watch('worker', url, head);
+      expect(recovered).toMatchObject({ generation: retry.generation, epoch: retry.epoch });
+      const delivered = restarted.journal.readAfter(recovered.generation, { kinds: ['pr.checks'] }).entries;
+      expect(delivered).toHaveLength(1);
+      expect(restarted.journal.readAfter(delivered[0].gen, { kinds: ['pr.checks'] }).entries).toEqual([]);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('starts a new registration cursor for a new pin or explicit unwatch/re-register', async () => {
+    const s = setup();
+    s.monitor.watch('worker', url, 'a'.repeat(40));
+    s.set({ checks: [check('required')] }); await s.monitor.pollOnce();
+    s.set({ headRefOid: 'b'.repeat(40) }); await s.monitor.pollOnce();
+    const beforeNewPin = s.journal.generation;
+    const repinned = s.monitor.watch('worker', url, 'b'.repeat(40));
+    expect(repinned.generation).toBe(beforeNewPin);
+    await s.monitor.pollOnce();
+    expect(s.monitor.watch('worker', url, 'b'.repeat(40)).generation).toBe(repinned.generation);
+    expect(s.journal.readAfter(repinned.generation, { kinds: ['pr.checks'] }).entries).toMatchObject([{ checks: 'passed', pr: { headOid: 'b'.repeat(40) } }]);
+    s.monitor.unwatch('worker', url);
+    expect(s.monitor.watch('worker', url, 'b'.repeat(40)).generation).toBe(s.journal.generation);
+  });
+
   it('does not pass while an unregistered required context keeps the PR blocked', async () => {
     const s = setup(); s.monitor.watch('worker', url);
     s.set({ checks: [check('optional', 'COMPLETED', 'SUCCESS', false)], mergeStateStatus: 'BLOCKED' });

@@ -613,7 +613,10 @@ runpane pr unwatch --pane <pane-id> --url https://github.com/owner/repo/pull/123
 
 Inside a Pane, registration defaults to its `PANE_SESSION_ID`. Registration
 returns `generation` and `epoch`; use both for the first wait, including events
-that arrived between registration and arming. Process every returned NDJSON
+that arrived between registration and arming. An identical active registration
+retry returns its original generation, including after daemon restart, so a
+lost response cannot skip an unread event. A new head pin or unwatch/re-register
+starts a new registration. Process every returned NDJSON
 event, then persist its `gen` and `epoch`. Rearm with `--since <gen> --epoch
 <epoch>`; use `--limit 1` for one event per invocation. Never reuse the initial
 registration generation after delivering an event, and never combine `--as`

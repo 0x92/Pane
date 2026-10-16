@@ -24,6 +24,7 @@ const baselineSchema = boundary.object({
 });
 const recordSchema = boundary.object({
   paneId: boundary.string, target: targetSchema, explicit: boundary.boolean,
+  registrationGeneration: boundary.optional(boundary.number),
   head: boundary.optional(boundary.string), fingerprint: boundary.optional(boundary.string),
   baseline: boundary.optional(baselineSchema), fullReadAt: boundary.number,
   errors: boundary.number, commentWakes: boundary.number, unavailable: boundary.boolean,
@@ -87,14 +88,16 @@ export class SessionPrMonitor {
     const identity = key(paneId, target);
     const existing = this.records.get(identity);
     if (existing?.explicit && !existing.stopped && ((!head && existing.head === existing.baseline?.head) || head?.toLowerCase() === existing.head)) {
-      return { epoch: this.options.journal.epoch, generation: this.options.journal.generation, watch: existing };
+      // An idempotent retry may follow a lost response: never acknowledge unread events.
+      // Legacy records have no watermark; replay from zero so retention loss is explicit.
+      return { epoch: this.options.journal.epoch, generation: existing.registrationGeneration ?? 0, watch: existing };
     }
     if (!existing && this.records.size >= MAX_WATCHES) {
       const finished = [...this.records].find(([, value]) => value.stopped);
       if (finished) this.records.delete(finished[0]);
     }
     if (!existing && this.records.size >= MAX_WATCHES) throw new PaneError('ERR_PR_WATCH_CAPACITY', 'The watch registry is full. Nothing was registered.', 'Remove unused registrations with runpane pr unwatch.');
-    const record: WatchRecord = { paneId, target, explicit: true, head: head?.toLowerCase(), fingerprint: undefined, baseline: undefined,
+    const record: WatchRecord = { paneId, target, explicit: true, registrationGeneration: this.options.journal.generation, head: head?.toLowerCase(), fingerprint: undefined, baseline: undefined,
       fullReadAt: 0, errors: 0, commentWakes: 0, unavailable: false, retryAt: 0, stopped: undefined };
     this.records.set(identity, record);
     this.commit([]);
@@ -197,7 +200,7 @@ export class SessionPrMonitor {
       const existing = this.records.get(identity);
       if (existing && (existing.explicit || existing.stopped !== 'closed')) continue;
       if (this.records.size >= MAX_WATCHES) continue;
-      this.records.set(identity, { paneId, target, explicit: false, head: undefined, fingerprint: undefined,
+      this.records.set(identity, { paneId, target, explicit: false, registrationGeneration: undefined, head: undefined, fingerprint: undefined,
         baseline: existing?.baseline, fullReadAt: 0, errors: 0, commentWakes: 0, unavailable: false, retryAt: 0, stopped: undefined });
     }
   }
