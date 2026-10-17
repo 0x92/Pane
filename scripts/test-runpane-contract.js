@@ -3577,6 +3577,15 @@ local_control.run_sessions_overview(parse_args(["sessions", "overview", "--sessi
     assert.deepStrictEqual(decoded.panes[0].panels[0].report, panelReport);
     assert.deepStrictEqual(decoded.panes[0].report, report);
     printed.length = 0;
+    // F-2: JSON keys named __proto__, top level and nested, survive the CLI's decoder and printing.
+    const protoSummary = '{"__proto__":{"state":"changed","__proto__":{"deep":true}},"ok":true}';
+    withPanelReports.panes[0].panels[0].report = { ...panelReport, summary: protoSummary, data: JSON.parse(protoSummary) };
+    assert.strictEqual(await runSessionsOverview(parseRunpaneArgs(['sessions', 'overview', '--session', 'Release QA', '--json'])), 0);
+    const protoData = JSON.parse(printed.join('\n')).panes[0].panels[0].report.data;
+    assert.ok(Object.hasOwn(protoData, '__proto__'), 'report.data keeps a __proto__ key');
+    assert.strictEqual(JSON.stringify(protoData), protoSummary);
+    withPanelReports.panes[0].panels[0].report = panelReport;
+    printed.length = 0;
     assert.strictEqual(await runSessionsOverview(parseRunpaneArgs(['sessions', 'overview', '--session', 'Release QA'])), 0);
   } finally {
     daemonClient.invokeDaemon = originalInvokeDaemon;

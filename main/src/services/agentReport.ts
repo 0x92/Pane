@@ -1,5 +1,5 @@
 import { boundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
-import type { JsonObject } from '../../../shared/validation/boundaryDecoder';
+import type { JsonObject, JsonValue } from '../../../shared/validation/boundaryDecoder';
 import type { TerminalAgentReport, TerminalAgentReportState, ToolPanel } from '../../../shared/types/panels';
 
 /**
@@ -11,6 +11,8 @@ import type { TerminalAgentReport, TerminalAgentReportState, ToolPanel } from '.
 export const AGENT_REPORT_STATES = ['ready', 'blocked', 'failed', 'done'] as const satisfies readonly TerminalAgentReportState[];
 /** The panel keeps this much summary; the CLIs send one character more so an overflow still reads as truncated. */
 export const MAX_AGENT_REPORT_SUMMARY_LENGTH = 16_000;
+/** A summary nested deeper than this (objects and arrays) has no `data`, so every reader and CLI can decode it. */
+export const MAX_AGENT_REPORT_DATA_DEPTH = 64;
 /** An `agent.report` journal entry carries this much summary, so watch lines stay small. */
 export const MAX_JOURNAL_REPORT_SUMMARY_LENGTH = 2_000;
 const MAX_QUESTION_LENGTH = 2_000;
@@ -88,18 +90,32 @@ export function readPanelAgentReport(panel: Pick<ToolPanel, 'state'> | undefined
 
 /**
  * The summary as a JSON object, returned exactly as the worker sent it, or
- * undefined when the summary is absent, truncated, or not a JSON object.
+ * undefined when the summary is absent, truncated, not a JSON object, or
+ * nested deeper than `MAX_AGENT_REPORT_DATA_DEPTH`.
  * Pane never reads or renames the fields inside it.
  */
 export function agentReportData(report: TerminalAgentReport): JsonObject | undefined {
   if (!report.summary || report.summaryTruncated) return undefined;
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(report.summary);
+    // The decoder itself fails cleanly past its own (deeper) limit; the cap here keeps data small enough for every CLI.
+    const data = decodeOptionalBoundary(JSON.parse(report.summary), boundary.jsonObject);
+    return data && !jsonDepthExceeds(data, MAX_AGENT_REPORT_DATA_DEPTH) ? data : undefined;
   } catch {
+    // One worker's summary must never make the overview unreadable.
     return undefined;
   }
-  return decodeOptionalBoundary(parsed, boundary.jsonObject);
+}
+
+/** Counts nested objects and arrays without recursion. */
+function jsonDepthExceeds(value: JsonValue, limit: number): boolean {
+  const pending: Array<{ value: JsonValue; depth: number }> = [{ value, depth: 0 }];
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    if (!(next.value instanceof Object)) continue;
+    const depth = next.depth + 1;
+    if (depth > limit) return true;
+    for (const child of Object.values(next.value)) pending.push({ value: child, depth });
+  }
+  return false;
 }
 
 interface BoundedSummary {

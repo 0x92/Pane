@@ -169,8 +169,8 @@ export interface OrchestrationPanelOverview {
 
 /**
  * A panel's report as the overview returns it. `data` is the summary parsed as
- * given when it is a complete JSON object; a plain-text, array, scalar, invalid
- * or truncated summary has no `data`.
+ * given when it is a complete JSON object; a plain-text, array, scalar, invalid,
+ * truncated, or more than 64 levels deep summary has no `data`.
  */
 export interface OrchestrationPanelReport extends TerminalAgentReport {
   data?: JsonObject;

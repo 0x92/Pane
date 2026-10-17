@@ -26,6 +26,9 @@ import { OrchestrationSessionStore } from './orchestrationSessionStore';
 import { terminalPanelManager } from './terminalPanelManager';
 import { sessionWorkspacePath, prepareSessionWorkspace } from './sessionWorkspace';
 import { OrchestrationSessionManager } from './orchestrationSessionManager';
+import { normalizeAgentReport } from './agentReport';
+import { serializeJsonTransport } from '../daemon/jsonTransport';
+import { boundary } from '../../../shared/validation/boundaryDecoder';
 import * as wslUtils from '../utils/wslUtils';
 
 const liveStates = new Map<string, AgentState>();
@@ -1237,6 +1240,34 @@ describe('OrchestrationSessionManager', () => {
     expect(panels.get(silent.id)).not.toHaveProperty('report');
     // The per-Pane report keeps its shape: the newest report, its panel, and no data.
     expect(overview.panes[0].report).toEqual({ ...reports[truncated.id], panelId: truncated.id });
+  });
+
+  it('F-1, F-2: a deeply nested summary leaves the overview readable, and __proto__ keys survive in data', async () => {
+    const fixture = createFixture();
+    const named = await fixture.manager.create({ name: 'Hostile reports' });
+    const pane = paneFixture(fixture, 'hostile-report-pane', { name: 'Hostile Report Pane' });
+    const nested = createPanel('hostile-report-nested', pane.id, 'Nested');
+    const proto = createPanel('hostile-report-proto', pane.id, 'Proto');
+    await seedPanel(nested);
+    await seedPanel(proto);
+    await fixture.manager.associate({ sessionId: named.session.id }, { paneId: pane.id });
+    const nestedReport = normalizeAgentReport({ state: 'ready', summary: `{"x":${'['.repeat(2000)}0${']'.repeat(2000)}}` }, '2026-10-17T16:00:00.000Z');
+    const protoSummary = '{"__proto__":{"state":"changed","__proto__":{"deep":true}},"ok":true}';
+    const protoReport = normalizeAgentReport({ state: 'ready', summary: protoSummary }, '2026-10-17T16:01:00.000Z');
+    expect(nestedReport.summaryTruncated).toBeUndefined();
+    await panelManager.updatePanel(nested.id, { state: { ...nested.state, customState: { ...nested.state.customState, agentReport: nestedReport } } });
+    await panelManager.updatePanel(proto.id, { state: { ...proto.state, customState: { ...proto.state.customState, agentReport: protoReport } } });
+
+    const overview = await fixture.manager.overview({ sessionId: named.session.id });
+    const panels = new Map(overview.panes[0].panels.map(panel => [panel.panelId, panel]));
+
+    expect(panels.get(nested.id)?.report).toEqual(nestedReport);
+    const data = panels.get(proto.id)?.report?.data;
+    expect(data && Object.hasOwn(data, '__proto__')).toBe(true);
+    expect(JSON.stringify(data)).toBe(protoSummary);
+    // The daemon serializes the overview through the JSON transport; the result survives it unchanged.
+    expect(serializeJsonTransport(overview, boundary.json)).toEqual(JSON.parse(JSON.stringify(overview)));
+    expect(JSON.stringify(serializeJsonTransport(overview, boundary.json))).toBe(JSON.stringify(overview));
   });
 
   it('supports exact-name selectors and rejects lost updates with an optimistic revision guard', async () => {
