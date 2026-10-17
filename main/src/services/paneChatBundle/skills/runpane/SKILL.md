@@ -112,7 +112,8 @@ runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-po
 Prefer `--as-file-pointer` for long prompts. Pane writes a private copy inside
 the Pane's worktree at `.pane/prompts/` (hidden from git), or under
 `<pane-dir>/prompts/` without one, and submits the single line
-`Read and follow <path>` (the result's `promptFile`), so nothing long passes
+`Read and follow <path>` (worktree-relative inside the worktree; the result's
+`promptFile` is absolute), so nothing long passes
 through the terminal and an agent limited to its worktree can read it. Add
 `--attach <file>` (repeatable) to copy mockups or plans beside it; the pointer
 line lists the copies.

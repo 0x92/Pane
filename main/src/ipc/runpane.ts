@@ -1367,7 +1367,7 @@ export function registerRunpaneHandlers(
         : undefined;
       const promptFields = pointerResultFields(pointer);
       const submittedText = pointer
-        ? filePointerPrompt(agentVisiblePath(pointer.file, wslContext), pointer.attachments.map(file => agentVisiblePath(file, wslContext)))
+        ? pointerLine(pointer, wslContext)
         : normalized.input;
       // A CR inside the text would be Enter to an agent composer.
       const stagedInput = stripTrailingNewlines(normalizePromptNewlines(submittedText));
@@ -2082,7 +2082,7 @@ async function prepareInitialInput(
       attachments: tool.initialInputAttachments,
     });
     ({ promptFile, attachments } = pointerResultFields(pointer));
-    text = filePointerPrompt(agentVisiblePath(pointer.file, wslContext), pointer.attachments.map(file => agentVisiblePath(file, wslContext)));
+    text = pointerLine(pointer, wslContext);
   }
   const prepared: RunpaneResolvedTool = { ...tool, initialInput: text };
   const warnings = tool.agent === 'claude' ? claudePromptWarnings(text) : undefined;
@@ -2111,6 +2111,17 @@ async function workerSessionFolder(services: AppServices, paneId: string, wslCon
   const folder = sessionWorkspacePath(sessionId);
   if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) return undefined;
   return agentVisiblePath(folder, wslContext);
+}
+
+/**
+ * The pointer line. Files inside the worktree are named relative to it, where
+ * the agent starts: Claude often reads an absolute path with `cd <dir>; cat`,
+ * which its read check cannot verify. Fallback files keep absolute paths.
+ */
+function pointerLine(pointer: AgentPromptFile, wslContext: WSLContext | null): string {
+  const { worktreeRoot } = pointer;
+  const shown = (file: string): string => worktreeRoot ? path.relative(worktreeRoot, file) : agentVisiblePath(file, wslContext);
+  return filePointerPrompt(shown(pointer.file), pointer.attachments.map(shown));
 }
 
 /** `promptFile` and `attachments` result fields for a written prompt file. */

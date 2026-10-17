@@ -6763,7 +6763,10 @@ describe('runpane IPC handlers', () => {
       expect(fs.readFileSync(copy, 'utf8')).toBe('png bytes');
       expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: worktree, encoding: 'utf8' })).toBe('');
       const state = createdInitialState();
-      expect(state.initialInput).toBe(`Read and follow ${promptFile} (attached: ${copy})`);
+      // The pointer line names the files relative to the worktree, where the agent starts; promptFile stays absolute.
+      const relative = (file: string): string => path.relative(fs.realpathSync.native(worktree), file);
+      expect(relative(promptFile)).toMatch(/^\.pane[\\/]prompts[\\/]/u);
+      expect(state.initialInput).toBe(`Read and follow ${relative(promptFile)} (attached: ${relative(copy)})`);
       expect(state.sessionFolder).toBe(sessionFolder);
       // Windows launches get only PANE_SESSION_DIR.
       expect(state.launchCommand).toBe(process.platform === 'win32' ? 'claude --dangerously-skip-permissions' : `claude --dangerously-skip-permissions --settings '${JSON.stringify({

@@ -451,16 +451,20 @@ stops on a permission prompt nobody is watching.
 **Briefs and attachments.** `--as-file-pointer` (`panes create`,
 `panels create`, `panels submit`, `agents send`) writes the prompt inside the
 Pane's worktree, at `<worktree>/.pane/prompts/<timestamp>.md`, and sends the
-one line `Read and follow <path>`. Pane adds `/.pane/prompts/` to the
+one line `Read and follow .pane/prompts/<timestamp>.md`. The path is relative
+to the worktree, where the agent starts: given an absolute path, Claude Code
+often reads it with `cd <worktree>; cat <file>`, which its read check can't
+verify, so it asks. The result's `promptFile` is always absolute. Pane adds `/.pane/prompts/` to the
 repository's `.git/info/exclude` (never a committed `.gitignore`), so the file
 can't be committed. `--attach <file>` (repeatable; `panes create`,
 `panels create` and `panels submit`, with `--as-file-pointer`) copies each file
 into `<worktree>/.pane/prompts/<timestamp>/` and sends
-`Read and follow <path> (attached: <copy>, ...)`; the result lists the copies
-in `attachments`. Attach mockups, plans or dispatch notes the worker needs
+`Read and follow <path> (attached: <copy>, ...)`, also worktree-relative; the
+result lists the copies, absolute, in `attachments`. Attach mockups, plans or dispatch notes the worker needs
 instead of pointing at the Session folder. Without a local git worktree (a
 folder that is not the top of a checkout, a WSL repo) the file goes to
-`<pane-dir>/prompts/<pane-id>/` as before.
+`<pane-dir>/prompts/<pane-id>/` as before, and the pointer line names it by
+absolute path.
 
 **The Session folder.** A Pane associated with a Session gets that Session's
 folder (`<pane-dir>/sessions/<id>`) as `PANE_SESSION_DIR` in every tab created

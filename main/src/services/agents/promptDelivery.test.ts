@@ -97,6 +97,7 @@ describe('prompt delivery', () => {
       const second = await writeAgentPromptFile('pane-1', 'two', { worktreePath: worktree });
 
       expect(path.dirname(first.file)).toBe(path.join(worktree, '.pane', 'prompts'));
+      expect(first.worktreeRoot).toBe(worktree);
       expect(path.dirname(second.file)).toBe(path.dirname(first.file));
       const exclude = fs.readFileSync(path.join(worktree, '.git', 'info', 'exclude'), 'utf8');
       expect(exclude.split('\n').filter(line => line === '/.pane/prompts/')).toHaveLength(1);
@@ -114,8 +115,9 @@ describe('prompt delivery', () => {
       fs.mkdirSync(nested, { recursive: true });
 
       for (const worktreePath of [undefined, plain, nested, path.join(plain, 'missing')]) {
-        const { file } = await writeAgentPromptFile('pane-2', 'brief', { worktreePath });
+        const { file, worktreeRoot } = await writeAgentPromptFile('pane-2', 'brief', { worktreePath });
         expect(path.dirname(file)).toBe(appPrompts);
+        expect(worktreeRoot).toBeUndefined();
       }
       expect(fs.existsSync(path.join(plain, '.pane'))).toBe(false);
       expect(fs.existsSync(path.join(nested, '.pane'))).toBe(false);

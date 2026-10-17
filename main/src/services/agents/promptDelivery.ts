@@ -83,7 +83,7 @@ export async function writePromptFile(paneId: string, text: string, now: Date = 
  * `info/exclude` (never a committed `.gitignore`), or undefined when the path
  * is not the top of a local git checkout.
  */
-async function worktreePromptsDirectory(worktreePath: string): Promise<string | undefined> {
+async function worktreePromptsDirectory(worktreePath: string): Promise<{ root: string; directory: string } | undefined> {
   let top: string;
   let exclude: string;
   try {
@@ -106,7 +106,7 @@ async function worktreePromptsDirectory(worktreePath: string): Promise<string | 
   const directory = path.join(top, WORKTREE_PROMPTS_DIRECTORY);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.chmod(directory, 0o700);
-  return directory;
+  return { root: path.normalize(top), directory };
 }
 
 export interface AgentPromptFile {
@@ -114,6 +114,8 @@ export interface AgentPromptFile {
   file: string;
   /** Copies of the attached files, in the order given. */
   attachments: string[];
+  /** The worktree the files were written in; undefined for the Pane directory fallback. */
+  worktreeRoot?: string;
 }
 
 /**
@@ -140,12 +142,13 @@ export async function writeAgentPromptFile(
       throw new PaneError('ERR_ATTACHMENT_UNREADABLE', `Cannot attach ${source}: it is not a file. Nothing was sent.`, 'Attach files one by one with --attach <file>, then retry.');
     }
   }
-  const directory = (options.worktreePath ? await worktreePromptsDirectory(options.worktreePath) : undefined)
-    ?? await appPromptsDirectory(paneId);
+  const worktree = options.worktreePath ? await worktreePromptsDirectory(options.worktreePath) : undefined;
+  const directory = worktree?.directory ?? await appPromptsDirectory(paneId);
+  const worktreeRoot = worktree?.root;
   const name = promptFileName(options.now ?? new Date());
   const file = path.join(directory, `${name}.md`);
   await writePrivateFile(file, text);
-  if (sources.length === 0) return { file, attachments: [] };
+  if (sources.length === 0) return { file, attachments: [], worktreeRoot };
 
   const attachmentDirectory = path.join(directory, name);
   await fs.mkdir(attachmentDirectory, { mode: 0o700 });
@@ -161,7 +164,7 @@ export async function writeAgentPromptFile(
     await fs.chmod(copy, 0o600);
     attachments.push(copy);
   }
-  return { file, attachments };
+  return { file, attachments, worktreeRoot };
 }
 
 /** The one line `--as-file-pointer` submits in place of the prompt; `--attach` lists the copies after it. */
