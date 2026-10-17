@@ -37,6 +37,7 @@ export const RUNPANE_CONTRACT = {
           "agent.idle",
           "panel.exited",
           "panel.stopped",
+          "panel.resumed",
           "pane.gone",
           "pane.associated",
           "pane.detached",
@@ -2350,8 +2351,8 @@ export const RUNPANE_CONTRACT = {
         "What --follow does by default (see defaults.watch.follow in the contract):",
         "  prints WATCH OK once when armed, then one line per event, with no heartbeats",
         "  kinds: agent.report, agent.ready, agent.blocked, agent.idle, panel.exited, panel.stopped,",
-        "         pane.gone, pane.associated, pane.detached, pr.conflicted, pr.checks, pr.merged,",
-        "         pr.base_changed, pr.base_deleted",
+        "         panel.resumed, pane.gone, pane.associated, pane.detached, pr.conflicted, pr.checks,",
+        "         pr.merged, pr.base_changed, pr.base_deleted",
         "  READY after 3m of quiet; BLOCKED after 30s; other lines batched at most every 10m",
         "    (REPORT, BLOCKED, conflicts, base changes, and failed checks arrive at once)",
         "  IDLE reminders at 10m, 30m, 1h, 3h, then daily",
@@ -3686,8 +3687,8 @@ export const RUNPANE_CONTRACT = {
         "What --follow does by default (see defaults.watch.follow in the contract):",
         "  prints WATCH OK once when armed, then one line per event, with no heartbeats",
         "  kinds: agent.report, agent.ready, agent.blocked, agent.idle, panel.exited, panel.stopped,",
-        "         pane.gone, pane.associated, pane.detached, pr.conflicted, pr.checks, pr.merged,",
-        "         pr.base_changed, pr.base_deleted",
+        "         panel.resumed, pane.gone, pane.associated, pane.detached, pr.conflicted, pr.checks,",
+        "         pr.merged, pr.base_changed, pr.base_deleted",
         "  READY after 3m of quiet; BLOCKED after 30s; other lines batched at most every 10m",
         "    (REPORT, BLOCKED, conflicts, base changes, and failed checks arrive at once)",
         "  IDLE reminders at 10m, 30m, 1h, 3h, then daily",
@@ -7709,6 +7710,7 @@ export const RUNPANE_CONTRACT = {
             "pane.gone",
             "panel.exited",
             "panel.stopped",
+            "panel.resumed",
             "agent.report",
             "agent.report.missing",
             "pane.associated",
@@ -7876,6 +7878,18 @@ export const RUNPANE_CONTRACT = {
         "report": {
           "$ref": "#/jsonSchemas/agentReport",
           "description": "Report of an agent.report entry; its summary is cut to 2,000 characters (the panel keeps up to 16,000)."
+        },
+        "nudged": {
+          "type": "boolean",
+          "description": "panel.resumed: whether the agent was sent its one nudge. Not sent when the composer holds unsent text (heldInputPresent), the agent waits on a person (to: blocked), or it did not come back ready."
+        },
+        "interruptedAt": {
+          "type": "string",
+          "description": "panel.resumed: when the agent stopped, if Pane knows."
+        },
+        "attempt": {
+          "type": "number",
+          "description": "panel.resumed with reason api-error: which nudge this is within the hour (at most 3)."
         },
         "epoch": {
           "type": "string",
@@ -13795,7 +13809,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--kinds",
             "required": false,
             "value": "<kind,...>",
-            "description": "Replace the default event kinds: agent.ready, agent.busy, agent.blocked, agent.unknown, agent.idle, pane.created, pane.gone, panel.exited, panel.stopped, agent.report, pane.associated, pane.detached, pr.conflicted, pr.checks, pr.merged. Defaults: defaults.watch.follow.kinds under --follow, defaults.watch.untilEvent.kinds under --until-event, every kind for a one-shot read."
+            "description": "Replace the default event kinds: agent.ready, agent.busy, agent.blocked, agent.unknown, agent.idle, pane.created, pane.gone, panel.exited, panel.stopped, panel.resumed, agent.report, pane.associated, pane.detached, pr.conflicted, pr.checks, pr.merged. Defaults: defaults.watch.follow.kinds under --follow, defaults.watch.untilEvent.kinds under --until-event, every kind for a one-shot read."
           },
           {
             "name": "--json",
