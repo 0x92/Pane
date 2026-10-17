@@ -437,6 +437,7 @@ describe('WorkspaceJournal', () => {
     const journal = new WorkspaceJournal({
       resolvePane: paneId => ({ paneId, paneName: 'Farm' }),
       resolvePanel: panelId => ({ panelId, paneId: 'pane-1', isCliPanel: true }),
+      blockedDebounceMs: 0,
     });
     journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'working' });
     journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state: 'blocked' });
