@@ -6757,7 +6757,7 @@ describe('runpane IPC handlers', () => {
 
       const promptFile = result.promptFile ?? '';
       const [copy = ''] = result.attachments ?? [];
-      expect(path.dirname(promptFile)).toBe(path.join(fs.realpathSync(worktree), '.pane', 'prompts'));
+      expect(path.dirname(promptFile)).toBe(path.join(fs.realpathSync.native(worktree), '.pane', 'prompts'));
       expect(fs.readFileSync(promptFile, 'utf8')).toBe('Build it\n');
       expect(path.dirname(copy)).toBe(promptFile.replace(/\.md$/u, ''));
       expect(fs.readFileSync(copy, 'utf8')).toBe('png bytes');
@@ -6765,7 +6765,8 @@ describe('runpane IPC handlers', () => {
       const state = createdInitialState();
       expect(state.initialInput).toBe(`Read and follow ${promptFile} (attached: ${copy})`);
       expect(state.sessionFolder).toBe(sessionFolder);
-      expect(state.launchCommand).toBe(`claude --dangerously-skip-permissions --settings '${JSON.stringify({
+      // Windows launches get only PANE_SESSION_DIR.
+      expect(state.launchCommand).toBe(process.platform === 'win32' ? 'claude --dangerously-skip-permissions' : `claude --dangerously-skip-permissions --settings '${JSON.stringify({
         permissions: {
           additionalDirectories: [sessionFolder],
           deny: [`Edit(/${sessionFolder}/**)`],

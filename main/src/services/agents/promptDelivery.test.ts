@@ -88,7 +88,7 @@ describe('prompt delivery', () => {
     function gitWorktree(): string {
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-prompt-'));
       execFileSync('git', ['init', '-q'], { cwd: directory });
-      return fs.realpathSync(directory);
+      return fs.realpathSync.native(directory);
     }
 
     it('writes inside the worktree and adds one exclude line that keeps it out of git', async () => {
