@@ -7260,6 +7260,42 @@ describe('runpane IPC handlers', () => {
       expect(services.expectedReportTracker?.expectation(terminalPanel.id)).toBeUndefined();
     });
 
+    it('submits an in-worktree prompt file with attachments and still expects a report', async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-submit-pointer-'));
+      const worktree = path.join(root, 'worktree');
+      fs.mkdirSync(worktree);
+      execFileSync('git', ['init', '-q'], { cwd: worktree });
+      const plan = path.join(root, 'plan.md');
+      fs.writeFileSync(plan, '# Plan');
+      vi.mocked(terminalPanelManager.getForegroundProcess).mockReturnValue({ name: 'zsh', isShell: true });
+      stored = structuredClone(terminalPanel);
+      const base = createServices();
+      const services = createServices({
+        workspaceJournal: new WorkspaceJournal(),
+        // SAFETY: This test fixture intentionally supplies the minimal structural substitute exercised by the unit.
+        sessionManager: { ...base.sessionManager, getSession: vi.fn(() => ({ ...session, worktreePath: worktree })) } as never,
+      });
+
+      // SAFETY: The panels:submit handler resolves to a RunpanePanelSubmitResult.
+      const result = await createRegistry(services).invoke('runpane:panels:submit', [{
+        panelId: terminalPanel.id, input: 'Continue with P-2.', asFilePointer: true, attachments: [plan],
+      }]) as { promptFile?: string; attachments?: string[]; expectedReport?: { since: string } };
+
+      const promptFile = result.promptFile ?? '';
+      const [copy = ''] = result.attachments ?? [];
+      const relative = (file: string): string => path.relative(fs.realpathSync.native(worktree), file);
+      expect(relative(promptFile)).toMatch(/^\.pane[\\/]prompts[\\/]/u);
+      expect(fs.readFileSync(copy, 'utf8')).toBe('# Plan');
+      expect(terminalPanelManager.writeToTerminal).toHaveBeenCalledWith(
+        terminalPanel.id,
+        `Read and follow ${relative(promptFile)} (attached: ${relative(copy)})\r`,
+      );
+      expect(result.expectedReport).toEqual({ since: expect.any(String) });
+      expect(services.expectedReportTracker?.expectation(terminalPanel.id)).toEqual(result.expectedReport);
+      // Expectations are saved under PANE_DIR, which the tests in this file share.
+      services.workspaceJournal?.appendPaneEntry(session.id, { kind: 'agent.report', panelId: terminalPanel.id, source: 'agent' });
+    });
+
     it('arms an expected report on submit and puts the missing report in the Session inbox', async () => {
       // A plain shell takes the submission without waiting for an agent composer.
       stored = structuredClone(terminalPanel);
