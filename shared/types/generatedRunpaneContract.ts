@@ -14644,7 +14644,7 @@ export const RUNPANE_CONTRACT = {
         ],
         "notes": [
           "The result includes `locks`: named locks scoped to the Session or held by its Panes (see `runpane lock`).",
-          "Each `panes[].panels[]` entry has `report`, that panel's latest `runpane report` (state, `pr`, `head`, `question`, `summary`, `summaryTruncated`, `reportedAt`). When the summary is a complete JSON object, `report.data` holds it exactly as the worker gave it; Pane never reads or renames its fields. A plain-text, array or scalar summary, invalid JSON, or a truncated summary (`summaryTruncated`) has no `data`. A panel that never reported has no `report` but keeps `state` and `lastActivityAt`. `panes[].report` is still the newest report among the Pane's panels, with its `panelId`; daemons that predate per-panel reports omit `panels[].report`."
+          "Each `panes[].panels[]` entry has `report`, that panel's latest `runpane report` (state, `pr`, `head`, `question`, `summary`, `summaryTruncated`, `summaryPath`, `reportedAt`). When the summary is a complete JSON object, `report.data` holds it exactly as the worker gave it; Pane never reads or renames its fields. A plain-text, array or scalar summary, invalid JSON, or a truncated summary (`summaryTruncated`) has no `data`. A panel that never reported has no `report` but keeps `state` and `lastActivityAt`. `panes[].report` is still the newest report among the Pane's panels, with its `panelId`; daemons that predate per-panel reports omit `panels[].report`."
         ]
       },
       "lock acquire": {
