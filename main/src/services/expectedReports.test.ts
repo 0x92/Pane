@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ExpectedReportTracker, MAX_MISSING_REPORT_OUTPUT_LENGTH, type PanelLastOutput } from './expectedReports';
 import { WorkspaceJournal } from './workspaceJournal';
 import type { TerminalExpectedReport } from '../../../shared/types/panels';
+import { detectAgentBackgroundWork } from './agents/agentScreenSignature';
+import { CLAUDE_API_ENOTFOUND_SCREEN, CLAUDE_API_SLEEP_SCREEN } from './agentStatus/__fixtures__/claudeApiErrorScreens';
 
 function setup(lastOutput: PanelLastOutput | undefined = { text: 'All done, PR #12 is open.', source: 'transcript' }, filePath?: string) {
   const journal = new WorkspaceJournal({ resolvePane: paneId => ({ paneId, paneName: 'Worker' }), blockedDebounceMs: 0 });
@@ -175,3 +177,83 @@ describe('ExpectedReportTracker', () => {
     expect(missing()).toEqual([expect.objectContaining({ reason: 'exited' })]);
   });
 });
+
+/**
+ * A worker launched with `--tool-command "agent-farm run …"`: Pane sees a plain command until it
+ * identifies Claude Code behind it (by process or screen), then treats it as a Claude panel.
+ */
+describe('ExpectedReportTracker with an agent-farm wrapper', () => {
+  const API_ERROR = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)";
+
+  /** What the daemon knows about the wrapper panel's agent, before and after detection. */
+  interface WrapperIdentity {
+    isCliPanel: boolean;
+    agentType?: string;
+  }
+
+  function wrapperSetup(screen: string) {
+    const identity: WrapperIdentity = { isCliPanel: false };
+    const journal = new WorkspaceJournal({
+      resolvePane: paneId => ({ paneId, paneName: 'Farm worker' }),
+      resolvePanel: panelId => ({ panelId, paneId: 'pane-1', ...identity }),
+      blockedDebounceMs: 0,
+    });
+    const tracker = new ExpectedReportTracker({
+      journal,
+      lastReportAt: () => undefined,
+      // The transcript's last assistant message is Claude's synthetic API error.
+      lastOutput: async () => ({ text: API_ERROR, source: 'transcript' }),
+      backgroundWork: () => detectAgentBackgroundWork(screen, 'claude'),
+    });
+    const status = (state: string, reason?: string) =>
+      journal.send('panel:agentStatus', { panelId: 'panel-1', sessionId: 'pane-1', state, reason });
+    const detectClaude = () => {
+      identity.isCliPanel = true;
+      identity.agentType = 'claude';
+    };
+    const missing = () => journal.readAfter(0, { kinds: ['agent.report.missing'] }).entries;
+    return { journal, tracker, status, detectClaude, missing };
+  }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+  it('raises a missing report when a wrapped worker goes idle without reporting', async () => {
+    const { tracker, status, detectClaude, missing } = wrapperSetup(CLAUDE_API_ENOTFOUND_SCREEN);
+    tracker.arm('panel-1', '2026-10-17T16:00:00.000Z');
+    detectClaude();
+    status('working', 'agent_detected');
+    status('idle');
+    await settle();
+
+    expect(missing()).toEqual([expect.objectContaining({
+      kind: 'agent.report.missing', panelId: 'panel-1', agentType: 'claude', reason: 'ready', lastOutput: API_ERROR,
+    })]);
+  });
+
+  it('raises one for a turn that ended on a network error or a sleep mid-response', async () => {
+    for (const screen of [CLAUDE_API_ENOTFOUND_SCREEN, CLAUDE_API_SLEEP_SCREEN]) {
+      const { tracker, status, detectClaude, missing } = wrapperSetup(screen);
+      detectClaude();
+      status('idle', 'agent_detected');
+      tracker.arm('panel-1', '2026-10-17T16:00:00.000Z');
+      // The retries keep it working; the error ends the turn.
+      status('working');
+      status('idle');
+      await settle();
+      expect(missing()).toHaveLength(1);
+    }
+  });
+
+  it('raises nothing from idle before Pane identifies the agent, only from an exit (#743)', async () => {
+    const { journal, tracker, status, missing } = wrapperSetup(CLAUDE_API_ENOTFOUND_SCREEN);
+    tracker.arm('panel-1', '2026-10-17T16:00:00.000Z');
+    status('working');
+    status('idle');
+    await settle();
+    expect(missing()).toEqual([]);
+
+    journal.send('panel:event', { type: 'terminal:exit', source: { panelId: 'panel-1', sessionId: 'pane-1' }, data: { exitCode: 1 } });
+    await settle();
+    expect(missing()).toEqual([expect.objectContaining({ reason: 'exited', lastOutput: API_ERROR })]);
+  });
+});
+

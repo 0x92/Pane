@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { detectAgentBackgroundWork, detectAgentComposer, detectAgentFromScreen, screenShowsQueuedMessage } from './agentScreenSignature';
+import { CLAUDE_API_ENOTFOUND_SCREEN, CLAUDE_API_SLEEP_SCREEN } from '../agentStatus/__fixtures__/claudeApiErrorScreens';
 
 const rule = '─'.repeat(40);
 
@@ -155,5 +156,17 @@ describe('detectAgentBackgroundWork', () => {
   it('ignores agents it cannot read and a footer from the wrong agent', () => {
     expect(detectAgentBackgroundWork(claudeIdle(['  · 1 shell']), 'cursor')).toBeUndefined();
     expect(detectAgentBackgroundWork(codexIdle(['  1 background terminal running · /ps to view']), 'claude')).toBeUndefined();
+  });
+});
+
+describe('a Claude turn that ended on an API error', () => {
+  it('still identifies Claude, so a wrapper around it (agent-farm) gets agent events', () => {
+    expect(detectAgentFromScreen(CLAUDE_API_ENOTFOUND_SCREEN)).toBe('claude');
+    expect(detectAgentFromScreen(CLAUDE_API_SLEEP_SCREEN)).toBe('claude');
+  });
+
+  it('shows no background work, so a missing report is not held back', () => {
+    expect(detectAgentBackgroundWork(CLAUDE_API_ENOTFOUND_SCREEN, 'claude')).toBeUndefined();
+    expect(detectAgentBackgroundWork(CLAUDE_API_SLEEP_SCREEN, 'claude')).toBeUndefined();
   });
 });

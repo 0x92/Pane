@@ -1379,8 +1379,11 @@ export function registerRunpaneHandlers(
       const since = new Date().toISOString();
       const result = await submitToPanel(normalized, panel);
       // Armed only when something was sent: a refused submission leaves no work to report on. By
-      // default only an agent's panel owes a report; a plain shell has nobody to report back.
-      const toAgent = panelStateSummary(panel, terminalPanelManager.getTerminalSnapshot(panel.id)).agentType !== undefined;
+      // default only an agent's panel owes a report; a plain shell has nobody to report back. A panel
+      // launched with a command counts before Pane identifies the agent behind it (an agent-farm
+      // wrapper around Claude Code).
+      const toAgent = panelStateSummary(panel, terminalPanelManager.getTerminalSnapshot(panel.id)).agentType !== undefined
+        || panelLaunchCommand(panel) !== undefined;
       if (result.inputBytes > 0 && shouldExpectReport(normalized, toAgent)) result.expectedReport = armExpectedReport(services, panel.id, since);
       return result;
     }, result => ({

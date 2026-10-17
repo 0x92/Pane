@@ -8,6 +8,7 @@ import {
   OPENCODE_MANIFEST,
   getManifestForAgent,
 } from './manifests';
+import { CLAUDE_API_ENOTFOUND_SCREEN, CLAUDE_API_RETRYING_SCREEN, CLAUDE_API_SLEEP_SCREEN } from './__fixtures__/claudeApiErrorScreens';
 
 const screen = (s: string, oscTitle = '', oscProgress = '') => ({ screen: s, oscTitle, oscProgress });
 
@@ -689,5 +690,23 @@ describe('GENERIC_MANIFEST', () => {
     expect(detectAgentState(GENERIC_MANIFEST, screen('Do you want to proceed? [y/n] y\nok: y')).state).toBe('idle');
     expect(detectAgentState(GENERIC_MANIFEST, screen('Overwrite file? (y/n)\n$ ')).state).toBe('idle');
     expect(detectAgentState(GENERIC_MANIFEST, screen('$ ')).state).toBe('idle');
+  });
+});
+
+describe('CLAUDE_MANIFEST API errors seen in Claude Code 2.1.302', () => {
+  // An agent-farm worker that loses the network or sleeps mid-turn ends here; the turn must read as
+  // over (idle), so READY fires and a missing report can be raised, while a retry is still work.
+  it('keeps a turn that is still retrying the API as working', () => {
+    for (const title of ['', '✳ Claude Code']) {
+      expect(detectAgentState(CLAUDE_MANIFEST, screen(CLAUDE_API_RETRYING_SCREEN, title)).state).toBe('working');
+    }
+  });
+
+  it('reads a turn that ended on a network error or a sleep as idle', () => {
+    for (const s of [CLAUDE_API_ENOTFOUND_SCREEN, CLAUDE_API_SLEEP_SCREEN]) {
+      for (const title of ['', '✳ Claude Code']) {
+        expect(detectAgentState(CLAUDE_MANIFEST, screen(s, title))).toMatchObject({ state: 'idle', matchedRuleId: 'live_prompt_box' });
+      }
+    }
   });
 });

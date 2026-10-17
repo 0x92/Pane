@@ -15,7 +15,7 @@ import type { Project } from '../database/models';
 import type { Session } from '../types/session';
 import type { AppServices } from './types';
 import type { CreatePanelRequest, TerminalPanelState, ToolPanel } from '../../../shared/types/panels';
-import type { RunpanePaneListResult, RunpanePanelListResult, RunpaneToolSpec } from '../../../shared/types/runpaneOrchestration';
+import type { RunpaneCommandToolSpec, RunpanePaneListResult, RunpanePanelListResult, RunpaneToolSpec } from '../../../shared/types/runpaneOrchestration';
 import type { OrchestrationSessionCreateInput } from '../../../shared/types/orchestrationSession';
 
 import { RUNPANE_CONTRACT } from '../../../shared/types/generatedRunpaneContract';
@@ -2536,6 +2536,34 @@ describe('runpane IPC handlers', () => {
       }],
     });
     expect(terminalPanelManager.isTerminalInitialized).toHaveBeenCalledWith(terminalPanel.id);
+  });
+
+  it('expects a report by default from an agent-farm panel given a prompt, and not from a person\'s', async () => {
+    const farmPanel: ToolPanel = {
+      ...terminalPanel,
+      id: 'panel-farm',
+      title: 'agent-farm',
+      state: { isActive: false, customState: { initialCommand: 'agent-farm run bigbrain/implementer:opus', isCliPanel: false } },
+    };
+    vi.mocked(panelManager.createPanel).mockResolvedValue(farmPanel);
+    const services = createServices({ workspaceJournal: new WorkspaceJournal() });
+    const registry = createRegistry(services);
+    const create = (extra: Record<string, string | boolean>, initialInput?: string) => {
+      // No --agent: Pane learns it is Claude Code only once it sees it behind the wrapper.
+      const tool: RunpaneCommandToolSpec = { command: 'agent-farm run bigbrain/implementer:opus' };
+      if (initialInput) tool.initialInput = initialInput;
+      return registry.invoke('runpane:panels:create', [{ paneId: session.id, tool, noFocus: true, ...extra }]);
+    };
+
+    const dispatched = await create({}, 'Implement P-1, then run runpane report.');
+    expect(dispatched.expectedReport).toEqual({ since: expect.any(String) });
+    expect(services.expectedReportTracker?.expectation('panel-farm')).toEqual(dispatched.expectedReport);
+    // Expectations are saved under PANE_DIR, which the tests in this file share.
+    services.workspaceJournal?.appendPaneEntry(session.id, { kind: 'agent.report', panelId: 'panel-farm', source: 'agent' });
+
+    expect((await create({ source: 'user' }, 'Have a look.')).expectedReport).toBeUndefined();
+    expect((await create({})).expectedReport).toBeUndefined();
+    expect(services.expectedReportTracker?.expectation('panel-farm')).toBeUndefined();
   });
 
   it('creates a background terminal panel inside an existing pane', async () => {
@@ -7124,6 +7152,19 @@ describe('runpane IPC handlers', () => {
       }
       expect((await submit({ source: 'user', expectReport: true })).expectation).toEqual({ since: expect.any(String) });
       // Expectations are saved under PANE_DIR, which the tests in this file share.
+      services.workspaceJournal?.appendPaneEntry(session.id, { kind: 'agent.report', panelId: terminalPanel.id, source: 'agent' });
+    });
+
+    it('expects a report by default for work sent to an agent-farm panel before Pane identifies its agent', async () => {
+      vi.mocked(terminalPanelManager.getForegroundProcess).mockReturnValue({ name: 'zsh', isShell: true });
+      stored = structuredClone(terminalPanel);
+      stored.state.customState = { initialCommand: 'agent-farm run bigbrain/implementer:opus', isCliPanel: false };
+      vi.mocked(terminalPanelManager.getTerminalSnapshot).mockReturnValue({ ...terminalSnapshot('$ ', 'idle'), agentType: undefined, currentCommand: 'agent-farm', isCliPanel: false });
+      const services = createServices({ workspaceJournal: new WorkspaceJournal() });
+      const registry = createRegistry(services);
+
+      const result = await registry.invoke('runpane:panels:submit', [{ panelId: terminalPanel.id, input: 'Continue with P-2.' }]);
+      expect(result.expectedReport).toEqual({ since: expect.any(String) });
       services.workspaceJournal?.appendPaneEntry(session.id, { kind: 'agent.report', panelId: terminalPanel.id, source: 'agent' });
     });
 
