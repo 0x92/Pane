@@ -1110,6 +1110,8 @@ def print_prompt_notes(result: Dict[str, Any], prefix: str = "") -> None:
     """The prompt file Pane wrote and any leading-character warnings, for human output."""
     if result.get("promptFile"):
         print(f"{prefix}Prompt file: {result.get('promptFile')}")
+    for attachment in result.get("attachments") or []:
+        print(f"{prefix}Attached: {attachment}")
     for warning in result.get("warnings") or []:
         print(f"{prefix}Warning ({warning.get('code')}): {warning.get('message')}")
 

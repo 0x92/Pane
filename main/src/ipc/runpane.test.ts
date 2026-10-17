@@ -6768,7 +6768,7 @@ describe('runpane IPC handlers', () => {
       expect(state.launchCommand).toBe(`claude --dangerously-skip-permissions --settings '${JSON.stringify({
         permissions: {
           additionalDirectories: [sessionFolder],
-          deny: [`Edit(/${sessionFolder}/**)`, `Write(/${sessionFolder}/**)`],
+          deny: [`Edit(/${sessionFolder}/**)`],
         },
       })}'`);
     });

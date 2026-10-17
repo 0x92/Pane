@@ -543,8 +543,8 @@ When a pane finishes something a human will read, have it run the
    long prompts (\`panes create\`, \`panels submit\`, \`agents send\`): Pane
    writes the prompt to a private file in the worker's worktree and submits one
    line pointing at it. Give workers the Session files they need with
-   \`--attach <file>\`; they can also read this Session's folder through
-   \`$PANE_SESSION_DIR\`, but never write it.
+   \`--attach <file>\`. A worker can also read (never write) this Session's
+   folder; name files in it by absolute path, not \`$PANE_SESSION_DIR\`.
    End every worker prompt with: "When finished or blocked, run
    \`runpane report --state <ready|blocked|failed|done> --pr <number> --head <sha> --summary-file <path>\`
    (add \`--question "<question>"\` when blocked)."

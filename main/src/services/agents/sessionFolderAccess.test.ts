@@ -17,7 +17,7 @@ describe('Session folder access', () => {
     expect(JSON.parse(tokens[3] ?? '')).toEqual({
       permissions: {
         additionalDirectories: [folder],
-        deny: [`Edit(/${folder}/**)`, `Write(/${folder}/**)`],
+        deny: [`Edit(/${folder}/**)`],
       },
     });
     expect(tokens).toHaveLength(4);

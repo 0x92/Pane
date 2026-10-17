@@ -471,13 +471,19 @@ write it; the orchestrator is its only writer. What each built-in template gets:
 
 | Agent | Read access to the Session folder |
 | --- | --- |
-| Claude Code (`claude --dangerously-skip-permissions`) | Pane adds `--settings '{"permissions":{"additionalDirectories":["<folder>"],"deny":["Edit(/<folder>/**)","Write(/<folder>/**)"]}}'`. `additionalDirectories` (like `--add-dir`) makes the folder a working directory, which grants read and write; an `allow` rule alone does not lift `blockReadsOutsideWorkingDirectories`. The `deny` rules take the file tools' write access back. Under bypass permissions Bash can still write anywhere, so the read-only rule is a guard, not a sandbox. The folder's `CLAUDE.md` is not loaded. Not added on Windows. |
+| Claude Code (`claude --dangerously-skip-permissions`) | Pane adds `--settings '{"permissions":{"additionalDirectories":["<folder>"],"deny":["Edit(/<folder>/**)"]}}'`. `additionalDirectories` (like `--add-dir`) makes the folder a working directory, which grants read and write; an `allow` rule alone does not lift `blockReadsOutsideWorkingDirectories`. The `Edit` deny rule takes the file tools' write access back (it covers Write too; Claude ignores `Write(path)` rules). Under bypass permissions Bash can still write anywhere, so the read-only rule is a guard, not a sandbox. The folder's `CLAUDE.md` is not loaded. Not added on Windows. |
 | Codex (`codex --yolo`) | Nothing to add: `--yolo` runs without a sandbox, and every Codex sandbox mode reads the whole disk. Codex's `--add-dir` grants write access, so Pane does not pass it. |
 | Cursor, OpenCode | Only `PANE_SESSION_DIR`. |
 | `--tool-command` wrappers (agent-farm) and custom commands | Only `PANE_SESSION_DIR`; the wrapper maps it to its harness's flag. |
 
 The flag is fixed when the tab is created: a tab opened before its Pane was
 associated has no `PANE_SESSION_DIR` until a new tab is created.
+
+Write the folder's absolute path into the brief rather than
+`$PANE_SESSION_DIR`. Under `blockReadsOutsideWorkingDirectories` Claude Code
+asks before any Bash command whose variables it cannot check, so a worker that
+runs `echo $PANE_SESSION_DIR` or `cat "$PANE_SESSION_DIR/..."` stops on a
+prompt. The variable is for wrappers and scripts.
 
 ## Stable interfaces
 

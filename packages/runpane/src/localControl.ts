@@ -280,6 +280,7 @@ interface PaneCreateSuccessItem {
   initialInput?: InitialInputDeliveryResult;
   association?: { sessionId: string; ok: boolean; error?: string };
   promptFile?: string;
+  attachments?: string[];
   warnings?: PromptWarning[];
   /** Set when setup waits for a slot; the agent starts after setup, so there is no panel yet. */
   setupQueue?: { position: number; message: string };
@@ -695,6 +696,7 @@ interface PanelCreateResult {
   readiness?: PanelReadiness;
   initialInput?: InitialInputDeliveryResult;
   promptFile?: string;
+  attachments?: string[];
   warnings?: PromptWarning[];
   nextCommand?: string;
 }
@@ -811,6 +813,7 @@ interface PanelSubmitResult {
   sentAt: string;
   blocked?: PanelBlockedState;
   promptFile?: string;
+  attachments?: string[];
   warnings?: PromptWarning[];
   nextCommand?: string;
 }
@@ -1449,6 +1452,7 @@ export const paneCreateResultSchema: BoundarySchema<PaneCreateResult> = boundary
         error: boundary.optional(boundary.string),
       })),
       promptFile: boundary.optional(boundary.string),
+      attachments: boundary.optional(boundary.array(boundary.string)),
       warnings: promptWarningsSchema,
       setupQueue: boundary.optional(boundary.object({
         position: boundary.number,
@@ -1645,6 +1649,7 @@ export const panelCreateResultSchema: BoundarySchema<PanelCreateResult> = bounda
   readiness: boundary.optional(panelReadinessSchema),
   initialInput: boundary.optional(initialInputSchema),
   promptFile: boundary.optional(boundary.string),
+  attachments: boundary.optional(boundary.array(boundary.string)),
   warnings: promptWarningsSchema,
   nextCommand: boundary.optional(boundary.string),
 });
@@ -1702,6 +1707,7 @@ export const panelSubmitResultSchema: BoundarySchema<PanelSubmitResult> = bounda
   sentAt: boundary.string,
   blocked: boundary.optional(panelBlockedSchema),
   promptFile: boundary.optional(boundary.string),
+  attachments: boundary.optional(boundary.array(boundary.string)),
   warnings: promptWarningsSchema,
   nextCommand: boundary.optional(boundary.string),
 });
@@ -2939,9 +2945,12 @@ export function markSuggestionLine(text: string, ghostText: string | undefined):
 }
 
 /** The prompt file Pane wrote and any leading-character warnings, for human output. */
-export function printPromptNotes(result: { promptFile?: string; warnings?: PromptWarning[] }, prefix = ''): void {
+export function printPromptNotes(result: { promptFile?: string; attachments?: string[]; warnings?: PromptWarning[] }, prefix = ''): void {
   if (result.promptFile) {
     console.log(`${prefix}Prompt file: ${result.promptFile}`);
+  }
+  for (const attachment of result.attachments ?? []) {
+    console.log(`${prefix}Attached: ${attachment}`);
   }
   for (const warning of result.warnings ?? []) {
     console.log(`${prefix}Warning (${warning.code}): ${warning.message}`);

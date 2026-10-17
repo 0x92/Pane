@@ -5,7 +5,9 @@ import type { RunpaneResolvedTool } from '../../../../shared/types/runpaneOrches
  * Claude Code settings that make a Session folder readable but not editable.
  * `additionalDirectories` makes it a working directory, so reads pass
  * `permissions.blockReadsOutsideWorkingDirectories` (an `allow` rule alone does
- * not); the `deny` rules take back the write access a working directory gets.
+ * not); the `Edit` deny rule takes back the write access a working directory
+ * gets (Claude Code applies `Edit` rules to every file-editing tool and ignores
+ * `Write` path rules).
  * A single `--settings` value, unlike the variadic `--add-dir`, cannot swallow a
  * launch prompt argument and keeps `claudeResumeBase` able to parse the command.
  */
@@ -14,7 +16,7 @@ function claudeSessionFolderSettings(folder: string): string {
   return JSON.stringify({
     permissions: {
       additionalDirectories: [folder],
-      deny: [`Edit(${rulePath})`, `Write(${rulePath})`],
+      deny: [`Edit(${rulePath})`],
     },
   });
 }
