@@ -293,15 +293,53 @@ beside the conversation in the calling Pane (or Session) unless you pass
   branch or HEAD, one writer at a time; review, audit and QA tabs never run
   `git checkout`, `reset` or `stash`. Start a fix tab only after the previous
   writer has stopped.
-- Every Pane gets `PANE_PORT`, the first of 10 ports picked from the Pane's
-  id, so dev servers in different Panes rarely collide. Tabs in one Pane share
-  that block: say in each brief which tab owns which port.
-- For anything only one worker may use at a time (a test account, a staging
-  database, the person's local app), name a lock in the briefs instead of
-  relaying "may I use it?":
-  `runpane lock acquire --name <name> --ttl 30m --wait 1800000 --note "<what for>" --json`
-  before, `runpane lock release --name <name>` after. A lock ends with its TTL
-  or its holder's panel, and `sessions overview` shows who holds it.
+
+### Ports
+
+Every Pane gets `PANE_PORT`, the first of a block of 10 ports picked from the
+Pane's id (range 3000-8999), in its terminals and run scripts. Map it to the
+repository's own dev port setting so two Panes' dev apps never collide, for
+example `DEV_PORT_BASE=$PANE_PORT` in a repository that reads a port base, or
+`--port $PANE_PORT`. Tabs in one Pane share that block: say in each brief
+which tab owns which port.
+
+**Default: a worker may start and use its own Pane's local app for QA without
+asking.** It runs on that Pane's ports, so nobody else depends on it. Don't
+relay "may I take the app?" to the person.
+
+### Locks for shared resources
+
+Use a lock only for a resource that really is shared across Panes or with the
+person and that only one may use at a time: a shared database, a staging
+environment, a test account. A Pane's own app is not one. Name the lock in
+each brief that needs it, for example `staging-db` for QA against a shared
+database:
+
+```sh
+runpane lock acquire --name staging-db --ttl 30m --wait 1800000 --note "QA for <feature>" --json
+# ... use it; acquire again before the TTL runs out to renew ...
+runpane lock release --name staging-db --json
+runpane lock list --json
+```
+
+- **Owner:** the calling Pane and panel. `--pane <id>` and `--panel <id>` act
+  for another; outside a Pane terminal `--note` is required and names the
+  owner (pass the same note to release).
+- **Acquire:** succeeds when the lock is free, expired, or already yours (which
+  renews it). Otherwise it fails with `heldBy` and `expiresAt`, or with `--wait`
+  it queues, and the daemon grants it to the oldest waiter when it frees up.
+- **Scope:** a lock taken from a Session's orchestrator or one of its Panes
+  belongs to that Session, so two Sessions can each hold `staging-db`. A Pane
+  outside any Session uses the global scope.
+- **Freed:** when its TTL (at most 24h) runs out, when its owner panel exits
+  or is closed, or when its owner Pane is archived. Quitting Pane does not free
+  it. `runpane lock release --name <name> --force` frees one a stuck worker
+  holds.
+- **Holding one for the person:** while they use the resource themselves ("I'm
+  previewing on staging"), the orchestrator acquires the lock for them with
+  `--pane <orchestrator's Pane>` and a `--note` saying so, and releases it when
+  they're done. Workers then queue behind it instead of asking.
+- `sessions overview` shows the Session's locks and who holds each.
 
 ## Hand work to another machine
 
