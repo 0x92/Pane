@@ -3598,7 +3598,7 @@ local_control.run_sessions_overview(parse_args(["sessions", "overview", "--sessi
     assertIncludes(output, 'Reviewer (panel panel-b): working');
     assert.ok(!output.includes('Reviewer (panel panel-b): working, report'), 'a panel without a report shows only its state');
   }
-  assert.strictEqual(pythonPanelText.trim(), panelText.trim());
+  assert.strictEqual(pythonPanelText.replace(/\r\n/g, '\n').trim(), panelText.trim());
 }
 
 function checkHelpOutput() {
