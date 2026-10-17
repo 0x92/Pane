@@ -658,7 +658,7 @@ export const RUNPANE_CONTRACT = {
       "name": "panels submit",
       "summary": "Send and submit text to a terminal panel, including idle agent composers.",
       "usage": [
-        "runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] [--interrupt] [--source user|agent] [--expect-report|--no-expect-report] [--wait [--timeout <duration>]] --yes [--json] [--pane-dir <path>]"
+        "runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer [--attach <file>]...] [--interrupt] [--source user|agent] [--expect-report|--no-expect-report] [--wait [--timeout <duration>]] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "toolsets": [
@@ -1700,6 +1700,11 @@ export const RUNPANE_CONTRACT = {
         "description": "Read initial input from a file or stdin. --prompt-file is an alias."
       },
       {
+        "name": "--attach",
+        "value": "<file>",
+        "description": "Copy a file beside the --as-file-pointer prompt file and list its copy in the pointer line; repeatable."
+      },
+      {
         "name": "--from-json",
         "value": "<path|->",
         "description": "Read a structured JSON request payload from a file or stdin."
@@ -1990,7 +1995,7 @@ export const RUNPANE_CONTRACT = {
       },
       {
         "name": "--as-file-pointer",
-        "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+        "description": "Write the prompt or text to a private prompt file (in the Pane's worktree, hidden from git, when it has one) and send the one line `Read and follow <path>` instead."
       },
       {
         "name": "--follow",
@@ -2423,6 +2428,7 @@ export const RUNPANE_CONTRACT = {
         "  --prompt <text>                Alias for --initial-input",
         "  --initial-input-file <path|->  Read initial input from a file or stdin",
         "  --as-file-pointer              Send `Read and follow <prompt file>` instead of the prompt",
+        "  --attach <file>                Copy a file beside the prompt file and list it; repeatable",
         "  --expect-report                Expect a `runpane report` even for --source user work (the default otherwise)",
         "  --no-expect-report             Fire-and-forget: no agent.report.missing if the agent ends without reporting",
         "  --wait                         Block until this panel reports, misses its report, waits on a prompt, or exits;",
@@ -2652,7 +2658,7 @@ export const RUNPANE_CONTRACT = {
       ],
       "panels submit": [
         "Usage:",
-        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] [--interrupt] [--expect-report|--no-expect-report] [--wait [--timeout <duration>]] --yes [--json]",
+        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer [--attach <file>]...] [--interrupt] [--expect-report|--no-expect-report] [--wait [--timeout <duration>]] --yes [--json]",
         "",
         "Sends text to a terminal panel and normalizes the final terminal Enter to CR. Use this for ordinary prompt answers and shell commands.",
         "",
@@ -2672,6 +2678,7 @@ export const RUNPANE_CONTRACT = {
         "  --text <text>                  Text to submit before Enter",
         "  --input-file <path|->          Read text from a file or stdin before Enter",
         "  --as-file-pointer              Write the text to a prompt file and submit `Read and follow <path>`",
+        "  --attach <file>                Copy a file beside the prompt file and list it; repeatable",
         "  --expect-report                Expect a `runpane report` even for --source user work (the default otherwise)",
         "  --no-expect-report             Fire-and-forget: no agent.report.missing if the agent ends without reporting",
         "  --wait                         Block until this panel reports, misses its report, waits on a prompt, or exits;",
@@ -2712,6 +2719,7 @@ export const RUNPANE_CONTRACT = {
         "  --initial-input, --prompt     Initial input to send after the tool starts.",
         "  --initial-input-file <path|-> Read initial input from a file or stdin.",
         "  --as-file-pointer             Send `Read and follow <prompt file>` instead of the prompt.",
+        "  --attach <file>               Copy a file beside the prompt file and list it; repeatable.",
         "  --expect-report                Expect a `runpane report` even for --source user work (the default otherwise)",
         "  --no-expect-report             Fire-and-forget: no agent.report.missing if the agent ends without reporting",
         "  --wait                         Block until this panel reports, misses its report, waits on a prompt, or exits;",
@@ -3759,6 +3767,7 @@ export const RUNPANE_CONTRACT = {
         "  --prompt <text>                Alias for --initial-input",
         "  --initial-input-file <path|->  Read initial input from a file or stdin",
         "  --as-file-pointer              Send `Read and follow <prompt file>` instead of the prompt",
+        "  --attach <file>                Copy a file beside the prompt file and list it; repeatable",
         "  --expect-report                Expect a `runpane report` even for --source user work (the default otherwise)",
         "  --no-expect-report             Fire-and-forget: no agent.report.missing if the agent ends without reporting",
         "  --wait                         Block until this panel reports, misses its report, waits on a prompt, or exits;",
@@ -3980,7 +3989,7 @@ export const RUNPANE_CONTRACT = {
       ],
       "panels submit": [
         "Usage:",
-        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer] [--interrupt] [--expect-report|--no-expect-report] [--wait [--timeout <duration>]] --yes [--json]",
+        "  runpane panels submit --panel <panel-id> (--text <text>|--input-file <path|->) [--as-file-pointer [--attach <file>]...] [--interrupt] [--expect-report|--no-expect-report] [--wait [--timeout <duration>]] --yes [--json]",
         "",
         "Sends text to a terminal panel and normalizes the final terminal Enter to CR. Use this for ordinary prompt answers and shell commands.",
         "",
@@ -4000,6 +4009,7 @@ export const RUNPANE_CONTRACT = {
         "  --text <text>                  Text to submit before Enter",
         "  --input-file <path|->          Read text from a file or stdin before Enter",
         "  --as-file-pointer              Write the text to a prompt file and submit `Read and follow <path>`",
+        "  --attach <file>                Copy a file beside the prompt file and list it; repeatable",
         "  --expect-report                Expect a `runpane report` even for --source user work (the default otherwise)",
         "  --no-expect-report             Fire-and-forget: no agent.report.missing if the agent ends without reporting",
         "  --wait                         Block until this panel reports, misses its report, waits on a prompt, or exits;",
@@ -4040,6 +4050,7 @@ export const RUNPANE_CONTRACT = {
         "  --initial-input, --prompt     Initial input to send after the tool starts.",
         "  --initial-input-file <path|-> Read initial input from a file or stdin.",
         "  --as-file-pointer             Send `Read and follow <prompt file>` instead of the prompt.",
+        "  --attach <file>               Copy a file beside the prompt file and list it; repeatable.",
         "  --expect-report                Expect a `runpane report` even for --source user work (the default otherwise)",
         "  --no-expect-report             Fire-and-forget: no agent.report.missing if the agent ends without reporting",
         "  --wait                         Block until this panel reports, misses its report, waits on a prompt, or exits;",
@@ -6758,6 +6769,12 @@ export const RUNPANE_CONTRACT = {
                       },
                       "initialInputAsFilePointer": {
                         "type": "boolean"
+                      },
+                      "initialInputAttachments": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
                       }
                     },
                     "additionalProperties": false
@@ -6786,6 +6803,12 @@ export const RUNPANE_CONTRACT = {
                       },
                       "initialInputAsFilePointer": {
                         "type": "boolean"
+                      },
+                      "initialInputAttachments": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
                       }
                     },
                     "additionalProperties": false
@@ -7162,6 +7185,12 @@ export const RUNPANE_CONTRACT = {
                   },
                   "promptFile": {
                     "type": "string"
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   },
                   "warnings": {
                     "$ref": "#/jsonSchemas/panelSubmitResult/properties/warnings"
@@ -9092,6 +9121,12 @@ export const RUNPANE_CONTRACT = {
         "asFilePointer": {
           "type": "boolean"
         },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "source": {
           "type": "string",
           "enum": [
@@ -9189,6 +9224,12 @@ export const RUNPANE_CONTRACT = {
         },
         "promptFile": {
           "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "warnings": {
           "type": "array",
@@ -10209,6 +10250,12 @@ export const RUNPANE_CONTRACT = {
         },
         "promptFile": {
           "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "warnings": {
           "$ref": "#/jsonSchemas/panelSubmitResult/properties/warnings"
@@ -12393,7 +12440,13 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--as-file-pointer",
             "required": false,
-            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+            "description": "Write the prompt or text to a private prompt file (in the Pane's worktree, hidden from git, when it has one) and send the one line `Read and follow <path>` instead."
+          },
+          {
+            "name": "--attach",
+            "required": false,
+            "value": "<file>",
+            "description": "Copy a file beside the --as-file-pointer prompt file and list its copy in the pointer line; repeatable. Needs --as-file-pointer; the result lists the copies in `attachments`."
           },
           {
             "name": "--from-json",
@@ -12511,7 +12564,8 @@ export const RUNPANE_CONTRACT = {
           "Agent-created Panes should pass `--source agent --no-focus --wait-ready --yes --json` unless the user explicitly wants focus moved. `panes create` pins the new Pane by default, so a follow-up `panes pin` call is unnecessary; pass `--no-pinned` for throwaway shells or bulk imports. `--pinned` is still accepted and is now a no-op. Inside a Session orchestrator (`PANE_ORCHESTRATION_SESSION_ID` set), new Panes are associated with that Session automatically; `--no-associate` opts out. A failed association is reported on the item and never undoes the Pane.",
           "The built-in agent templates come from the runpane contract; custom terminal commands can pass agent-specific flags when requested by the user.",
           "Use --initial-input-file for multi-line prompts or shell-sensitive initial input. A long or multi-line prompt is never typed into the shell: on bash, zsh or sh the agent launches with `\"$(cat '<prompt file>')\"` reading a private copy under `<pane-dir>/prompts/<pane-id>/`; on PowerShell, cmd, fish or WSL the prompt is pasted into the agent's composer once it is ready.",
-          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts.",
+          "`--as-file-pointer` writes the text to a prompt file readable only by you, inside the Pane's git worktree at `.pane/prompts/` (hidden by the repository's `.git/info/exclude`, never committed) when it has one, otherwise under `<pane-dir>/prompts/<pane-id>/`, so an agent limited to its working directories reads it without a permission prompt, and sends the one line `Read and follow <path>`, with the path relative to the worktree (where the agent starts) when the file is inside it; the result's `promptFile` is always absolute. Prefer it for long prompts.",
+          "`--attach <file>` (repeatable, with `--as-file-pointer`) copies each file into a folder beside the prompt file and sends `Read and follow <path> (attached: <copy>, ...)`; the result lists the copies in `attachments`.",
           "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
           "With --wait-ready, `initialInput.delivery` reports `taken`, `queued`, `in-composer` or `unknown` with its evidence (`transcript`, `screen`, or `argv` for a prompt passed at launch); verifiedSubmitted is true for `taken` or `queued`. Routing initial input alone does not imply verified submission, and the create's `ok` is false unless a Claude or Codex starting message is verified.",
           "If initialInput.blocked.kind is submission_unverified, do not submit again automatically. Inspect initialInput.staged and attempts, then run nextCommand to resolve the ambiguous composer state.",
@@ -13215,7 +13269,13 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--as-file-pointer",
             "required": false,
-            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+            "description": "Write the prompt or text to a private prompt file (in the Pane's worktree, hidden from git, when it has one) and send the one line `Read and follow <path>` instead."
+          },
+          {
+            "name": "--attach",
+            "required": false,
+            "value": "<file>",
+            "description": "Copy a file beside the --as-file-pointer prompt file and list its copy in the pointer line; repeatable. Needs --as-file-pointer; the result lists the copies in `attachments`."
           },
           {
             "name": "--interrupt",
@@ -13277,7 +13337,8 @@ export const RUNPANE_CONTRACT = {
           "Use `panels input` for Ctrl-C, escape sequences, or any workflow requiring exact bytes.",
           "On `blocked.kind: composer-unknown`, nothing was typed. Check `panels screen`; if the agent is at a prompt Pane does not recognise, use `panels input`.",
           "For Claude, text starting with `!`, `#`, `/` or `@` is sent unchanged and the result carries a `warnings` entry (for example `leading-bang-runs-shell`), because Claude Code gives those characters a meaning of its own.",
-          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts.",
+          "`--as-file-pointer` writes the text to a prompt file readable only by you, inside the Pane's git worktree at `.pane/prompts/` (hidden by the repository's `.git/info/exclude`, never committed) when it has one, otherwise under `<pane-dir>/prompts/<pane-id>/`, so an agent limited to its working directories reads it without a permission prompt, and sends the one line `Read and follow <path>`, with the path relative to the worktree (where the agent starts) when the file is inside it; the result's `promptFile` is always absolute. Prefer it for long prompts.",
+          "`--attach <file>` (repeatable, with `--as-file-pointer`) copies each file into a folder beside the prompt file and sends `Read and follow <path> (attached: <copy>, ...)`; the result lists the copies in `attachments`.",
           "With --interrupt, Pane sends the stop key only while the agent is active, waits for an empty idle composer, then submits. If readiness times out, replacement text is not sent. A queued result is not read yet: delivery.message explains the delay; never resend queued text. Interrupt success requires delivery.state: taken. Unknown agents and occupied composers are rejected without typing."
         ]
       },
@@ -13503,7 +13564,13 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--as-file-pointer",
             "required": false,
-            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+            "description": "Write the prompt or text to a private prompt file (in the Pane's worktree, hidden from git, when it has one) and send the one line `Read and follow <path>` instead."
+          },
+          {
+            "name": "--attach",
+            "required": false,
+            "value": "<file>",
+            "description": "Copy a file beside the --as-file-pointer prompt file and list its copy in the pointer line; repeatable. Needs --as-file-pointer; the result lists the copies in `attachments`."
           },
           {
             "name": "--source",
@@ -14926,7 +14993,7 @@ export const RUNPANE_CONTRACT = {
           {
             "name": "--as-file-pointer",
             "required": false,
-            "description": "Write the prompt or text to a private file under the Pane directory and send the one line `Read and follow <path>` instead."
+            "description": "Write the prompt or text to a private prompt file (in the Pane's worktree, hidden from git, when it has one) and send the one line `Read and follow <path>` instead."
           },
           {
             "name": "--yes",
@@ -14955,7 +15022,7 @@ export const RUNPANE_CONTRACT = {
         "notes": [
           "`delivered` is true when the agent took the message or queued it for after its current turn; `delivery` says which (`taken` or `queued`) and how Pane knows (`transcript` or `screen`). Never resend a delivered message.",
           "It types the text, then queues with Tab when Codex is working or submits with Enter when ready. It is for messages, not keys. To answer a menu, use `runpane panels input --panel <panel-id> --keys down,enter --yes`, then check the screen with `runpane agents status`.",
-          "`--as-file-pointer` writes the text to `<pane-dir>/prompts/<pane-id>/<timestamp>.md` (readable only by you) and sends the one line `Read and follow <path>`; the result includes `promptFile`. Prefer it for long prompts."
+          "`--as-file-pointer` writes the text to a prompt file readable only by you, inside the Pane's git worktree at `.pane/prompts/` (hidden by the repository's `.git/info/exclude`, never committed) when it has one, otherwise under `<pane-dir>/prompts/<pane-id>/`, so an agent limited to its working directories reads it without a permission prompt, and sends the one line `Read and follow <path>`, with the path relative to the worktree (where the agent starts) when the file is inside it; the result's `promptFile` is always absolute. Prefer it for long prompts."
         ]
       },
       "report": {

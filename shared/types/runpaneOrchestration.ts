@@ -398,6 +398,8 @@ export interface RunpaneAgentToolSpec {
   initialInput?: string;
   /** Write initialInput to a prompt file and send `Read and follow <path>` instead (`--as-file-pointer`). */
   initialInputAsFilePointer?: boolean;
+  /** Absolute paths copied beside the prompt file and listed in the pointer line (`--attach`). */
+  initialInputAttachments?: string[];
 }
 
 export interface RunpaneCommandToolSpec {
@@ -408,6 +410,8 @@ export interface RunpaneCommandToolSpec {
   initialInput?: string;
   /** Write initialInput to a prompt file and send `Read and follow <path>` instead (`--as-file-pointer`). */
   initialInputAsFilePointer?: boolean;
+  /** Absolute paths copied beside the prompt file and listed in the pointer line (`--attach`). */
+  initialInputAttachments?: string[];
 }
 
 export type RunpaneToolSpec = RunpaneAgentToolSpec | RunpaneCommandToolSpec;
@@ -596,6 +600,8 @@ export interface RunpanePaneCreateSuccessItem {
   initialInput?: RunpaneInitialInputDeliveryResult;
   /** The prompt file Pane wrote for `--as-file-pointer`. */
   promptFile?: string;
+  /** Copies of the `--attach` files beside the prompt file. */
+  attachments?: string[];
   warnings?: RunpanePromptWarning[];
   association?: RunpanePaneAssociationOutcome;
   /** The report Pane now waits for (`expectReport`); absent when no agent panel was created. */
@@ -1018,6 +1024,8 @@ export interface RunpanePanelCreateResult {
   initialInput?: RunpaneInitialInputDeliveryResult;
   /** The prompt file Pane wrote for `--as-file-pointer`. */
   promptFile?: string;
+  /** Copies of the `--attach` files beside the prompt file. */
+  attachments?: string[];
   warnings?: RunpanePromptWarning[];
   /** The report Pane now waits for (`expectReport`). */
   expectedReport?: TerminalExpectedReport;
@@ -1175,6 +1183,8 @@ export interface RunpanePanelSubmitRequest {
   interrupt?: boolean;
   /** Write the text to a prompt file and submit `Read and follow <path>` instead. */
   asFilePointer?: boolean;
+  /** Absolute paths copied beside the prompt file and listed in the pointer line (`--attach`). */
+  attachments?: string[];
   /** `user` when a person typed it; their next finished turn notifies the phone. */
   source?: 'user' | 'agent';
   /** The sender waits for a `runpane report`: journal `agent.report.missing` if the agent goes ready or exits without one. */
@@ -1212,6 +1222,8 @@ export interface RunpanePanelSubmitResult {
   blocked?: RunpanePanelBlockedState;
   /** The prompt file Pane wrote for `asFilePointer`. */
   promptFile?: string;
+  /** Copies of the `attachments` beside the prompt file. */
+  attachments?: string[];
   warnings?: RunpanePromptWarning[];
   /** The report Pane now waits for (`expectReport`); absent when nothing was sent. */
   expectedReport?: TerminalExpectedReport;
@@ -1299,6 +1311,7 @@ export interface RunpaneResolvedTool {
   launchMode?: 'wrapped';
   initialInput?: string;
   initialInputAsFilePointer?: boolean;
+  initialInputAttachments?: string[];
 }
 
 /** What a Session inbox item is about. */

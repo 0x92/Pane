@@ -78,25 +78,32 @@ runpane panels create --pane <feature pane id> --title <role> \
   names no variant, its workspace-trust question) holds the tab. Pane reports
   that as BLOCKED, and reports BUSY and READY, even before it has identified
   the agent behind the wrapper.
-- **The brief:** `--as-file-pointer` copies the file to a private path under
-  `<pane-dir>/prompts/` and types the single line `Read and follow <path>`
-  into the agent's input box, so a long brief never passes through the shell
-  or the terminal. Pane does not read the brief: check it has every field your
-  protocol requires before you launch. Use absolute paths in it for sources,
-  the status file, and any skill to follow (a worker in another repository has
-  none of your skills installed).
-- **A brief outside the worktree can stop on a permission prompt.** The
-  pointer file is under `<pane-dir>/prompts/`, outside the worker's
-  worktree. A worker whose harness refuses reads outside its working
-  directory (Claude Code with `permissions.blockReadsOutsideWorkingDirectories`,
-  or a sandbox) stops on "Read outside the working directories" and wakes you
-  with BLOCKED. Where that applies, keep the brief inside the worktree:
-  launch with `--wait-ready` and no input, write the brief to
-  `<worktreePath>/.agent/briefs/<role>.md` (kept out of Git, for example
-  through `.git/info/exclude`), then send the one line yourself with
-  `runpane panels submit --panel <id> --text "Read and follow <absolute brief path>" --yes --json`
-  and check its delivery. A short brief can go inline instead: drop
-  `--as-file-pointer`, and Pane sends the file's text itself.
+- **The brief:** `--as-file-pointer` copies the file into the worker's own
+  worktree, at `.pane/prompts/<timestamp>.md` (Pane adds `/.pane/prompts/` to
+  the repository's `.git/info/exclude`, so it is never committed), and types
+  the single line `Read and follow .pane/prompts/<file>.md` into the agent's
+  input box, so a long brief never passes through the shell or the terminal.
+  The path in that line is relative to the worktree, where the agent starts;
+  the result's `promptFile` is absolute. Pane does not read the brief: check it
+  has every field your protocol requires before you launch. Use absolute paths
+  in it for sources, the status file, and any skill to follow (a worker in
+  another repository has none of your skills installed).
+- **Files the worker needs go with the brief.** Add `--attach <file>`
+  (repeatable, with `--as-file-pointer`) to copy mockups, plans or dispatch
+  notes beside the brief; the pointer line lists the copies. A worker whose
+  harness refuses reads outside its working directory (Claude Code with
+  `permissions.blockReadsOutsideWorkingDirectories`, or a sandbox) can read
+  both without a prompt. A worker in a Session's Pane also gets the Session
+  folder as `PANE_SESSION_DIR` (read-only for built-in Claude Code); write its
+  absolute path into the brief rather than the variable. Details, including
+  what each agent gets, are in `docs/SESSIONS.md`, section "Worker file
+  access".
+- **Without a local git worktree** (a folder that isn't the top of a checkout,
+  or a WSL repo), the brief goes to `<pane-dir>/prompts/` with an absolute
+  pointer, outside the worker's working directory. Such a worker can stop on
+  "Read outside the working directories" and wake you with BLOCKED; send a
+  short brief inline instead (drop `--as-file-pointer`, and Pane sends the
+  file's text itself).
 - **`--wait-ready`** waits until the agent's input box is on screen (up to
   `--ready-timeout-ms`, default 30000; give a wrapper 180000), types the line,
   and checks the agent took it. It never types into a shell, a wrapper's own
