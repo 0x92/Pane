@@ -1,4 +1,5 @@
 import { boundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
+import type { JsonObject } from '../../../shared/validation/boundaryDecoder';
 import type { TerminalAgentReport, TerminalAgentReportState, ToolPanel } from '../../../shared/types/panels';
 
 /**
@@ -83,6 +84,22 @@ const panelReportSchema = boundary.object({ agentReport: agentReportSchema });
 /** The panel's latest report, or undefined when it has none (or an unreadable one). */
 export function readPanelAgentReport(panel: Pick<ToolPanel, 'state'> | undefined): TerminalAgentReport | undefined {
   return decodeOptionalBoundary(panel?.state?.customState, panelReportSchema)?.agentReport;
+}
+
+/**
+ * The summary as a JSON object, returned exactly as the worker sent it, or
+ * undefined when the summary is absent, truncated, or not a JSON object.
+ * Pane never reads or renames the fields inside it.
+ */
+export function agentReportData(report: TerminalAgentReport): JsonObject | undefined {
+  if (!report.summary || report.summaryTruncated) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(report.summary);
+  } catch {
+    return undefined;
+  }
+  return decodeOptionalBoundary(parsed, boundary.jsonObject);
 }
 
 interface BoundedSummary {

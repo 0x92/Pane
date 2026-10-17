@@ -1194,6 +1194,51 @@ describe('OrchestrationSessionManager', () => {
     await expect(fixture.manager.recordAgentReport('missing-panel', newer)).resolves.toEqual([]);
   });
 
+  it('J-2: gives each panel its own latest report, with data only for a complete JSON object summary', async () => {
+    const fixture = createFixture();
+    const named = await fixture.manager.create({ name: 'Panel reports' });
+    const pane = paneFixture(fixture, 'panel-report-pane', { name: 'Panel Report Pane' });
+    const planner = createPanel('panel-report-planner', pane.id, 'Planner');
+    const plain = createPanel('panel-report-plain', pane.id, 'Plain');
+    const list = createPanel('panel-report-list', pane.id, 'List');
+    const truncated = createPanel('panel-report-truncated', pane.id, 'Truncated');
+    const silent = createPanel('panel-report-silent', pane.id, 'Silent');
+    for (const panel of [planner, plain, list, truncated, silent]) await seedPanel(panel);
+    await fixture.manager.associate({ sessionId: named.session.id }, { paneId: pane.id });
+    const status = { profile: 'planner', state: 'running', checks: { pass: ['S-1'] }, pr: null };
+    const reports = {
+      [planner.id]: { state: 'ready' as const, pr: 412, head: '3f9c2ab', summary: JSON.stringify(status), summaryPath: '/tmp/status.json', reportedAt: '2026-10-17T16:00:00.000Z' },
+      [plain.id]: { state: 'blocked' as const, question: 'Which filename?', summary: 'Waiting on a filename.', reportedAt: '2026-10-17T16:01:00.000Z' },
+      [list.id]: { state: 'done' as const, summary: '["a","b"]', reportedAt: '2026-10-17T16:02:00.000Z' },
+      [truncated.id]: { state: 'ready' as const, summary: '{"long":"…\n[summary truncated]', summaryTruncated: true as const, reportedAt: '2026-10-17T16:03:00.000Z' },
+    };
+    for (const panel of [planner, plain, list, truncated]) {
+      await panelManager.updatePanel(panel.id, { state: { ...panel.state, customState: { ...panel.state.customState, agentReport: reports[panel.id] } } });
+    }
+    liveStates.set(silent.id, 'working');
+    vi.mocked(terminalPanelManager.getTerminalSnapshot).mockImplementation(panelId => panelId === silent.id ? {
+      initialized: true,
+      scrollbackBuffer: '',
+      alternateScreenBuffer: '',
+      isAlternateScreen: false,
+      activityStatus: 'active',
+      lastActivityTime: '2026-10-17T16:05:00.000Z',
+      currentCommand: '',
+    } : null);
+
+    const overview = await fixture.manager.overview({ sessionId: named.session.id });
+    const panels = new Map(overview.panes[0].panels.map(panel => [panel.panelId, panel]));
+
+    expect(panels.get(planner.id)?.report).toEqual({ ...reports[planner.id], data: status });
+    expect(panels.get(plain.id)?.report).toEqual(reports[plain.id]);
+    expect(panels.get(list.id)?.report).toEqual(reports[list.id]);
+    expect(panels.get(truncated.id)?.report).toEqual(reports[truncated.id]);
+    expect(panels.get(silent.id)).toMatchObject({ state: 'working', lastActivityAt: '2026-10-17T16:05:00.000Z' });
+    expect(panels.get(silent.id)).not.toHaveProperty('report');
+    // The per-Pane report keeps its shape: the newest report, its panel, and no data.
+    expect(overview.panes[0].report).toEqual({ ...reports[truncated.id], panelId: truncated.id });
+  });
+
   it('supports exact-name selectors and rejects lost updates with an optimistic revision guard', async () => {
     const fixture = createFixture();
     const created = await fixture.manager.create({ name: 'Context handoff', context: 'Initial context' });

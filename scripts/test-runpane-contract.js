@@ -3558,6 +3558,47 @@ local_control.run_sessions_overview(parse_args(["sessions", "overview", "--sessi
 `, JSON.stringify(overview));
   assertIncludes(pythonText, 'report ready pr#747 fc5dce9 (panel panel-a');
   assertIncludes(pythonText, 'lock testing-account');
+
+  // Each panel carries its own report; a JSON object summary also comes back as `data`, as given.
+  const status = { profile: 'implementer', state: 'running', checks: { pass: ['S-1'] } };
+  const panelReport = { state: 'ready', pr: 747, head: 'fc5dce9', summary: JSON.stringify(status), reportedAt: at, data: status };
+  const withPanelReports = structuredClone(overview);
+  withPanelReports.panes[0].panels = [
+    { ...overview.panes[0].panels[0], report: panelReport },
+    { panelId: 'panel-b', title: 'Reviewer', agentType: 'codex', state: 'working', initialized: true, lastActivityAt: at },
+  ];
+  assert.ok(matchesJsonSchema(panelReport, contract.jsonSchemas.panelReport), 'panel report fixture matches the contract schema');
+  daemonClient.invokeDaemon = async () => withPanelReports;
+  console.log = (line) => printed.push(String(line));
+  printed.length = 0;
+  try {
+    assert.strictEqual(await runSessionsOverview(parseRunpaneArgs(['sessions', 'overview', '--session', 'Release QA', '--json'])), 0);
+    const decoded = JSON.parse(printed.join('\n'));
+    assert.deepStrictEqual(decoded.panes[0].panels[0].report, panelReport);
+    assert.deepStrictEqual(decoded.panes[0].report, report);
+    printed.length = 0;
+    assert.strictEqual(await runSessionsOverview(parseRunpaneArgs(['sessions', 'overview', '--session', 'Release QA'])), 0);
+  } finally {
+    daemonClient.invokeDaemon = originalInvokeDaemon;
+    console.log = originalConsoleLog;
+  }
+  const panelText = printed.join('\n');
+  const pythonPanelText = runPythonSnippet(`
+import json
+import sys
+import runpane.local_control as local_control
+from runpane.cli import parse_args
+
+overview = json.loads(sys.stdin.read())
+local_control.invoke_daemon = lambda channel, args, **kwargs: overview
+local_control.run_sessions_overview(parse_args(["sessions", "overview", "--session", "Release QA"]))
+`, JSON.stringify(withPanelReports));
+  for (const output of [panelText, pythonPanelText]) {
+    assertIncludes(output, `Claude Code (panel panel-a): idle, report ready pr#747 fc5dce9 at ${at}`);
+    assertIncludes(output, 'Reviewer (panel panel-b): working');
+    assert.ok(!output.includes('Reviewer (panel panel-b): working, report'), 'a panel without a report shows only its state');
+  }
+  assert.strictEqual(pythonPanelText.trim(), panelText.trim());
 }
 
 function checkHelpOutput() {
