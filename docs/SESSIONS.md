@@ -441,6 +441,44 @@ An association identifies work that a Session coordinates; it does not grant
 implementation authority by itself. Detach a Pane before assigning it to a
 different Session.
 
+## Worker file access
+
+A worker's agent may be allowed to read only its working directories (Claude
+Code's `permissions.blockReadsOutsideWorkingDirectories`). Its brief and the
+Session files the brief points to must not sit outside them, or the worker
+stops on a permission prompt nobody is watching.
+
+**Briefs and attachments.** `--as-file-pointer` (`panes create`,
+`panels create`, `panels submit`, `agents send`) writes the prompt inside the
+Pane's worktree, at `<worktree>/.pane/prompts/<timestamp>.md`, and sends the
+one line `Read and follow <path>`. Pane adds `/.pane/prompts/` to the
+repository's `.git/info/exclude` (never a committed `.gitignore`), so the file
+can't be committed. `--attach <file>` (repeatable; `panes create`,
+`panels create` and `panels submit`, with `--as-file-pointer`) copies each file
+into `<worktree>/.pane/prompts/<timestamp>/` and sends
+`Read and follow <path> (attached: <copy>, ...)`; the result lists the copies
+in `attachments`. Attach mockups, plans or dispatch notes the worker needs
+instead of pointing at the Session folder. Without a local git worktree (a
+folder that is not the top of a checkout, a WSL repo) the file goes to
+`<pane-dir>/prompts/<pane-id>/` as before.
+
+**The Session folder.** A Pane associated with a Session gets that Session's
+folder (`<pane-dir>/sessions/<id>`) as `PANE_SESSION_DIR` in every tab created
+after the association. The Session's own terminals get it too.
+`PANE_ORCHESTRATION_SESSION_ID` keeps its meaning: it is set only in the
+Session's own terminals, never in a worker's. Workers read the folder and never
+write it; the orchestrator is its only writer. What each built-in template gets:
+
+| Agent | Read access to the Session folder |
+| --- | --- |
+| Claude Code (`claude --dangerously-skip-permissions`) | Pane adds `--settings '{"permissions":{"additionalDirectories":["<folder>"],"deny":["Edit(/<folder>/**)","Write(/<folder>/**)"]}}'`. `additionalDirectories` (like `--add-dir`) makes the folder a working directory, which grants read and write; an `allow` rule alone does not lift `blockReadsOutsideWorkingDirectories`. The `deny` rules take the file tools' write access back. Under bypass permissions Bash can still write anywhere, so the read-only rule is a guard, not a sandbox. The folder's `CLAUDE.md` is not loaded. Not added on Windows. |
+| Codex (`codex --yolo`) | Nothing to add: `--yolo` runs without a sandbox, and every Codex sandbox mode reads the whole disk. Codex's `--add-dir` grants write access, so Pane does not pass it. |
+| Cursor, OpenCode | Only `PANE_SESSION_DIR`. |
+| `--tool-command` wrappers (agent-farm) and custom commands | Only `PANE_SESSION_DIR`; the wrapper maps it to its harness's flag. |
+
+The flag is fixed when the tab is created: a tab opened before its Pane was
+associated has no `PANE_SESSION_DIR` until a new tab is created.
+
 ## Stable interfaces
 
 The shared record and service are:

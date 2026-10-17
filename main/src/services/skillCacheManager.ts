@@ -541,7 +541,10 @@ When a pane finishes something a human will read, have it run the
    ticket, the stable Session ID, and the associated Pane and tab IDs so
    progress returns to this conversation. Prefer \`--as-file-pointer\` for
    long prompts (\`panes create\`, \`panels submit\`, \`agents send\`): Pane
-   writes the prompt to a private file and submits one line pointing at it.
+   writes the prompt to a private file in the worker's worktree and submits one
+   line pointing at it. Give workers the Session files they need with
+   \`--attach <file>\`; they can also read this Session's folder through
+   \`$PANE_SESSION_DIR\`, but never write it.
    End every worker prompt with: "When finished or blocked, run
    \`runpane report --state <ready|blocked|failed|done> --pr <number> --head <sha> --summary-file <path>\`
    (add \`--question "<question>"\` when blocked)."
