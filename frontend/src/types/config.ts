@@ -84,8 +84,6 @@ export interface AppConfig {
   autoStartOnBoot?: boolean;
   // Keep the computer awake while any session is active
   keepAwakeWhileSessionsActive?: boolean;
-  // Restart and nudge Session workers stopped by a Pane restart, a wake, or a transient API error
-  autoResumeSessionAgents?: boolean;
   // Theme preference
   appearanceMode?: AppearanceMode;
   theme?: Theme;
@@ -200,7 +198,6 @@ export interface UpdateConfigRequest {
   autoCheckUpdates?: boolean;
   autoStartOnBoot?: boolean;
   keepAwakeWhileSessionsActive?: boolean;
-  autoResumeSessionAgents?: boolean;
   theme?: AppConfig['theme'];
   appearanceMode?: AppearanceMode;
   systemLightTheme?: LightTheme;

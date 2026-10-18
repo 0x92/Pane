@@ -4291,7 +4291,6 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pane.gone',
   'panel.exited',
   'panel.stopped',
-  'panel.resumed',
   'pane.associated',
   'pane.detached',
   'pr.conflicted',

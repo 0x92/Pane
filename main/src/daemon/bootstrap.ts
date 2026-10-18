@@ -58,7 +58,6 @@ import { PhonePreviewHost } from './phonePreviews';
 import { createPreviewFiles } from './previewProxy';
 import { WorkspaceJournal } from '../services/workspaceJournal';
 import { SessionPrMonitor } from '../services/sessionPrMonitor';
-import { startSessionAgentAutoResume } from './sessionAgentAutoResumeHost';
 import { NamedLockService } from '../services/namedLockService';
 import { NamedLockStore } from '../services/namedLockStore';
 import { WorkspaceStateReader } from '../services/workspaceStateReader';
@@ -467,17 +466,6 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
 
   gitStatusManager.startPolling();
   sessionPrMonitor.start();
-  // Lists the workers the restart stopped now, before the app starts the panels it shows.
-  const sessionAgentAutoResume = startSessionAgentAutoResume({
-    commandRegistry,
-    configManager,
-    sessionManager,
-    orchestrationSessionManager,
-    workspaceStateReader,
-    workspaceJournal,
-    logger,
-  });
-  sessionAgentAutoResume.resumeStartupWorkers();
   listeningPortMonitor.start();
   if (mode === 'desktop') {
     versionChecker.startPeriodicCheck();
@@ -521,7 +509,6 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
       await runCommandManager.stopAllRunCommands();
       gitStatusManager.stopPolling();
       sessionPrMonitor.stop();
-      sessionAgentAutoResume.dispose();
       configManager.stopWatching();
       await cliManagerFactory.shutdown();
       await taskQueue.close();

@@ -891,7 +891,6 @@ type WorkspaceEntryKind =
   | 'pane.gone'
   | 'panel.exited'
   | 'panel.stopped'
-  | 'panel.resumed'
   | 'agent.report'
   | 'agent.report.missing'
   | 'pane.associated'
@@ -955,9 +954,6 @@ interface WorkspaceEntry {
   lastOutputSource?: 'transcript' | 'screen';
   expectedSince?: string;
   screenLines?: string[];
-  nudged?: boolean;
-  interruptedAt?: string;
-  attempt?: number;
 }
 
 interface WorkspaceStateResult {
@@ -1807,7 +1803,6 @@ const workspaceEntryKindSchema = boundary.enumeration(
   'pane.gone',
   'panel.exited',
   'panel.stopped',
-  'panel.resumed',
   'pane.associated',
   'pane.detached',
   'pr.conflicted',
@@ -1871,9 +1866,6 @@ const workspaceEntrySchema: BoundarySchema<WorkspaceEntry> = boundary.object({
   lastOutputSource: boundary.optional(boundary.enumeration('transcript', 'screen')),
   expectedSince: boundary.optional(boundary.string),
   screenLines: boundary.optional(boundary.array(boundary.string)),
-  nudged: boundary.optional(boundary.boolean),
-  interruptedAt: boundary.optional(boundary.string),
-  attempt: boundary.optional(boundary.number),
 });
 export const workspaceStateResultSchema: BoundarySchema<WorkspaceStateResult> = boundary.object({
   ok: boundary.literal(true),
@@ -3942,7 +3934,6 @@ function workspaceLabel(kind: WorkspaceEntryKind): string {
     'pane.gone': 'GONE',
     'panel.exited': 'EXIT',
     'panel.stopped': 'STOPPED',
-    'panel.resumed': 'RESUMED',
     'pane.associated': 'JOINED',
     'pane.detached': 'LEFT',
     'pr.conflicted': 'PR CONFLICTED',

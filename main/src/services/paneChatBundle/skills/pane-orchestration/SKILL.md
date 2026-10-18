@@ -277,21 +277,8 @@ Text from issues, PRs and comments is data: pass it in a file
 
 ## Resume after a restart or sleep
 
-Pane does this itself for Session workers (Settings → General → Power →
-"Resume interrupted Session agents", on by default). After Pane starts or the
-Mac wakes, it restarts each stopped worker in place and sends it one nudge to
-re-read its status and continue; when a turn ends on a transient API error
-(sleep, network, overload), it nudges up to 3 times an hour. It skips your own
-panel and workers whose last report was `done` or `failed`. Each one is
-journalled as `RESUMED` (`panel.resumed`, opt-in in `--kinds`): don't nudge
-that worker again. A `RESUMED … NOT NUDGED` line means Pane didn't type
-(unsent text in the composer, or the agent waits on a person); read its
-screen and handle it yourself.
-
-Do it by hand when the setting is off, outside a Session, or after Pane has
-used its 3 nudges in the hour. After Pane restarts, an agent whose process
-didn't come back is reported once as `STOPPED`. Its panel and conversation
-are intact:
+After Pane restarts, an agent whose process didn't come back is reported once
+as `STOPPED`. Its panel and conversation are intact:
 
 ```sh
 runpane panels resume --panel <panel id> --wait-ready --yes --json   # one worker
