@@ -5,7 +5,7 @@ import { PaneError } from '../../../shared/paneError';
 import { workspaceEntrySchema } from './workspaceJournalSchema';
 import type { PaneEventArgument, PaneEventSink } from '../core/eventSink';
 import type { AgentState } from '../../../shared/types/agentStatus';
-import { boundary, decodeBoundary, decodeOptionalBoundary, type JsonObject } from '../../../shared/validation/boundaryDecoder';
+import { boundary, decodeBoundary, decodeOptionalBoundary, type JsonObject, type JsonValue } from '../../../shared/validation/boundaryDecoder';
 import { extractWorkspaceHeldInput, type WorkspaceHeldInputScreen } from './workspaceHeldInput';
 import type {
   RunpaneWorkspaceEntry,
@@ -120,6 +120,15 @@ const sessionMembershipEventSchema = boundary.object({
 });
 /** Kinds only a consumer that lists them in `kinds` receives; a Session scope alone does not. */
 const EXPLICIT_ONLY_KINDS: readonly RunpaneWorkspaceEntryKind[] = ['agent.report.missing'];
+/** Kinds an older build wrote and this one no longer emits; a saved journal skips them instead of failing to load. */
+const RETIRED_KINDS: readonly string[] = ['panel.resumed'];
+const savedEntryKindSchema = boundary.object({ kind: boundary.string });
+
+function isRetiredEntry(entry: JsonValue): boolean {
+  const kind = decodeOptionalBoundary(entry, savedEntryKindSchema)?.kind;
+  return kind !== undefined && RETIRED_KINDS.includes(kind);
+}
+
 /** Kinds only a consumer that asks for them (by `kinds`, or a Session scope) receives, so older clients never see them. */
 const OPT_IN_KINDS: readonly RunpaneWorkspaceEntryKind[] = [
   'panel.stopped',
@@ -195,12 +204,13 @@ export class WorkspaceJournal implements PaneEventSink {
       try {
         const saved = decodeBoundary(JSON.parse(fs.readFileSync(this.filePath, 'utf8')), boundary.object({
           epoch: boundary.string, generation: boundary.number, githubState: boundary.jsonObject,
-          entries: boundary.array(workspaceEntrySchema),
+          entries: boundary.array(boundary.json),
         }));
+        const entries = decodeBoundary(saved.entries.filter((entry) => !isRetiredEntry(entry)), boundary.array(workspaceEntrySchema));
         this.epoch = saved.epoch;
         this.nextGeneration = saved.generation;
         this.githubState = saved.githubState;
-        this.ring.push(...saved.entries.slice(-this.capacity));
+        this.ring.push(...entries.slice(-this.capacity));
       } catch {
         throw new PaneError('ERR_WATCH_JOURNAL_READ', 'The saved watch journal could not be read. Watching did not start.', 'Restore workspace-journal.json from backup, or move it aside to explicitly reset watch cursors.');
       }

@@ -88,6 +88,32 @@ describe('durable PR event delivery', () => {
       expect(second.readAfter(1, { kinds: ['pr.head'] }).entries).toEqual([]);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+
+  it('loads a journal an older build wrote with panel.resumed entries, skipping them', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'pane-journal-'));
+    try {
+      const filePath = path.join(directory, 'journal.json');
+      const first = new WorkspaceJournal({ filePath });
+      first.commitGithubState({ tracked: 'head' }, [{ paneId: 'worker', kind: 'pr.head', source: 'github' }]);
+      const saved = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      saved.entries.push({
+        gen: 2, at: '2026-10-18T09:00:00.000Z', paneId: 'worker', paneName: 'worker', kind: 'panel.resumed',
+        panelId: 'panel-1', source: 'session', reason: 'pane-start', nudged: true, interruptedAt: '2026-10-18T08:59:00.000Z',
+      });
+      saved.generation = 2;
+      fs.writeFileSync(filePath, JSON.stringify(saved));
+
+      const second = new WorkspaceJournal({ filePath });
+      expect(second.epoch).toBe(first.epoch);
+      expect(second.readAfter(0, { kinds: ['pr.head'] }).entries).toMatchObject([{ gen: 1, kind: 'pr.head' }]);
+      second.appendPaneEntry('worker', { kind: 'panel.stopped', panelId: 'panel-1', source: 'session' });
+      expect(second.readAfter(0, { kinds: ['panel.stopped'] }).entries).toMatchObject([{ gen: 3, kind: 'panel.stopped' }]);
+
+      saved.entries.push({ ...saved.entries[0], gen: 3, kind: 'pane.unheard-of' });
+      fs.writeFileSync(filePath, JSON.stringify(saved));
+      expect(() => new WorkspaceJournal({ filePath })).toThrow(/watch journal could not be read/);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
 });
 
 it('counts meaningful activity even when output filters hide it', () => {
