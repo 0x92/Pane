@@ -705,7 +705,8 @@ What each line means under follow (the JSON \`kind\` is in parentheses):
   state (ready, blocked, failed, or done), PR number, head commit, summary,
   and a blocked worker's question. Read the full report with
   \`runpane agents status --panel <panel-id> --json\` or the Session overview
-  (\`panes[].report\`) instead of scraping the screen.
+  (each worker's own \`panes[].panels[].report\`, with a JSON status summary
+  as \`data\`) instead of scraping the screen.
 - MISSING REPORT (\`agent.report.missing\`): a worker you sent work to went
   ready, with nothing left running in the background, or exited, without
   \`runpane report\`. It

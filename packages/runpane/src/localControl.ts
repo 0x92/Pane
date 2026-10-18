@@ -8,7 +8,7 @@ import { invokeDaemon, PaneDaemonClientError } from './daemonClient';
 import { RunpaneError } from './errors';
 import { RUNPANE_CONTRACT } from './generated/contract';
 import { hasCadenceValueFlag, type ParsedArgs, type RunpaneAgent } from './commands';
-import type { BoundarySchema, JsonValue } from './boundaryDecoder';
+import type { BoundarySchema, JsonObject, JsonValue } from './boundaryDecoder';
 import { parseSessionCreatePayload, parseSessionUpdatePayload } from './sessionPayload';
 import { describeReport, effectiveWatchHeartbeatMs, formatNonEntry, formatWaitResult, type WatchFormat } from './watchLines';
 
@@ -98,6 +98,13 @@ interface OrchestrationPanelOverview {
   initialized: boolean;
   lastActivityAt?: string;
   missing?: boolean;
+  /** This panel's latest `runpane report`. Absent from daemons that predate per-panel reports. */
+  report?: PanelReport;
+}
+
+/** A panel's report; `data` is its summary when that is a complete JSON object, returned as given. */
+interface PanelReport extends AgentReport {
+  data?: JsonObject;
 }
 
 interface OrchestrationPaneOverview {
@@ -1279,6 +1286,7 @@ const orchestrationPanelOverviewSchema = boundary.object({
   initialized: boundary.boolean,
   lastActivityAt: boundary.optional(boundary.nonEmptyString),
   missing: boundary.optional(boundary.boolean),
+  report: boundary.optional(boundary.object({ ...agentReportFields, data: boundary.optional(boundary.jsonObject) })),
 });
 const orchestrationPaneOverviewSchema: BoundarySchema<OrchestrationPaneOverview> = boundary.object({
   paneId: boundary.nonEmptyString,
@@ -2088,7 +2096,9 @@ export async function runSessionsOverview(parsed: ParsedArgs): Promise<number> {
   for (const pane of result.panes) {
     const details = pane.missing ? 'missing' : pane.archived ? 'archived' : pane.panels.map(panel => `${panel.title}=${panel.state}`).join(', ') || 'no terminal panels';
     console.log(`  ${pane.name}: ${details}`);
-    if (pane.report) {
+    if (pane.panels.some(panel => panel.report)) {
+      for (const panel of pane.panels) console.log(`    ${describePanelOverview(panel)}`);
+    } else if (pane.report) {
       console.log(`    report ${describeReport(pane.report)} (panel ${pane.report.panelId}, ${pane.report.reportedAt})`);
     }
   }
@@ -2096,6 +2106,12 @@ export async function runSessionsOverview(parsed: ParsedArgs): Promise<number> {
     console.log(`  lock ${formatLockLine(lock)}`);
   }
   return 0;
+}
+
+/** `Reviewer (panel <id>): idle, report ready pr#747 fc5dce9 at <reportedAt>`; a panel without a report shows only its state. */
+function describePanelOverview(panel: OrchestrationPanelOverview): string {
+  const line = `${panel.title} (panel ${panel.panelId}): ${panel.state}`;
+  return panel.report ? `${line}, report ${describeReport(panel.report)} at ${panel.report.reportedAt}` : line;
 }
 
 /** One daemon call waits at most this long; longer waits chain calls, each blocking in the daemon. */

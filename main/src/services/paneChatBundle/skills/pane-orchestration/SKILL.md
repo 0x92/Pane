@@ -181,7 +181,9 @@ When you start or resume, and after a `RESET`, `DROPPED` or failed wait, run
 `runpane inbox --session <S> --json`. It lists every report, missing report
 and on-screen question the Session hasn't acknowledged, including what
 finished while you were down, whether or not a wait was running. Clear what
-you handled with `runpane inbox ack <id>...`. Outside a Session, read each
+you handled with `runpane inbox ack <id>...`. `runpane sessions overview
+--session <S> --json` shows each worker's state and own latest report
+(`panes[].panels[].report`) in one call. Outside a Session, read each
 worker's `runpane agents status --panel <id> --json` and its status file
 instead. Work Pane sends an agent expects a report, so a worker that stops
 without one wakes you with MISSING REPORT; no timeout or periodic sweep is
@@ -235,8 +237,13 @@ A note that needs no answer needs no report: every report wakes the
 orchestrator.
 
 **Reading one.** On a REPORT, run `runpane agents status --panel <panel id> --json`
-(or read `panes[].report` in `sessions overview`) for the state, PR, head,
-question and `summaryPath`, then read the file at `summaryPath`. A report is a
+(or read that worker's `panes[].panels[].report` in `sessions overview`) for
+the state, PR, head, question and `summaryPath`, then read the file at
+`summaryPath`. When the summary is a JSON object (a status file sent with
+`--summary-file`), the overview also returns it parsed as `report.data`.
+`sessions overview` lists every worker's own latest report and when it came,
+so one call answers what each worker in the Session last said;
+`panes[].report` is only the newest among a Pane's panels. A report is a
 claim: check the PR and head before you advance the work.
 
 For workers with no protocol of their own, end the brief with:
