@@ -29,7 +29,7 @@ import { getWSLShellSpawn, buildWSLENV, WSLContext } from '../utils/wslUtils';
 import { getGitAttributionEnv } from '../utils/attribution';
 import { interactiveTerminalEnv } from '../utils/inheritedProcessEnv';
 import { createShellStartupPromptWatcher } from './shellStartupPrompts';
-import { PaneError } from '../../../shared/paneError';
+import { PaneError, paneErrorText } from '../../../shared/paneError';
 import { isProcessAlive, listDescendantPids, terminateProcessTrees, waitForProcessesToExit } from '../utils/processTree';
 import {
   type FlowControlRecord,
@@ -776,11 +776,20 @@ export class TerminalPanelManager extends EventEmitter {
         bytes: Buffer.byteLength(delivery.input, 'utf8'),
         submit: submitStrategy,
       })}`);
-      this.writeInitialInput(panelId, delivery.input, submitStrategy);
+      return this.writeInitialInput(panelId, delivery.input, submitStrategy);
     }).catch((error) => {
-      if (this.terminals.get(panelId) !== terminal || terminal.destroying) return;
-      console.warn(`[TerminalPanelManager] Failed to send initial input for panel ${panelId}:`, error);
-      this.markInitialInputError(panelId, error instanceof Error ? error.message : String(error)).catch(() => {});
+      this.recordInitialInputFailure(terminal, error instanceof Error ? error : new Error(String(error)));
+    });
+  }
+
+  /** Deferred delivery failures belong to the panel, never an unhandled timer or promise. */
+  private recordInitialInputFailure(terminal: TerminalProcess, error: Error): void {
+    const panelId = terminal.panelId;
+    if (this.terminals.get(panelId) !== terminal || terminal.destroying) return;
+    console.warn(`[TerminalPanelManager] Failed to send initial input for panel ${panelId}:`, error);
+    const message = error instanceof PaneError ? paneErrorText(error) : error.message;
+    void this.markInitialInputError(panelId, message).catch(persistError => {
+      console.warn(`[TerminalPanelManager] Could not record initial input failure for panel ${panelId}:`, persistError);
     });
   }
 
@@ -830,18 +839,17 @@ export class TerminalPanelManager extends EventEmitter {
     this.sendInitialInputOnce(terminal.panelId);
   }
 
-  private writeInitialInput(
+  private async writeInitialInput(
     panelId: string,
     input: string,
     submitStrategy: NonNullable<TerminalPanelState['initialInputSubmitStrategy']>,
-  ): void {
+  ): Promise<void> {
     const terminal = this.terminals.get(panelId);
     if (!terminal || terminal.destroying) return;
     // An agent reads text and Enter arriving together as a paste and keeps
     // the Enter as a newline, so agents get the Enter as its own write.
     if (submitStrategy === 'codex-ctrl-enter' || terminal.agentType) {
-      void this.stageAndSubmitInitialInput(terminal, input, submitStrategy);
-      return;
+      return this.stageAndSubmitInitialInput(terminal, input, submitStrategy);
     }
 
     this.emit('initial-input-delivery', panelId);
@@ -1948,19 +1956,23 @@ export class TerminalPanelManager extends EventEmitter {
       const panelId = panel.id;
       const injectCommand = () => {
         if (this.terminals.get(panelId) !== terminalProcess || terminalProcess.destroying) return;
-        // The launch command goes ahead of anything typed while the shell started.
-        if (launchResolution.customState.initialInputMode === 'argument' && launchResolution.customState.initialInputSentAt) {
-          this.emit('initial-input-delivery', panelId);
-        }
-        this.releaseHeldInput(terminalProcess, commandToRun! + '\r');
-        terminalProcess.launchCommandWrittenAt = Date.now();
+        try {
+          // The launch command goes ahead of anything typed while the shell started.
+          if (launchResolution.customState.initialInputMode === 'argument' && launchResolution.customState.initialInputSentAt) {
+            this.emit('initial-input-delivery', panelId);
+          }
+          this.releaseHeldInput(terminalProcess, commandToRun! + '\r');
+          terminalProcess.launchCommandWrittenAt = Date.now();
 
-        // For CLI tool terminals, signal the frontend when the CLI responds
-        if (isCliCommand) {
-          this.armCliReadySignal(terminalProcess, launchResolution.customState.agentType);
-        } else if (initialInput) {
-          // A command Pane does not know yet may be a wrapper: its message waits for an identified agent.
-          this.holdInitialInput(panelId);
+          // For CLI tool terminals, signal the frontend when the CLI responds
+          if (isCliCommand) {
+            this.armCliReadySignal(terminalProcess, launchResolution.customState.agentType);
+          } else if (initialInput) {
+            // A command Pane does not know yet may be a wrapper: its message waits for an identified agent.
+            this.holdInitialInput(panelId);
+          }
+        } catch (error) {
+          this.recordInitialInputFailure(terminalProcess, error instanceof Error ? error : new Error(String(error)));
         }
       };
 

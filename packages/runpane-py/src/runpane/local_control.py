@@ -550,7 +550,9 @@ def watch_until_done(parsed: Any, dispatch: Optional[Dict[str, Any]] = None) -> 
                     return emit_watch_failure(error, output_format)
                 code = error.code or type(error).__name__
                 now_ms = time.monotonic() * 1_000
-                if failing_code != code or (heartbeat_ms > 0 and now_ms - last_failure_at >= heartbeat_ms):
+                if not quiet and (
+                    failing_code != code or (heartbeat_ms > 0 and now_ms - last_failure_at >= heartbeat_ms)
+                ):
                     emit_watch_non_entry("_error", output_format, code=code, message=str(error))
                     last_failure_at = now_ms
                 failing_code = code
