@@ -7,7 +7,7 @@ import type { AppServices } from './types';
  * Pane with `runpane watch --follow --as dictate`; while that watcher is attached, Pane
  * skips its own desktop notification so each event alerts once.
  */
-export const DESKTOP_ALERT_CONSUMER = 'dictate';
+const DESKTOP_ALERT_CONSUMER = 'dictate';
 // Covers the gap between a follow watcher's polls; after it, Pane's own alerts return.
 const DESKTOP_ALERT_CONSUMER_GRACE_MS = 30_000;
 
