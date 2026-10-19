@@ -24,6 +24,8 @@ import { windowsPathToWSLMount } from '../utils/wslUtils';
 import * as shellPathUtils from '../utils/shellPath';
 import { ShellDetector } from '../utils/shellDetector';
 import * as processTree from '../utils/processTree';
+import { ExpectedReportTracker } from './expectedReports';
+import { WorkspaceJournal } from './workspaceJournal';
 
 /** In-process stand-in for a ptyHost PTY: output is whatever the test emits. */
 class FakePtyHandle implements PtyHandleLike {
@@ -641,6 +643,48 @@ function emitOpenCodeIdleFrame(handle: FakePtyHandle, transparent = false): void
 
       expect(secondHandle.written.join('')).not.toContain('Do not replay me');
     } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['typed', 'argument'] as const)('records a deferred %s-delivery activation failure without submitting the prompt', async (mode) => {
+    vi.useFakeTimers();
+    const journal = new WorkspaceJournal();
+    let tracker: ExpectedReportTracker | undefined;
+    try {
+      const panel = mode === 'typed'
+        ? makeOpenCodePanel('typed-activation-failure', { agentSessionId: 'ses_ActivationFailure', initialInput: 'Task' })
+        : makePanel('argument-activation-failure');
+      if (mode === 'argument') panel.state.customState = {
+        agentType: 'codex', initialCommand: 'codex --yolo', initialInputMode: 'argument', initialInput: 'Task',
+      };
+      const { manager, handle } = await startTerminal(panel);
+      const filePath = path.join(tempDir, 'expected.json');
+      tracker = new ExpectedReportTracker({ journal, filePath,
+        lastReportAt: () => undefined, lastOutput: async () => undefined,
+        subscribeDelivery: listener => {
+          manager.on('initial-input-delivery', listener);
+          return () => { manager.off('initial-input-delivery', listener); };
+        },
+      });
+      tracker.arm(panel.id, new Date().toISOString(), true);
+      // Reservation succeeds; activation cannot replace the expectation file.
+      fs.unlinkSync(filePath);
+      fs.mkdirSync(filePath);
+      handle.emit('$ ');
+      await vi.advanceTimersByTimeAsync(500);
+      if (mode === 'typed') emitOpenCodeIdleFrame(handle);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      if (mode === 'typed') expect(handle.written).toContain('Task');
+      else expect(handle.written).toEqual([]);
+      expect(handle.written).not.toContain('\r');
+      expect(databaseService.getPanel(panel.id)?.state.customState?.initialInputError).toMatch(/Next:.*Check permissions/);
+      expect(tracker.expectation(panel.id)).toBeUndefined();
+    } finally {
+      tracker?.dispose();
+      journal.dispose();
       vi.clearAllTimers();
       vi.useRealTimers();
     }

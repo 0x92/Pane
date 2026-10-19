@@ -111,7 +111,11 @@ export class ExpectedReportTracker {
     if (expected?.pending) {
       delete expected.pending;
       try { this.persist(true); }
-      catch (error) { expected.pending = true; throw error; }
+      catch (error) {
+        // Activation failed before submit/launch; the caller must inspect and retry.
+        this.clear(panelId);
+        throw error;
+      }
     }
   }
 
