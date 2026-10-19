@@ -15,6 +15,7 @@ import { OrchestrationSessionStore } from './orchestrationSessionStore';
 import { sessionWorkspacePath } from './sessionWorkspace';
 import { getAppDirectory } from '../utils/appDirectory';
 import { withSessionFolderAccess } from './agents/sessionFolderAccess';
+import { reasonOf } from '../../../shared/paneError';
 
 function logsPanelState(panel: ToolPanel): LogsPanelState {
   // SAFETY: Callers first discriminate `panel.type === 'logs'`; this state is
@@ -124,16 +125,20 @@ class PanelManager {
         // SAFETY: This branch creates terminal panels; their custom state uses TerminalPanelState.
         const terminalState = customState as TerminalPanelState;
         if (!terminalState.orchestrationSessionId && !terminalState.sessionFolder) {
-          const sessions = new OrchestrationSessionStore(path.join(getAppDirectory(), 'orchestration-sessions.json')).read().sessions;
-          const session = sessions.find(item => item.associations.some(association => association.paneId === request.sessionId));
-          const folder = session && sessionWorkspacePath(session.id);
-          if (folder && fs.existsSync(folder) && fs.statSync(folder).isDirectory()) {
-            terminalState.sessionFolder = folder;
-            if (terminalState.initialCommand) {
-              const tool = withSessionFolderAccess({ title, command: terminalState.initialCommand, agent: 'claude', launchMode: terminalState.launchMode }, folder);
-              if (terminalState.launchCommand === terminalState.initialCommand) terminalState.launchCommand = tool.command;
-              terminalState.initialCommand = tool.command;
+          try {
+            const sessions = new OrchestrationSessionStore(path.join(getAppDirectory(), 'orchestration-sessions.json')).read().sessions;
+            const session = sessions.find(item => item.associations.some(association => association.paneId === request.sessionId));
+            const folder = session && sessionWorkspacePath(session.id);
+            if (folder && fs.statSync(folder, { throwIfNoEntry: false })?.isDirectory()) {
+              terminalState.sessionFolder = folder;
+              if (terminalState.initialCommand) {
+                const tool = withSessionFolderAccess({ title, command: terminalState.initialCommand, agent: 'claude', launchMode: terminalState.launchMode }, folder);
+                if (terminalState.launchCommand === terminalState.initialCommand) terminalState.launchCommand = tool.command;
+                terminalState.initialCommand = tool.command;
+              }
             }
+          } catch (error) {
+            console.warn(`[PanelManager] Could not configure Session access for terminal ${panelId}: ${reasonOf(error)}. The terminal will open without Session access; Session storage was left unchanged. Next: Check ${path.join(getAppDirectory(), 'orchestration-sessions.json')} and the associated Session folder for invalid data or unreadable paths, repair the data or permissions, then open a new terminal tab.`);
           }
         }
       }
