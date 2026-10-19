@@ -640,6 +640,11 @@ interface ElectronAPI {
     get: (force?: boolean) => Promise<IPCResponse<AgentUsageSnapshot>>;
   };
 
+  // Whether Dictate's watcher shows Pane's alerts, so Pane skips its desktop notification
+  notifications: {
+    isHandedOff: () => Promise<boolean>;
+  };
+
   // Window state queries (invoke, not event subscriptions)
   window: {
     isFocused: () => Promise<boolean>;

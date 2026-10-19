@@ -1688,7 +1688,8 @@ export function registerRunpaneHandlers(
     }, result => ({ resultCount: result.entries.length }));
   });
 
-  const watchLeases = new WorkspaceWatchLeases();
+  const watchLeases = services.workspaceWatchLeases ?? new WorkspaceWatchLeases();
+  services.workspaceWatchLeases = watchLeases;
   commandRegistry.register('runpane:workspace:wait', async (request: PaneCommandValue = {}): Promise<RunpaneWorkspaceWaitResult> => {
     return withRunpaneAction(services, 'workspace:wait', {}, async () => {
       const normalized = parseWorkspaceWaitRequest(request);
