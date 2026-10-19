@@ -85,6 +85,44 @@ describe('ExpectedReportTracker', () => {
     fs.rmSync(directory, { recursive: true });
   });
 
+  it.each(['agent.blocked', 'agent.unknown', 'panel.stopped'] as const)(
+    'keeps deferred work after restart when READY was superseded by %s', async (kind) => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-expected-state-'));
+      const journalPath = path.join(directory, 'journal.json');
+      let backgroundWork = true;
+      const options = { filePath: path.join(directory, 'expected.json'), lastReportAt: () => undefined,
+        lastOutput: async () => ({ text: 'Finished', source: 'screen' as const }),
+        backgroundWork: () => backgroundWork ? '1 shell' : undefined };
+      let journal = new WorkspaceJournal({ filePath: journalPath });
+      let tracker = new ExpectedReportTracker({ ...options, journal });
+      const since = '2026-10-15T10:00:00.000Z';
+      try {
+        tracker.arm('panel-1', since);
+        journal.appendPaneEntry('pane-1', { kind: 'agent.ready', panelId: 'panel-1', source: 'agent' });
+        journal.appendPaneEntry('pane-1', { kind, panelId: 'panel-1', source: 'agent' });
+        tracker.dispose();
+        journal.dispose();
+        backgroundWork = false;
+        journal = new WorkspaceJournal({ filePath: journalPath });
+        tracker = new ExpectedReportTracker({ ...options, journal });
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        expect(journal.readAfter(0, { kinds: ['agent.report.missing'] }).entries).toEqual([]);
+        expect(tracker.expectation('panel-1')).toEqual({ since });
+        // A later completion still owns the original expectation.
+        journal.appendPaneEntry('pane-1', { kind: 'agent.ready', panelId: 'panel-1', source: 'agent' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(journal.readAfter(0, { kinds: ['agent.report.missing'] }).entries).toEqual([
+          expect.objectContaining({ expectedSince: since, lastOutput: 'Finished', reason: 'ready' }),
+        ]);
+      } finally {
+        tracker.dispose();
+        journal.dispose();
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('journals agent.report.missing with the last reply when an expected report never came', async () => {
     const { expectations, ready, missing, settle } = setup();
     expectations.set('panel-1', { since: '2026-10-15T10:00:00.000Z' });

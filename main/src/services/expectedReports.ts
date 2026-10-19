@@ -231,7 +231,7 @@ export class ExpectedReportTracker {
     // Reconcile a crash after committing an outcome or while collecting output.
     for (const [panelId, expected] of this.expectations) {
       const entries = this.options.journal.readAfter(0, {
-        kinds: ['agent.report', 'agent.report.missing', 'agent.ready', 'agent.busy', 'panel.exited'],
+        kinds: [...STATE_CHANGES, 'agent.report.missing'],
       }, Number.MAX_SAFE_INTEGER).entries.filter(entry => entry.panelId === panelId && entry.at >= expected.since);
       const outcome = entries.find(entry => entry.kind === 'agent.report'
         || entry.kind === 'agent.report.missing' && entry.expectedSince === expected.since);
