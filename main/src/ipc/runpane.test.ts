@@ -7223,6 +7223,16 @@ describe('runpane IPC handlers', () => {
       expect(services.expectedReportTracker?.expectation(terminalPanel.id)).toBeUndefined();
     });
 
+    it('releases a create reservation when terminal setup refuses before prompt delivery', async () => {
+      const services = createServices({ workspaceJournal: new WorkspaceJournal() });
+      const registry = createRegistry(services);
+      vi.mocked(panelManager.createPanel).mockResolvedValue(terminalPanel);
+      vi.mocked(terminalPanelManager.initializeTerminal).mockRejectedValue(new Error('PTY refused'));
+      await expect(registry.invoke('runpane:panels:create', [{ paneId: session.id,
+        tool: { command: 'agent-farm run worker', initialInput: 'Task A' } }])).rejects.toThrow('PTY refused');
+      expect(services.expectedReportTracker?.expectation(terminalPanel.id)).toBeUndefined();
+    });
+
     it('keeps held create work expected through startup readiness until the prompt is delivered', async () => {
       stored = { ...terminalPanel, state: { isActive: true, customState: { initialCommand: 'agent-farm run worker' } } };
       const services = createServices({ workspaceJournal: new WorkspaceJournal() });

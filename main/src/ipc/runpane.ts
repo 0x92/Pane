@@ -2267,26 +2267,32 @@ async function createTerminalPanelForSession(
   }
 
   const panel = await panelManager.createPanel(createRequest);
-  if (options.expectReport && tool.initialInput) services.expectedReportTracker?.arm(panel.id, new Date().toISOString(), true);
-  await terminalPanelManager.initializeTerminal(panel, session.worktreePath, wslContext);
-  if (!launch) {
-    await terminalPanelManager.stageInitialCommand(panel.id, tool.command);
+  const reservation = options.expectReport && tool.initialInput
+    ? services.expectedReportTracker?.arm(panel.id, new Date().toISOString(), true) : undefined;
+  try {
+    await terminalPanelManager.initializeTerminal(panel, session.worktreePath, wslContext);
+    if (!launch) {
+      await terminalPanelManager.stageInitialCommand(panel.id, tool.command);
+    }
+
+    const readiness = waitReady
+      ? toPaneReadiness(await waitForPanel(panel, {
+        panelId: panel.id,
+        condition: 'ready',
+        timeoutMs: options.readyTimeoutMs ?? DEFAULT_PANEL_WAIT_TIMEOUT_MS,
+        intervalMs: DEFAULT_PANEL_WAIT_INTERVAL_MS,
+      }))
+      : undefined;
+
+    const initialInput = readiness
+      ? await submitCreateInitialInput(panel, tool, useArgumentDelivery, readiness, session.worktreePath)
+      : unawaitedInitialInput(panel, tool, useArgumentDelivery);
+
+    return { panel, readiness, initialInput, promptFile, warnings };
+  } catch (error) {
+    if (reservation) services.expectedReportTracker?.cancelPending(panel.id, reservation);
+    throw error;
   }
-
-  const readiness = waitReady
-    ? toPaneReadiness(await waitForPanel(panel, {
-      panelId: panel.id,
-      condition: 'ready',
-      timeoutMs: options.readyTimeoutMs ?? DEFAULT_PANEL_WAIT_TIMEOUT_MS,
-      intervalMs: DEFAULT_PANEL_WAIT_INTERVAL_MS,
-    }))
-    : undefined;
-
-  const initialInput = readiness
-    ? await submitCreateInitialInput(panel, tool, useArgumentDelivery, readiness, session.worktreePath)
-    : unawaitedInitialInput(panel, tool, useArgumentDelivery);
-
-  return { panel, readiness, initialInput, promptFile, warnings };
 }
 
 /**
