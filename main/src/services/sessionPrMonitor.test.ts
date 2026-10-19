@@ -192,6 +192,22 @@ describe('PR monitoring through the journal', () => {
     expect(closing.journal.readAfter(0, { kinds: ['pr.base_deleted', 'pr.closed'] }).entries.map(entry => entry.kind)).toEqual(['pr.base_deleted', 'pr.closed']);
   });
 
+  it.each([true, false])('delivers a retarget when the new base is deleted before closure (previous base exists: %s)', async baseRefExists => {
+    const s = setup(); s.monitor.watch('worker', url);
+    s.set({ baseRefExists }); await s.monitor.pollOnce();
+    const since = s.journal.generation;
+    s.set({ baseRefName: 'release/tuesday', baseRefExists: false, state: 'CLOSED' });
+    await s.monitor.pollOnce(); await s.monitor.pollOnce();
+    expect(s.journal.readAfter(since, { kinds: ['pr.base_changed', 'pr.base_deleted', 'pr.closed'] }).entries).toMatchObject([
+      { kind: 'pr.base_changed', base: { from: 'release/monday', to: 'release/tuesday' } },
+      { kind: 'pr.base_deleted', base: { from: 'release/monday', to: 'release/tuesday' }, reason: expect.stringContaining('The base branch release/tuesday was deleted.') },
+      { kind: 'pr.closed' },
+    ]);
+    expect(s.journal.readAfter(since, { kinds: ['pr.base_changed'] }).entries).toMatchObject([
+      { kind: 'pr.base_changed', base: { from: 'release/monday', to: 'release/tuesday' } },
+    ]);
+  });
+
   it('records the base silently for a baseline saved before base tracking', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'pane-pr-base-'));
     try {
