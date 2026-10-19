@@ -224,12 +224,12 @@ export class SessionPrMonitor {
     if (previousHead && previousHead !== pr.headRefOid) events.push(event('pr.head', 'The PR head changed. Recheck this commit and register its SHA before accepting success.'));
     // Baselines written before base tracking have no base; their first read records it silently.
     const previousBase = previous?.base;
-    if (previousBase !== undefined && previous?.baseExists !== false && !pr.baseRefExists) events.push({
-      ...event('pr.base_deleted', `The base branch ${previousBase} was deleted. GitHub may close the PR; retarget it to a live branch, rebase, and recheck CI.`),
+    if (previousBase !== undefined && previousBase !== pr.baseRefName) events.push({
+      ...event('pr.base_changed', `The base changed from ${previousBase} to ${pr.baseRefName}. Rebase onto ${pr.baseRefName}, resolve conflicts, and recheck CI.`),
       base: { from: previousBase, to: pr.baseRefName },
     });
-    else if (previousBase !== undefined && previousBase !== pr.baseRefName) events.push({
-      ...event('pr.base_changed', `The base changed from ${previousBase} to ${pr.baseRefName}. Rebase onto ${pr.baseRefName}, resolve conflicts, and recheck CI.`),
+    if (previousBase !== undefined && !pr.baseRefExists && (previous?.baseExists !== false || previousBase !== pr.baseRefName)) events.push({
+      ...event('pr.base_deleted', `The base branch ${pr.baseRefName} was deleted. GitHub may close the PR; retarget it to a live branch, rebase, and recheck CI.`),
       base: { from: previousBase, to: pr.baseRefName },
     });
     if (pr.state === 'MERGED' || pr.state === 'CLOSED') {
