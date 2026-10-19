@@ -50,6 +50,29 @@ describe('SessionInbox', () => {
     expect(reopened.list('session-b')).toEqual([]);
   });
 
+  it('replays committed events after a failed inbox write without resurrecting acknowledgements', () => {
+    const journalPath = path.join(directory, 'journal.json');
+    journal = new WorkspaceJournal({ filePath: journalPath });
+    let inbox = open();
+    journal.append(entry('agent.report', 'pane-1', { report: { state: 'done', summary: 'A done', reportedAt: '2026-10-15T10:00:00.000Z' } }));
+    const [handled] = inbox.list('session-a');
+    inbox.ack([handled.id], 'session-a');
+    fs.renameSync(filePath, filePath + '.saved');
+    fs.mkdirSync(filePath);
+    journal.append(entry('agent.report', 'pane-2', { report: { state: 'done', summary: 'B done', reportedAt: '2026-10-15T10:01:00.000Z' } }));
+    const [pending] = inbox.list('session-a');
+    expect(() => inbox.ack([pending.id], 'session-a')).toThrow(/remain unacknowledged/);
+    inbox.dispose();
+    journal.dispose();
+    fs.rmdirSync(filePath);
+    fs.renameSync(filePath + '.saved', filePath);
+    journal = new WorkspaceJournal({ filePath: journalPath });
+    inbox = open();
+    expect(inbox.list('session-a')).toEqual([expect.objectContaining({ id: pending.id, report: expect.objectContaining({ summary: 'B done' }) })]);
+    inbox.dispose();
+    journal.dispose();
+  });
+
   it('replaces a missing report with the report that follows it', () => {
     const inbox = open();
     journal.append(entry('agent.report.missing'));

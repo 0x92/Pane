@@ -41,7 +41,7 @@ import {
 import { sharedEmulatorThread, type RemoteTerminalEmulator, type TerminalEmulatorHostConnection } from './terminalEmulatorClient';
 import type { ScreenState } from './terminalEmulatorHost';
 import { AgentStatusMonitor } from './agentStatus/agentStatusMonitor';
-import { blockedScreenLines, detectAgentState } from './agentStatus/manifestEngine';
+import { blockedPromptKey, blockedScreenLines, detectAgentState } from './agentStatus/manifestEngine';
 import { getManifestForAgent } from './agentStatus/manifests';
 import type { AgentDetectionResult, AgentState, PanelAgentStatusEvent } from '../../../shared/types/agentStatus';
 import type { PaneEventArgument } from '../core/eventSink';
@@ -308,7 +308,7 @@ interface TerminalProcess {
   /** The agent showed its own working signal since it last went idle. */
   workedVisibly?: boolean;
   /** Reason sent with the last `panel:agentStatus` event. */
-  lastStatusReason?: string | null;
+  lastStatusPromptKey?: string;
   /** Last status scan, reused while the emulator pushes no new screen. */
   lastStatusScan?: { screen: ScreenState; detection: AgentDetectionResult };
   /** The CLI came up with typed initial input still to send; the status poll sends it. */
@@ -839,6 +839,7 @@ export class TerminalPanelManager extends EventEmitter {
       return;
     }
 
+    this.emit('initial-input-delivery', panelId);
     this.writeToTerminal(panelId, input.endsWith('\r') ? input : `${input}\r`);
   }
 
@@ -858,6 +859,7 @@ export class TerminalPanelManager extends EventEmitter {
     const isCodex = submitStrategy === 'codex-ctrl-enter';
     await this.waitForInputSettle(terminal, generation, isCodex ? CODEX_INPUT_SETTLE_MIN_MS : CLAUDE_INPUT_SETTLE_MIN_MS);
     if (this.terminals.get(terminal.panelId) !== terminal || terminal.destroying) return;
+    this.emit('initial-input-delivery', terminal.panelId);
     this.writeToTerminal(terminal.panelId, isCodex ? CODEX_SUBMIT_SEQUENCE : '\r');
     await new Promise(resolve => setTimeout(resolve, INPUT_OUTCOME_DELAY_MS));
     if (this.terminals.get(terminal.panelId) !== terminal || terminal.destroying) return;
@@ -1935,6 +1937,9 @@ export class TerminalPanelManager extends EventEmitter {
       const injectCommand = () => {
         if (this.terminals.get(panelId) !== terminalProcess || terminalProcess.destroying) return;
         // The launch command goes ahead of anything typed while the shell started.
+        if (launchResolution.customState.initialInputMode === 'argument' && launchResolution.customState.initialInputSentAt) {
+          this.emit('initial-input-delivery', panelId);
+        }
         this.releaseHeldInput(terminalProcess, commandToRun! + '\r');
         terminalProcess.launchCommandWrittenAt = Date.now();
 
@@ -2556,7 +2561,7 @@ export class TerminalPanelManager extends EventEmitter {
     reason: string | null,
     screenLines?: string[],
   ): void {
-    terminal.lastStatusReason = reason;
+    terminal.lastStatusPromptKey = state === 'blocked' ? blockedPromptKey(reason, screenLines) : undefined;
     const payload: PanelAgentStatusEvent = {
       panelId: terminal.panelId,
       sessionId: terminal.sessionId,
@@ -2628,7 +2633,7 @@ export class TerminalPanelManager extends EventEmitter {
         else if (
           detection.state === 'blocked'
           && this.agentStatusMonitor.getState(terminal.panelId) === 'blocked'
-          && detection.matchedRuleId !== terminal.lastStatusReason
+          && blockedPromptKey(detection.matchedRuleId, promptLines()) !== terminal.lastStatusPromptKey
         ) this.emitAgentStatus(terminal, 'blocked', detection.matchedRuleId, promptLines());
         if (
           terminal.agentType === 'opencode'

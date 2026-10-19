@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { blockedPromptKey } from './agentStatus/manifestEngine';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PaneError } from '../../../shared/paneError';
@@ -167,7 +168,7 @@ export class WorkspaceJournal implements PaneEventSink {
   /** Blocked statuses waiting out the debounce before they are journalled. */
   private readonly pendingBlocked = new Map<string, ReturnType<typeof setTimeout>>();
   /** The rule behind each journalled block, so a different prompt while blocked is journalled too. */
-  private readonly blockedReasonByPanel = new Map<string, string | null>();
+  private readonly blockedPromptByPanel = new Map<string, string>();
   private readonly blockedDebounceMs: number;
   private readonly capacity: number;
   private readonly now: () => number;
@@ -451,7 +452,7 @@ export class WorkspaceJournal implements PaneEventSink {
       this.exitedPanels.delete(panelId);
       this.stateByPanel.delete(panelId);
       this.readySinceByPanel.delete(panelId);
-      this.blockedReasonByPanel.delete(panelId);
+      this.blockedPromptByPanel.delete(panelId);
       return;
     }
     // Ending the process is not a completed agent turn. terminal:exit records
@@ -459,7 +460,7 @@ export class WorkspaceJournal implements PaneEventSink {
     if (payload.reason === 'exit' || payload.reason === 'destroyed') {
       this.stateByPanel.delete(panelId);
       this.readySinceByPanel.delete(panelId);
-      this.blockedReasonByPanel.delete(panelId);
+      this.blockedPromptByPanel.delete(panelId);
       return;
     }
     if (!this.resolvePanel?.(panelId)?.isCliPanel) return;
@@ -479,7 +480,7 @@ export class WorkspaceJournal implements PaneEventSink {
   /** A blocked status for a panel not yet journalled as blocked, or blocked on a different prompt. */
   private isNewBlock(payload: AgentStatusPayload): boolean {
     return this.stateByPanel.get(payload.panelId) !== 'blocked'
-      || this.blockedReasonByPanel.get(payload.panelId) !== (payload.reason ?? null);
+      || this.blockedPromptByPanel.get(payload.panelId) !== blockedPromptKey(payload.reason, payload.screenLines);
   }
 
   /**
@@ -529,8 +530,8 @@ export class WorkspaceJournal implements PaneEventSink {
   /** The last journalled state, and for a blocked panel the prompt it was blocked on. */
   private rememberState(payload: AgentStatusPayload): void {
     this.stateByPanel.set(payload.panelId, payload.state);
-    if (payload.state === 'blocked') this.blockedReasonByPanel.set(payload.panelId, payload.reason ?? null);
-    else this.blockedReasonByPanel.delete(payload.panelId);
+    if (payload.state === 'blocked') this.blockedPromptByPanel.set(payload.panelId, blockedPromptKey(payload.reason, payload.screenLines));
+    else this.blockedPromptByPanel.delete(payload.panelId);
   }
 
   private lookupPane(paneId: string): WorkspacePaneMetadata | undefined {

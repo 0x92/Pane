@@ -288,3 +288,9 @@ export function blockedScreenLines(
   const count = Math.min(MAX_BLOCKED_SCREEN_LINES, Math.max(MIN_BLOCKED_SCREEN_LINES, regionLineCount));
   return nonEmptyLines(input.screen).slice(-count);
 }
+
+/** Prompt identity ignores focus markers and layout whitespace, but retains the question and choices. */
+export function blockedPromptKey(reason: string | null | undefined, lines: readonly string[] = []): string {
+  return JSON.stringify([reason ?? null, lines.map(line => line.trim()
+    .replace(/^[❯›>→●○◉◯✓✔]\s*/u, '').replace(/\s+/gu, ' ').trim()).filter(Boolean)]);
+}
