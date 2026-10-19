@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { RunpaneError } from './errors';
 import fs from 'node:fs';
 import path from 'node:path';
 import { stdin as input, stdout as output } from 'node:process';
