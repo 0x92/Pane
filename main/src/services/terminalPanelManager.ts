@@ -1,6 +1,6 @@
 import { withRunpaneOnPath } from './runpaneShim';
 import { sessionRuntimePath, sessionWSLContext } from './sessionRuntime';
-import { escapeForBash } from '../utils/wslUtils';
+import { escapeForBash, windowsPathToWSLMount } from '../utils/wslUtils';
 import { validateCustomCommandResume, customResumeAgentType, effectiveCustomResume } from '../../../shared/types/customCommandResume';
 import { prepareSessionWorkspace, sessionGitCeiling } from './sessionWorkspace';
 import { OrchestrationSessionStore } from './orchestrationSessionStore';
@@ -1770,7 +1770,7 @@ export class TerminalPanelManager extends EventEmitter {
     // A Session terminal works in its folder; a worker reads the folder of the Session its Pane belongs to.
     const sessionDirectory = panelCustomState.orchestrationSessionId ? panelCustomState.orchestrationWorkspace : panelCustomState.sessionFolder;
     const sessionDirectoryEnv: Record<string, string> = {};
-    if (sessionDirectory) sessionDirectoryEnv.PANE_SESSION_DIR = sessionDirectory;
+    if (sessionDirectory) sessionDirectoryEnv.PANE_SESSION_DIR = isWSL && process.platform === 'win32' ? windowsPathToWSLMount(sessionDirectory) : sessionDirectory;
     const baseSpawnEnv = {
       ...inheritedEnv,
       ...getGitAttributionEnv(getRuntimeConfigManager().getConfig()),

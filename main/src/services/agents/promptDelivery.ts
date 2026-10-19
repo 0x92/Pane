@@ -98,6 +98,18 @@ async function worktreePromptsDirectory(worktreePath: string): Promise<{ root: s
   } catch {
     return undefined;
   }
+  // Check each repository-controlled component before mkdir/chmod can follow it.
+  // Even a link inside this checkout bypasses the lexical Git exclusion.
+  for (const component of ['.pane', WORKTREE_PROMPTS_DIRECTORY]) {
+    const candidate = path.join(top, component);
+    const stat = await fs.lstat(candidate).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (stat?.isSymbolicLink()) {
+      throw new PaneError('ERR_PROMPT_STORAGE_SYMLINK', `Cannot store the prompt: ${candidate} is a symbolic link. No prompt or attachments were written.`, 'Replace the symbolic link with a directory, then retry.');
+    }
+  }
   const current = await fs.readFile(exclude, 'utf8').catch(() => '');
   if (!current.split(/\r?\n/u).includes(WORKTREE_PROMPTS_EXCLUDE)) {
     await fs.mkdir(path.dirname(exclude), { recursive: true });
@@ -152,15 +164,20 @@ export async function writeAgentPromptFile(
 
   const attachmentDirectory = path.join(directory, name);
   await fs.mkdir(attachmentDirectory, { mode: 0o700 });
-  const used = new Set<string>();
   const attachments: string[] = [];
   for (const source of sources) {
     const base = path.basename(source);
-    let target = base;
-    for (let n = 2; used.has(target); n += 1) target = `${n}-${base}`;
-    used.add(target);
-    const copy = path.join(attachmentDirectory, target);
-    await fs.copyFile(source, copy, fs.constants.COPYFILE_EXCL);
+    let copy = path.join(attachmentDirectory, base);
+    for (let n = 2; ; n += 1) {
+      try {
+        await fs.copyFile(source, copy, fs.constants.COPYFILE_EXCL);
+        break;
+      } catch (error) {
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error;
+        // Let the destination filesystem decide name equivalence (case, Unicode).
+        copy = path.join(attachmentDirectory, `${n}-${base}`);
+      }
+    }
     await fs.chmod(copy, 0o600);
     attachments.push(copy);
   }

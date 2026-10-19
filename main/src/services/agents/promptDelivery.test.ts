@@ -108,6 +108,29 @@ describe('prompt delivery', () => {
       }
     });
 
+    it.each([['.pane', false], ['.pane/prompts', false], ['.pane', true], ['.pane/prompts', true]])('refuses symlinked %s (outside checkout: %s) without writing private material or changing the target', async (component, outside) => {
+      const worktree = gitWorktree();
+      const other = outside ? gitWorktree() : worktree;
+      const target = path.join(other, 'data');
+      fs.mkdirSync(target, { mode: 0o755 });
+      fs.mkdirSync(path.dirname(path.join(worktree, component)), { recursive: true });
+      fs.symlinkSync(target, path.join(worktree, component), 'junction');
+      const attachment = path.join(worktree, 'attachment.txt');
+      fs.writeFileSync(attachment, 'private attachment');
+      const before = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: worktree, encoding: 'utf8' });
+      const mode = fs.statSync(target).mode;
+      try {
+        await expect(writeAgentPromptFile('symlink-worker', 'private brief', { worktreePath: worktree, attachments: [attachment] }))
+          .rejects.toMatchObject({ code: 'ERR_PROMPT_STORAGE_SYMLINK' });
+        expect(fs.readdirSync(target)).toEqual([]);
+        expect(fs.statSync(target).mode).toBe(mode);
+        expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: worktree, encoding: 'utf8' })).toBe(before);
+      } finally {
+        fs.rmSync(worktree, { recursive: true, force: true });
+        if (outside) fs.rmSync(other, { recursive: true, force: true });
+      }
+    });
+
     it('falls back to the Pane directory without a worktree, outside git, or below the top of a checkout', async () => {
       const appPrompts = path.join(getAppDirectory(), 'prompts', 'pane-2');
       const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-plain-'));
