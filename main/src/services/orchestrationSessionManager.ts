@@ -242,6 +242,8 @@ export class OrchestrationSessionManager extends EventEmitter {
         : input.launchCommand ?? (fits(defaultCommand) ? defaultCommand : '');
       const customResume = sourcePanel ? sourceState?.customResume
         : input.customResume !== undefined ? input.customResume
+          // A resumed native conversation is the agent's own; no custom resume command applies.
+          : input.resume ? null
           : fits('', config.defaultSessionResume) ? config.defaultSessionResume : null;
       const agent = resolveSessionAgent(explicitAgent, launchCommand, customResume)
         ?? normalizePaneChatAgent(config.defaultOrchestratorAgent);
@@ -259,6 +261,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         agent,
         launchCommand,
         customResume,
+        resume: input.resume,
         profile: input.profile ?? this.configManager.getConfig().defaultSessionProfile ?? DEFAULT_SESSION_PROFILE,
         internalSessionId,
         panelIds: {
@@ -340,6 +343,8 @@ export class OrchestrationSessionManager extends EventEmitter {
       const agentChanging = input.agent !== undefined && input.agent !== current.agent;
       const launchCommand = input.launchCommand ?? (agentChanging ? '' : current.launchCommand);
       const customResume = input.customResume !== undefined ? input.customResume : agentChanging ? undefined : current.customResume;
+      // The resumed conversation belongs to the previous agent.
+      const resume = agentChanging ? undefined : current.resume;
       const agent = resolveSessionAgent(input.agent, launchCommand ?? '', customResume) ?? current.agent;
       const nextRecord: OrchestrationSessionRecord = {
         ...current,
@@ -349,6 +354,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         agent,
         launchCommand,
         customResume,
+        resume,
         profile: input.profile ?? current.profile,
         goal: input.goal?.trim() ?? current.goal,
         context: input.context?.trim() ?? current.context,
@@ -962,6 +968,11 @@ export class OrchestrationSessionManager extends EventEmitter {
           isCliPanel: true,
         }
       : { ...current, ...desired };
+    // A conversation the tab already has (it may have moved on since) wins over the record's resume.
+    if (!isInitialized && current?.agentSessionId && desired.agentSessionId) {
+      nextCustomState.agentSessionId = current.agentSessionId;
+      nextCustomState.hasClaudeSessionId = current.hasClaudeSessionId;
+    }
     if ((current?.agentType && current.agentType !== desired.agentType) || current?.customResume?.mode !== desired.customResume?.mode) {
       nextCustomState.customResumeStarted = undefined;
       nextCustomState.agentSessionId = undefined;
@@ -980,7 +991,8 @@ export class OrchestrationSessionManager extends EventEmitter {
       || current?.preserveLaunchCommand !== nextCustomState.preserveLaunchCommand
       || current?.agentType !== nextCustomState.agentType
       || current?.orchestrationSessionId !== nextCustomState.orchestrationSessionId
-      || current?.isCliPanel !== nextCustomState.isCliPanel;
+      || current?.isCliPanel !== nextCustomState.isCliPanel
+      || current?.agentSessionId !== nextCustomState.agentSessionId;
     if (!stateNeedsRefresh && panel.title === nextTitle) return;
     await panelManager.updatePanel(panel.id, {
       title: nextTitle,
@@ -992,10 +1004,15 @@ export class OrchestrationSessionManager extends EventEmitter {
     const command = record.launchCommand?.trim() || RUNPANE_CONTRACT.agentTemplates[record.agent].command;
     const nativeCommand = /^(?:claude|codex|cursor-agent)(?:\s|$)/.test(command) && !/[;&|\n]/.test(command);
     const resolvedAgent = launchAgent(command, record.customResume);
+    // A resumed conversation is created with its id, so even a tab repaired at startup resumes it.
+    const resumed: TerminalPanelState = {};
+    if (record.resume) resumed.agentSessionId = record.resume;
+    if (record.resume && record.agent === 'claude') resumed.hasClaudeSessionId = true;
     return {
+      ...resumed,
       initialCommand: record.launchCommand?.trim() || (record.runtime === 'wsl' ? command : this.skillCacheManager?.launchCommand(record.agent)) || command,
       customResume: record.customResume,
-      initialInput: this.firstPrompt(record),
+      initialInput: record.resume ? undefined : this.firstPrompt(record),
       initialInputMode: 'argument',
       initialInputSubmitStrategy: 'enter',
       initialInputDeliveryVersion: ORCHESTRATION_BOOTSTRAP_VERSION,
@@ -1175,6 +1192,10 @@ function validateCreateInput(input: OrchestrationSessionCreateInput): void {
   if (!input.name || input.name.trim().length === 0) throw new Error('Session name is required');
   if (input.name.length > MAX_ORCHESTRATION_TEXT_LENGTH) throw new Error('Session name is too long');
   if (input.customResume) validateCustomCommandResume(input.customResume);
+  if (input.resume !== undefined) {
+    if (!/^[A-Za-z0-9._:-]{1,200}$/.test(input.resume)) throw new Error('Session resume must be a native session id');
+    if (input.customResume) throw new Error('A Session resumes either a native session id or a custom resume command, not both');
+  }
   validateOptionalText(input.launchCommand, 'launch command');
   validateOptionalText(input.profile, 'profile');
   validateOptionalText(input.goal, 'goal');

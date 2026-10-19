@@ -656,7 +656,7 @@ describe('runpane IPC handlers', () => {
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, items: [{ ok: true, sessionId: session.id }] });
       expect(panelManager.createPanel).toHaveBeenCalledTimes(1);
       expect(panelManager.createPanel).toHaveBeenCalledWith(expect.objectContaining({
-        initialState: expect.objectContaining({ agentType: 'codex', agentSessionId: 'thread-1', initialCommand: launch ? 'codex --yolo' : undefined }),
+        initialState: expect.objectContaining({ agentType: 'codex', agentSessionId: 'thread-1', initialCommand: launch ? 'codex --yolo' : undefined, resumeDirectory: worktreePath }),
       }));
       if (!launch) {
         expect(terminalPanelManager.writeToTerminal).toHaveBeenCalledWith(terminalPanel.id, 'codex --yolo resume "thread-1"');
@@ -986,6 +986,7 @@ describe('runpane IPC handlers', () => {
       const initialState = vi.mocked(panelManager.createPanel).mock.calls[0][0].initialState;
       expect(initialState).toMatchObject({
         initialCommand: RUNPANE_CONTRACT.agentTemplates.codex.command,
+        resumeDirectory: expect.any(String),
         initialInput: 'Continue with step 2',
         initialInputSubmitStrategy: 'codex-ctrl-enter',
         agentSessionId: 'thread-1',
@@ -1220,7 +1221,9 @@ describe('runpane IPC handlers', () => {
       },
     });
     // SAFETY: The doctor result shape is asserted immediately above before its channels are inspected.
-    const daemon = (result as { daemon: { channels: string[] } }).daemon;
+    const daemon = (result as { daemon: { channels: string[]; features: string[] } }).daemon;
+    // runpane handoff carries a session only to a Pane that says create honours resume.
+    expect(daemon.features).toContain('resume-on-create');
     expect(daemon.channels).toContain('runpane:doctor');
     expect(daemon.channels).toContain('runpane:panes:rename');
     expect(daemon.channels).toContain('runpane:panes:focus');
@@ -2601,6 +2604,39 @@ describe('runpane IPC handlers', () => {
     expect((await create({ source: 'user' }, 'Have a look.')).expectedReport).toBeUndefined();
     expect((await create({})).expectedReport).toBeUndefined();
     expect(services.expectedReportTracker?.expectation('panel-farm')).toBeUndefined();
+  });
+
+  it('opens a tab that resumes a native session id, recording it as the tab\'s id', async () => {
+    vi.mocked(panelManager.createPanel).mockResolvedValue(terminalPanel);
+    await createRegistry(createServices()).invoke('runpane:panels:create', [{
+      paneId: session.id, tool: { agent: 'claude' }, resume: '0b6f2a8e-3d6c-4f0a-9a43-6c2a3f0e9d11', noFocus: true,
+    }]);
+    expect(panelManager.createPanel).toHaveBeenCalledWith(expect.objectContaining({
+      initialState: expect.objectContaining({
+        agentType: 'claude', agentSessionId: '0b6f2a8e-3d6c-4f0a-9a43-6c2a3f0e9d11', hasClaudeSessionId: true,
+      }),
+    }));
+  });
+
+  it('creates a Pane whose agent resumes a native session id', async () => {
+    const panel = { ...terminalPanel, state: { ...terminalPanel.state, customState: { agentType: 'codex' as const, agentSessionId: 'thread-7' } } };
+    vi.mocked(panelManager.createPanel).mockResolvedValue(panel);
+    vi.mocked(panelManager.getPanel).mockReturnValue(panel);
+    await createRegistry(createServices()).invoke('runpane:panes:create', [{
+      repo: { id: project.id }, panes: [{ name: 'handoff-feature', tool: { agent: 'codex' }, resume: 'thread-7' }],
+    }]);
+    expect(panelManager.createPanel).toHaveBeenCalledWith(expect.objectContaining({
+      // The resumed conversation recorded another folder; the terminal pins it with --cd so Codex does not ask which to use.
+      initialState: expect.objectContaining({ agentType: 'codex', agentSessionId: 'thread-7', initialCommand: 'codex --yolo', resumeDirectory: expect.any(String) }),
+    }));
+  });
+
+  it('rejects a resume id for a wrapper command before opening a tab', async () => {
+    vi.mocked(panelManager.createPanel).mockResolvedValue(terminalPanel);
+    await expect(createRegistry(createServices()).invoke('runpane:panels:create', [{
+      paneId: session.id, tool: { command: 'agent-farm claude', agentType: 'claude' }, resume: 'abc',
+    }])).rejects.toThrow('--resume needs a built-in agent command');
+    expect(panelManager.createPanel).not.toHaveBeenCalled();
   });
 
   it('creates a background terminal panel inside an existing pane', async () => {
