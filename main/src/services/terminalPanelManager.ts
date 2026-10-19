@@ -778,16 +778,16 @@ export class TerminalPanelManager extends EventEmitter {
       })}`);
       return this.writeInitialInput(panelId, delivery.input, submitStrategy);
     }).catch((error) => {
-      this.recordInitialInputFailure(terminal, error);
+      this.recordInitialInputFailure(terminal, error instanceof Error ? error : new Error(String(error)));
     });
   }
 
   /** Deferred delivery failures belong to the panel, never an unhandled timer or promise. */
-  private recordInitialInputFailure(terminal: TerminalProcess, error: unknown): void {
+  private recordInitialInputFailure(terminal: TerminalProcess, error: Error): void {
     const panelId = terminal.panelId;
     if (this.terminals.get(panelId) !== terminal || terminal.destroying) return;
     console.warn(`[TerminalPanelManager] Failed to send initial input for panel ${panelId}:`, error);
-    const message = error instanceof PaneError ? paneErrorText(error) : error instanceof Error ? error.message : String(error);
+    const message = error instanceof PaneError ? paneErrorText(error) : error.message;
     void this.markInitialInputError(panelId, message).catch(persistError => {
       console.warn(`[TerminalPanelManager] Could not record initial input failure for panel ${panelId}:`, persistError);
     });
@@ -1965,7 +1965,7 @@ export class TerminalPanelManager extends EventEmitter {
             this.holdInitialInput(panelId);
           }
         } catch (error) {
-          this.recordInitialInputFailure(terminalProcess, error);
+          this.recordInitialInputFailure(terminalProcess, error instanceof Error ? error : new Error(String(error)));
         }
       };
 
