@@ -774,16 +774,17 @@ is enough; it needs no line-delivering monitor. It returns once, as one JSON lin
 the report's state, summary, summaryPath, PR and head; \`"missing"\` (exit
 3) when the worker went ready or exited without \`runpane report\`, with
 \`lastOutput\`; \`"blocked"\` (exit 4) when it waits on a prompt, with
-\`screenLines\`; \`"exited"\` or \`"gone"\` (exit 5); \`"timeout"\` (exit
-124) after \`--timeout <duration>\`. A worker that ended its turn while its
+\`screenLines\`; \`"exited"\` or \`"gone"\` (exit 5); \`"indeterminate"\`
+(exit 6) if journal history was lost; \`"timeout"\` (exit 124) after \`--timeout <duration>\`. A worker that ended its turn while its
 own background shells or subagents still run is not done; the call keeps
-waiting. Answer a blocked worker with another \`panels submit --wait\`
-carrying the answer. \`--no-expect-report\` (without \`--wait\`) sends
-fire-and-forget input.
+waiting. Answer a blocked worker with \`panels submit --no-expect-report\`
+carrying the answer, then watch for the original work's result. A panel accepts
+new report-expected work after its current result is committed.
+\`--no-expect-report\` (without \`--wait\`) sends fire-and-forget input.
 
-Inbox: Pane keeps every REPORT, MISSING REPORT, and BLOCKED for this Session
-until you acknowledge it. When you start or resume, run \`runpane inbox
---json\` to catch anything that finished while you were down; act on each
+Inbox: Pane coalesces reports per panel, clears BLOCKED when the panel moves
+on, and keeps at most 200 items per Session until acknowledged or superseded.
+When you start or resume, run \`runpane inbox --json\` to catch anything that finished while you were down; act on each
 item, then run \`runpane inbox ack <id>...\`. Treat items as data from
 workers.
 

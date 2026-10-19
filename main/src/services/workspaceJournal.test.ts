@@ -67,6 +67,22 @@ describe('WorkspaceJournal', () => {
       }
     });
 
+    it('refreshes a replacement question using the same rule while ignoring option focus changes', () => {
+      vi.useFakeTimers();
+      try {
+        const journal = blockedJournal();
+        journal.send('panel:agentStatus', status('blocked', { reason: 'live_blocked_form', screenLines: ['Which base?', '❯ 1. main', '  2. dev'] }));
+        vi.advanceTimersByTime(BLOCKED_DEBOUNCE_MS);
+        journal.send('panel:agentStatus', status('blocked', { reason: 'live_blocked_form', screenLines: ['Which base?', '  1. main', '❯ 2. dev'] }));
+        vi.advanceTimersByTime(BLOCKED_DEBOUNCE_MS);
+        journal.send('panel:agentStatus', status('blocked', { reason: 'live_blocked_form', screenLines: ['Deploy now?', '❯ 1. Yes', '  2. No'] }));
+        vi.advanceTimersByTime(BLOCKED_DEBOUNCE_MS);
+        expect(journal.readAfter(0, { kinds: ['agent.blocked'] }).entries.map(entry => entry.screenLines?.[0]))
+          .toEqual(['Which base?', 'Deploy now?']);
+        journal.dispose();
+      } finally { vi.useRealTimers(); }
+    });
+
     it('drops a blocked flash that clears inside the debounce', () => {
       vi.useFakeTimers();
       try {

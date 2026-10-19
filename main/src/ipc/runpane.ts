@@ -423,6 +423,10 @@ export function registerRunpaneHandlers(
       lastReportAt: panelId => readPanelAgentReport(panelManager.getPanel(panelId))?.reportedAt,
       lastOutput: panelId => readPanelLastOutput(panelId, sessionManager),
       backgroundWork: readPanelBackgroundWork,
+      subscribeDelivery: listener => {
+        terminalPanelManager.on('initial-input-delivery', listener);
+        return () => { terminalPanelManager.off('initial-input-delivery', listener); };
+      },
       log: (message, error) => console.warn(message, error),
     });
   }
@@ -1102,13 +1106,13 @@ export function registerRunpaneHandlers(
         throw new Error(`No Pane repo found for pane ${pane.id}`);
       }
       const tool = resolveToolSpec(normalized.tool, new PathResolver(repo).environment);
-      const since = new Date().toISOString();
       const { panel, readiness, initialInput, promptFile, attachments, warnings } = await createTerminalPanelForSession(services, pane, tool, {
+        expectReport: shouldExpectReport(normalized, Boolean(tool.initialInput)),
         activate: resolvePanelCreateActivation(normalized, tool),
         waitReady: normalized.waitReady,
         readyTimeoutMs: normalized.readyTimeoutMs,
       });
-      const expectedReport = shouldExpectReport(normalized, Boolean(tool.initialInput)) ? armExpectedReport(services, panel.id, since) : undefined;
+      const expectedReport = services.expectedReportTracker?.expectation(panel.id);
 
       return {
         ok: Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness)),
@@ -1382,15 +1386,19 @@ export function registerRunpaneHandlers(
       }
       if (normalized.source === 'user') getMobilePushSender(configManager).arm(panel.id);
       const since = new Date().toISOString();
-      const result = await submitToPanel(normalized, panel);
-      // Armed only when something was sent: a refused submission leaves no work to report on. By
-      // default only an agent's panel owes a report; a plain shell has nobody to report back. A panel
-      // launched with a command counts before Pane identifies the agent behind it (an agent-farm
-      // wrapper around Claude Code).
-      const toAgent = panelStateSummary(panel, terminalPanelManager.getTerminalSnapshot(panel.id)).agentType !== undefined
-        || panelLaunchCommand(panel) !== undefined;
-      if (result.inputBytes > 0 && shouldExpectReport(normalized, toAgent)) result.expectedReport = armExpectedReport(services, panel.id, since);
-      return result;
+      let expectedReport: TerminalExpectedReport | undefined;
+      try {
+        const result = await submitToPanel(normalized, panel, screen => {
+          const toAgent = screen.state.agentType !== undefined || panelLaunchCommand(panel) !== undefined;
+          if (shouldExpectReport(normalized, toAgent)) expectedReport = services.expectedReportTracker?.arm(panel.id, since, true);
+        }, () => { if (expectedReport) services.expectedReportTracker?.delivered(panel.id); });
+        if (result.inputBytes === 0 && expectedReport) services.expectedReportTracker?.cancelPending(panel.id, expectedReport);
+        else if (expectedReport) result.expectedReport = { since: expectedReport.since };
+        return result;
+      } catch (error) {
+        if (expectedReport) services.expectedReportTracker?.cancelPending(panel.id, expectedReport);
+        throw error;
+      }
     }, result => ({
       paneId: result.paneId,
       panelId: result.panelId,
@@ -1398,7 +1406,7 @@ export function registerRunpaneHandlers(
     }));
   });
 
-  async function submitToPanel(normalized: RunpanePanelSubmitRequest, panel: ToolPanel): Promise<RunpanePanelSubmitResult> {
+  async function submitToPanel(normalized: RunpanePanelSubmitRequest, panel: ToolPanel, reserve: (screen: RunpanePanelScreenResult) => void, beforeDelivery: () => void): Promise<RunpanePanelSubmitResult> {
     const blocked = (message: string): RunpanePanelSubmitResult => ({
       ok: false, panelId: panel.id, paneId: panel.sessionId, inputBytes: 0,
       enter: 'cr', sequenceName: 'enter-cr', verifiedSubmitted: false,
@@ -1409,6 +1417,7 @@ export function registerRunpaneHandlers(
     if (normalized.interrupt && !normalized.input.trim()) return blocked('An interrupt submission needs replacement text; no input was sent.');
 
     let beforeScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
+    reserve(beforeScreen);
     const wslContext = sessionWslContext(services, panel.sessionId);
     const pointer = normalized.asFilePointer
       ? await writeAgentPromptFile(panel.sessionId, stripTrailingNewlines(normalizePromptNewlines(normalized.input)), {
@@ -1447,6 +1456,7 @@ export function registerRunpaneHandlers(
       if (agentType === 'cursor') {
         const generation = terminalPanelManager.getOutputGeneration(panel.id);
         const input = ensureSubmitEnter(stagedInput);
+        beforeDelivery();
         terminalPanelManager.writeToTerminal(panel.id, input);
         const screen = await waitForPanelScreen(panel, current =>
           panelHasFreshOutputSince(panel.id, generation) &&
@@ -1487,7 +1497,7 @@ export function registerRunpaneHandlers(
       const submission = await submitComposerForPanel(panel, normalized.interrupt ? 'enter' : 'auto', {
         cwd: sessionManager.getSession(panel.sessionId)?.worktreePath,
         text: stagedInput,
-      });
+      }, beforeDelivery);
       return {
         ok: normalized.interrupt ? submission.delivery?.state === 'taken' : submission.ok,
         panelId: panel.id,
@@ -1537,6 +1547,7 @@ export function registerRunpaneHandlers(
       : undefined;
     const probe = probeBase ? { ...probeBase, sentAtMs: Date.now() } : undefined;
     const outputGenerationBeforeWrite = terminalPanelManager.getOutputGeneration(panel.id);
+    beforeDelivery();
     terminalPanelManager.writeToTerminal(panel.id, input);
     const verification = probe
       ? await verifyComposerSubmitted(panel, beforeScreen, outputGenerationBeforeWrite, probe)
@@ -2082,11 +2093,6 @@ function shouldExpectReport(request: { expectReport?: boolean; source?: 'user' |
   return carriesWork && request.source !== 'user';
 }
 
-/** Records that the sender of a panel's work waits for a `runpane report` from it. */
-function armExpectedReport(services: AppServices, panelId: string, since: string): TerminalExpectedReport | undefined {
-  return services.expectedReportTracker?.arm(panelId, since);
-}
-
 /**
  * The agent's last reply from its transcript, bounded to `limit` characters (the tail is kept).
  * Without a transcript this reports `transcript-unavailable`; it never falls back to the screen.
@@ -2135,6 +2141,7 @@ interface PaneCreateItemOptions {
 }
 
 interface TerminalPanelCreateOptions {
+  expectReport?: boolean;
   activate?: boolean;
   waitReady?: boolean;
   readyTimeoutMs?: number;
@@ -2323,25 +2330,32 @@ async function createTerminalPanelForSession(
   }
 
   const panel = await panelManager.createPanel(createRequest);
-  await terminalPanelManager.initializeTerminal(panel, session.worktreePath, wslContext);
-  if (!launch) {
-    await terminalPanelManager.stageInitialCommand(panel.id, tool.command);
+  const reservation = options.expectReport && tool.initialInput
+    ? services.expectedReportTracker?.arm(panel.id, new Date().toISOString(), true) : undefined;
+  try {
+    await terminalPanelManager.initializeTerminal(panel, session.worktreePath, wslContext);
+    if (!launch) {
+      await terminalPanelManager.stageInitialCommand(panel.id, tool.command);
+    }
+
+    const readiness = waitReady
+      ? toPaneReadiness(await waitForPanel(panel, {
+        panelId: panel.id,
+        condition: 'ready',
+        timeoutMs: options.readyTimeoutMs ?? DEFAULT_PANEL_WAIT_TIMEOUT_MS,
+        intervalMs: DEFAULT_PANEL_WAIT_INTERVAL_MS,
+      }))
+      : undefined;
+
+    const initialInput = readiness
+      ? await submitCreateInitialInput(panel, tool, useArgumentDelivery, readiness, session.worktreePath)
+      : unawaitedInitialInput(panel, tool, useArgumentDelivery);
+
+    return { panel, readiness, initialInput, promptFile, attachments, warnings };
+  } catch (error) {
+    if (reservation) services.expectedReportTracker?.cancelPending(panel.id, reservation);
+    throw error;
   }
-
-  const readiness = waitReady
-    ? toPaneReadiness(await waitForPanel(panel, {
-      panelId: panel.id,
-      condition: 'ready',
-      timeoutMs: options.readyTimeoutMs ?? DEFAULT_PANEL_WAIT_TIMEOUT_MS,
-      intervalMs: DEFAULT_PANEL_WAIT_INTERVAL_MS,
-    }))
-    : undefined;
-
-  const initialInput = readiness
-    ? await submitCreateInitialInput(panel, tool, useArgumentDelivery, readiness, session.worktreePath)
-    : unawaitedInitialInput(panel, tool, useArgumentDelivery);
-
-  return { panel, readiness, initialInput, promptFile, attachments, warnings };
 }
 
 /**
@@ -2463,6 +2477,7 @@ async function submitCreateInitialInput(
   const agent = tool.agent ?? readiness.state.agentType;
   if (!agent) {
     // A plain terminal with no launch command: its bytes as typed, then Enter.
+    terminalPanelManager.emit('initial-input-delivery', panel.id);
     terminalPanelManager.writeToTerminal(panel.id, ensureSubmitEnter(tool.initialInput));
     return { delivered: true, submitted: true, verifiedSubmitted: false, verification: 'unverifiable', inputBytes, nextCommand: panelScreenCommand(panel.id) };
   }
@@ -2623,6 +2638,7 @@ async function submitCreateComposerInput(
     attempts = attempt;
     const beforeScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
     const outputGenerationBeforeSubmit = terminalPanelManager.getOutputGeneration(panel.id);
+    terminalPanelManager.emit('initial-input-delivery', panel.id);
     terminalPanelManager.writeToTerminal(panel.id, submit.input);
     const attemptStartedAt = Date.now();
     let retryConfirmed = false;
@@ -2774,9 +2790,9 @@ async function createPaneItem(
     if (setupPosition !== undefined) {
       void taskQueue.waitForSetup(session.id)
         .then(async () => {
-          const since = new Date().toISOString();
-          const { panel } = await createTerminalPanelForSession(services, session, tool, { activate: options.activate });
-          if (shouldExpectReport(options, Boolean(tool.initialInput))) armExpectedReport(services, panel.id, since);
+          await createTerminalPanelForSession(services, session, tool, {
+            activate: options.activate, expectReport: shouldExpectReport(options, Boolean(tool.initialInput)),
+          });
         })
         .catch(error => console.error(`[Runpane] Pane ${session.id} did not launch after queued setup:`, error));
       return {
@@ -2799,13 +2815,13 @@ async function createPaneItem(
     }
     await taskQueue.waitForSetup(session.id, Math.max(0, createDeadline - Date.now()));
 
-    const since = new Date().toISOString();
     const { panel, readiness, initialInput, promptFile, attachments, warnings } = await createTerminalPanelForSession(services, session, tool, {
+      expectReport: shouldExpectReport(options, Boolean(tool.initialInput)),
       activate: options.activate,
       waitReady: options.waitReady,
       readyTimeoutMs: options.readyTimeoutMs,
     });
-    const expectedReport = shouldExpectReport(options, Boolean(tool.initialInput)) ? armExpectedReport(services, panel.id, since) : undefined;
+    const expectedReport = services.expectedReportTracker?.expectation(panel.id);
 
     const itemOk = Boolean((!readiness || readiness.ok) && isInitialInputDelivered(initialInput, readiness));
     return {
@@ -3485,6 +3501,7 @@ async function submitComposerForPanel(
   panel: ToolPanel,
   strategy: RunpanePanelSubmitComposerStrategy | undefined,
   delivery: { cwd: string | undefined; text?: string },
+  beforeDelivery?: () => void,
 ): Promise<RunpanePanelSubmitComposerResult> {
   const beforeScreen = await buildPanelScreenResult(panel, DEFAULT_PANEL_SCREEN_LIMIT);
   const agentType = screenAgentType(beforeScreen);
@@ -3492,6 +3509,7 @@ async function submitComposerForPanel(
   const probeBase = composerDeliveryProbe(panel, delivery.cwd, agentType, delivery.text);
   const probe = probeBase ? { ...probeBase, sentAtMs: Date.now() } : undefined;
   const outputGenerationBeforeSubmit = terminalPanelManager.getOutputGeneration(panel.id);
+  beforeDelivery?.();
   terminalPanelManager.writeToTerminal(panel.id, submit.input);
   let inputBytes = Buffer.byteLength(submit.input, 'utf8');
   let verification = await verifyComposerSubmitted(panel, beforeScreen, outputGenerationBeforeSubmit, probe);
@@ -5898,6 +5916,7 @@ async function withRunpaneAction<T extends { ok: boolean }>(
   try {
     const result = await handler();
     if (generation !== undefined && !('dryRun' in result && result.dryRun === true)) {
+      if (['panes:create', 'panels:create', 'panels:submit'].includes(action)) Object.assign(result, { epoch: services.workspaceJournal?.epoch });
       Object.assign(result, { generation });
     }
     const commandOk = result.ok;

@@ -618,6 +618,8 @@ export type RunpanePaneCreateResultItem =
   | RunpanePaneCreateFailureItem;
 
 export interface RunpanePaneCreateResult {
+  /** Epoch of the pre-dispatch journal position. */
+  epoch?: string;
   ok: boolean;
   generation?: number;
   repo: RunpaneRepoSummary;
@@ -992,6 +994,8 @@ export interface RunpanePanelCreateRequest {
 }
 
 export interface RunpanePanelCreateResult {
+  /** Epoch of the pre-dispatch journal position. */
+  epoch?: string;
   ok: boolean;
   generation?: number;
   paneId: string;
@@ -1191,6 +1195,8 @@ export interface RunpaneDelivery {
 }
 
 export interface RunpanePanelSubmitResult {
+  /** Epoch of the pre-dispatch journal position. */
+  epoch?: string;
   ok: boolean;
   generation?: number;
   panelId: string;
@@ -1303,8 +1309,8 @@ export type RunpaneInboxItemKind = 'report' | 'report.missing' | 'blocked';
 
 /**
  * Something a Session's orchestrator has not acknowledged yet: a worker's report, a missing report,
- * or a question waiting on a worker's screen. Kept until `runpane inbox ack`; a blocked item also
- * goes once its panel moves on.
+ * or a question waiting on a worker's screen. Reports coalesce per panel, blockers clear when the
+ * panel moves on, and each Session keeps at most 200 items until acknowledged or superseded.
  */
 export interface RunpaneInboxItem {
   id: string;

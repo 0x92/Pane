@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { PaneError, reasonOf } from '../../../shared/paneError';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { boundary, decodeBoundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
@@ -33,7 +34,8 @@ const expectationsFileSchema = boundary.object({
   version: boundary.literal(1),
   expectations: boundary.jsonObject,
 });
-const expectationSchema = boundary.object({ since: boundary.nonEmptyString });
+const expectationSchema = boundary.object({ since: boundary.nonEmptyString, pending: boundary.optional(boundary.boolean) });
+type Expectation = TerminalExpectedReport & { pending?: boolean };
 
 export interface PanelLastOutput {
   text: string;
@@ -51,57 +53,89 @@ export interface ExpectedReportTrackerOptions {
   /** What the panel's agent still runs in the background (from its screen), if anything. */
   backgroundWork?: (panelId: string) => string | undefined;
   recheckMs?: number;
+  subscribeDelivery?: (listener: (panelId: string) => void) => () => void;
   /** False for a panel that no longer exists; its saved expectation is dropped on load. */
   panelExists?: (panelId: string) => boolean;
   log?: (message: string, error: Error) => void;
 }
 
 export class ExpectedReportTracker {
-  private readonly expectations = new Map<string, TerminalExpectedReport>();
+  private readonly expectations = new Map<string, Expectation>();
   private readonly raising = new Set<string>();
   /** Ready panels waiting for their background work to end, with the READY that started the wait. */
   private readonly waiting = new Map<string, { entry: RunpaneWorkspaceEntry; timer: ReturnType<typeof setTimeout> }>();
   private readonly unsubscribe: () => void;
   private loaded = false;
+  private disposed = false;
+  private readonly unsubscribeDelivery?: () => void;
 
   constructor(private readonly options: ExpectedReportTrackerOptions) {
     this.unsubscribe = options.journal.subscribe(entry => this.observe(entry));
+    this.ensureLoaded();
+    this.unsubscribeDelivery = options.subscribeDelivery?.(panelId => this.delivered(panelId));
   }
 
   dispose(): void {
+    this.disposed = true;
     this.unsubscribe();
+    this.unsubscribeDelivery?.();
     for (const panelId of [...this.waiting.keys()]) this.stopWaiting(panelId);
   }
 
   /** Records that the sender of the panel's work, sent at `since`, waits for a report. */
-  arm(panelId: string, since: string): TerminalExpectedReport {
+  arm(panelId: string, since: string, pending = false): TerminalExpectedReport {
     this.ensureLoaded();
-    const expected = { since };
+    if (this.expectations.has(panelId) || this.raising.has(panelId)) {
+      throw new PaneError('ERR_RUNPANE_REPORT_OUTSTANDING',
+        `Panel ${panelId} still owes a report or is collecting its missing report. No new work was sent. Wait for the current result.`,
+        'Wait for the current result before submitting more report-expected work.');
+    }
+    const expected: Expectation = pending ? { since, pending: true } : { since };
     this.expectations.set(panelId, expected);
-    this.persist();
-    return { ...expected };
+    try { this.persist(true); }
+    catch (error) { this.expectations.delete(panelId); throw error; }
+    return expected;
   }
 
   /** The report the panel's sender waits for, if any. */
   expectation(panelId: string): TerminalExpectedReport | undefined {
     this.ensureLoaded();
     const expected = this.expectations.get(panelId);
-    return expected ? { ...expected } : undefined;
+    return expected ? { since: expected.since } : undefined;
+  }
+
+  /** Activate reserved work immediately before its submit/launch write, never at startup readiness. */
+  delivered(panelId: string): void {
+    this.ensureLoaded();
+    const expected = this.expectations.get(panelId);
+    if (expected?.pending) {
+      delete expected.pending;
+      try { this.persist(true); }
+      catch (error) { expected.pending = true; throw error; }
+    }
+  }
+
+  /** Release a reservation only when the caller sent nothing. */
+  cancelPending(panelId: string, reservation: TerminalExpectedReport): void {
+    const current = this.expectations.get(panelId);
+    if (current === reservation && current.pending) this.clear(panelId);
   }
 
   private observe(entry: RunpaneWorkspaceEntry): void {
+    this.ensureLoaded();
     const panelId = entry.panelId;
     if (!panelId || entry.replay) return;
     // A new state ends a wait for background work: busy means the agent took a new turn, and its
     // next READY looks again. IDLE reminders change nothing.
     if (STATE_CHANGES.has(entry.kind)) this.stopWaiting(panelId);
     if (entry.kind === 'agent.report') {
+      if (this.expectations.get(panelId)?.pending) return;
       this.clear(panelId);
       return;
     }
     if (entry.kind !== 'agent.ready' && entry.kind !== 'panel.exited') return;
-    const expected = this.expectation(panelId);
-    if (!expected || this.raising.has(panelId)) return;
+    const expected = this.expectations.get(panelId);
+    if (!expected || this.raising.has(panelId) || (expected.pending && entry.kind !== 'panel.exited')) return;
     if (entry.kind === 'agent.ready' && this.options.backgroundWork?.(panelId)) {
       this.waitForBackground(panelId, entry);
       return;
@@ -111,18 +145,21 @@ export class ExpectedReportTracker {
 
   private raiseNow(entry: RunpaneWorkspaceEntry, panelId: string, expected: TerminalExpectedReport): void {
     // One missing report per expectation: the next dispatch arms it again.
-    this.clear(panelId);
-    if (this.fulfilled(panelId, expected)) return;
+    if (this.fulfilled(panelId, expected)) { this.clear(panelId); return; }
     this.raising.add(panelId);
     void this.raise(entry, panelId, expected)
-      .catch(error => this.options.log?.('[ExpectedReports] Could not journal a missing report', asError(error)))
+      .catch(error => {
+        this.options.log?.('[ExpectedReports] Could not journal a missing report', asError(error));
+        if (!this.disposed && this.expectations.get(panelId) === expected) this.waitForBackground(panelId, entry);
+      })
       .finally(() => this.raising.delete(panelId));
   }
 
   private async raise(entry: RunpaneWorkspaceEntry, panelId: string, expected: TerminalExpectedReport): Promise<void> {
     const output = await this.options.lastOutput(panelId).catch(() => undefined);
     // A report that landed while the output was read wins.
-    if (this.fulfilled(panelId, expected)) return;
+    if (this.disposed || this.expectations.get(panelId) !== expected) return;
+    if (this.fulfilled(panelId, expected)) { this.clear(panelId); return; }
     const missing: Parameters<WorkspaceJournal['appendPaneEntry']>[1] = {
       kind: 'agent.report.missing',
       panelId,
@@ -138,14 +175,15 @@ export class ExpectedReportTracker {
       missing.lastOutputSource = output.source;
     }
     this.options.journal.appendPaneEntry(entry.paneId, missing);
+    if (this.expectations.get(panelId) === expected) this.clear(panelId);
   }
 
   private waitForBackground(panelId: string, entry: RunpaneWorkspaceEntry): void {
     const timer = setTimeout(() => {
       this.waiting.delete(panelId);
-      const expected = this.expectation(panelId);
+      const expected = this.expectations.get(panelId);
       if (!expected || this.raising.has(panelId)) return;
-      if (this.options.backgroundWork?.(panelId)) {
+      if (entry.kind === 'agent.ready' && this.options.backgroundWork?.(panelId)) {
         this.waitForBackground(panelId, entry);
         return;
       }
@@ -186,9 +224,22 @@ export class ExpectedReportTracker {
       const details = decodeOptionalBoundary(error, boundary.object({ code: boundary.optional(boundary.string) }));
       if (details?.code !== 'ENOENT') this.options.log?.('[ExpectedReports] Ignoring an unreadable expectations file', error instanceof Error ? error : new Error(String(error)));
     }
+    // Reconcile a crash after committing an outcome or while collecting output.
+    for (const [panelId, expected] of this.expectations) {
+      const entries = this.options.journal.readAfter(0, {
+        kinds: ['agent.report', 'agent.report.missing', 'agent.ready', 'agent.busy', 'panel.exited'],
+      }, Number.MAX_SAFE_INTEGER).entries.filter(entry => entry.panelId === panelId && entry.at >= expected.since);
+      const outcome = entries.find(entry => entry.kind === 'agent.report'
+        || entry.kind === 'agent.report.missing' && entry.expectedSince === expected.since);
+      if (outcome) this.clear(panelId);
+      else {
+        const last = entries.at(-1);
+        if (last) this.observe(last);
+      }
+    }
   }
 
-  private persist(): void {
+  private persist(required = false): void {
     const filePath = this.options.filePath;
     if (!filePath) return;
     const temporaryPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
@@ -198,6 +249,9 @@ export class ExpectedReportTracker {
       fs.writeFileSync(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
       fs.renameSync(temporaryPath, filePath);
     } catch (error) {
+      if (required) throw new PaneError('ERR_RUNPANE_EXPECTATION_WRITE',
+        `Pane could not save the report expectation (${reasonOf(error)}), so the work was not delivered.`,
+        'Check permissions and available space in PANE_DIR, then retry.');
       this.options.log?.('[ExpectedReports] Could not save expectations; they stay in memory', error instanceof Error ? error : new Error(String(error)));
     } finally {
       if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);

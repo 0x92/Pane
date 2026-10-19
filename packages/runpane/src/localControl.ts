@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { RunpaneError } from './errors';
 import fs from 'node:fs';
 import path from 'node:path';
 import { stdin as input, stdout as output } from 'node:process';
@@ -316,6 +317,8 @@ interface PaneCreateFailureItem {
 }
 
 interface PaneCreateResult {
+  /** Epoch of the pre-dispatch journal position. */
+  epoch?: string;
   ok: boolean;
   generation?: number;
   repo: RepoSummary;
@@ -696,6 +699,8 @@ interface ExpectedReport {
 }
 
 interface PanelCreateResult {
+  /** Epoch of the pre-dispatch journal position. */
+  epoch?: string;
   ok: boolean;
   generation?: number;
   paneId: string;
@@ -818,6 +823,8 @@ interface PanelScreenResult {
 }
 
 interface PanelSubmitResult {
+  /** Epoch of the pre-dispatch journal position. */
+  epoch?: string;
   ok: boolean;
   generation?: number;
   panelId: string;
@@ -1453,7 +1460,6 @@ const paneCostResultSchema: BoundarySchema<PaneCostResult> = boundary.object({
 });
 export const paneCreateResultSchema: BoundarySchema<PaneCreateResult> = boundary.object({
   ok: boundary.boolean,
-  generation: boundary.optional(boundary.number),
   repo: repoSummarySchema,
   items: boundary.array(boundary.union(
     boundary.object({
@@ -1509,6 +1515,8 @@ export const paneCreateResultSchema: BoundarySchema<PaneCreateResult> = boundary
       }),
     }),
   )),
+  epoch: boundary.optional(boundary.string),
+  generation: boundary.optional(boundary.number),
 });
 const paneArchiveResultSchema: BoundarySchema<PaneArchiveResult> = boundary.union(
   boundary.object({
@@ -1665,7 +1673,6 @@ const panelResumeResultSchema: BoundarySchema<PanelResumeResult> = boundary.obje
 });
 export const panelCreateResultSchema: BoundarySchema<PanelCreateResult> = boundary.object({
   ok: boundary.boolean,
-  generation: boundary.optional(boundary.number),
   paneId: boundary.string,
   panelId: boundary.string,
   title: boundary.string,
@@ -1683,6 +1690,8 @@ export const panelCreateResultSchema: BoundarySchema<PanelCreateResult> = bounda
   warnings: promptWarningsSchema,
   expectedReport: boundary.optional(expectedReportSchema),
   nextCommand: boundary.optional(boundary.string),
+  epoch: boundary.optional(boundary.string),
+  generation: boundary.optional(boundary.number),
 });
 const panelOutputResultSchema: BoundarySchema<PanelOutputResult> = boundary.object({
   ok: boundary.literal(true),
@@ -1726,7 +1735,6 @@ export const panelScreenResultSchema: BoundarySchema<PanelScreenResult> = bounda
 });
 export const panelSubmitResultSchema: BoundarySchema<PanelSubmitResult> = boundary.object({
   ok: boundary.boolean,
-  generation: boundary.optional(boundary.number),
   panelId: boundary.string,
   paneId: boundary.optional(boundary.string),
   inputBytes: boundary.number,
@@ -1742,6 +1750,8 @@ export const panelSubmitResultSchema: BoundarySchema<PanelSubmitResult> = bounda
   warnings: promptWarningsSchema,
   expectedReport: boundary.optional(expectedReportSchema),
   nextCommand: boundary.optional(boundary.string),
+  epoch: boundary.optional(boundary.string),
+  generation: boundary.optional(boundary.number),
 });
 const panelSubmitComposerResultSchema: BoundarySchema<PanelSubmitComposerResult> = boundary.object({
   ok: boundary.boolean,
@@ -2266,7 +2276,9 @@ export async function runPrWatchCommand(parsed: ParsedArgs): Promise<number> {
   return 0;
 }
 
-export async function runWatch(parsed: ParsedArgs): Promise<number> {
+interface DispatchWatchTarget { paneId: string; panelId?: string }
+
+export async function runWatch(parsed: ParsedArgs, dispatch?: DispatchWatchTarget): Promise<number> {
   if (parsed.watchAs && parsed.watchSince !== undefined) {
     throw new Error('runpane watch accepts either --as or --since, not both.');
   }
@@ -2347,6 +2359,10 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
       return 0;
     }
     if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+      if (dispatch) {
+        printDispatchResult({ ok: false, outcome: 'timeout', ...dispatch, generation: request.since ?? 0 });
+        return 124;
+      }
       emitControlLine(formatNonEntry('_timeout', { timeoutMs: parsed.timeoutMs }, format));
       return 124;
     }
@@ -2376,7 +2392,7 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
         throw new Error('This Pane daemon does not support runpane watch --session; update Pane, or pass one --pane per Session Pane.');
       }
       if (failingCode) {
-        emitControlLine(formatNonEntry('_reconnected', { generation: result.generation }, format));
+        if (!dispatch) emitControlLine(formatNonEntry('_reconnected', { generation: result.generation }, format));
         failingCode = undefined;
       }
       if (!armed && (keepsWaiting || parsed.selfTest)) {
@@ -2390,9 +2406,25 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
       if (parsed.untilEvent) {
         // A reset restates current state; it never ends the wait. Nor does the caller's own panel.
         if (result.reset || result.dropped !== undefined) {
+          if (dispatch) {
+            printDispatchResult({ ok: false, outcome: 'indeterminate', ...dispatch, generation: result.generation,
+              reason: result.reset?.reason ?? 'history-dropped',
+              nextCommand: `runpane panels screen --panel ${dispatch.panelId ?? '<panel-id>'} --json; runpane inbox --json` });
+            return 6;
+          }
           for (const line of formatWaitResult(result, format)) emitControlLine(line);
         } else {
-          const entries = ownPanelId ? result.entries.filter(entry => entry.panelId !== ownPanelId) : result.entries;
+          if (dispatch) {
+            const entry = result.entries.find(candidate => !candidate.replay && !candidate.baseline
+              && isDispatchOutcomeKind(candidate.kind)
+              && (candidate.kind === 'pane.gone' || !dispatch.panelId || candidate.panelId === dispatch.panelId));
+            if (entry && isDispatchOutcomeKind(entry.kind)) {
+              const { outcome, exitCode } = DISPATCH_OUTCOMES[entry.kind];
+              printDispatchResult(compactDispatchResult(outcome, entry));
+              return exitCode;
+            }
+          }
+          const entries = dispatch ? [] : ownPanelId ? result.entries.filter(entry => entry.panelId !== ownPanelId) : result.entries;
           if (entries.length > 0) {
             for (const line of formatWaitResult({ ...result, entries }, format)) emitWatchLine(line);
             return 0;
@@ -2421,7 +2453,7 @@ export async function runWatch(parsed: ParsedArgs): Promise<number> {
       }
       const code = watchErrorCode(watchError);
       if (failingCode !== code || heartbeatMs > 0 && Date.now() - lastFailureAt >= heartbeatMs) {
-        emitWatchLine(formatNonEntry('_error', { code, message: watchError.message }, format));
+        if (!dispatch) emitWatchLine(formatNonEntry('_error', { code, message: watchError.message }, format));
         lastFailureAt = Date.now();
       }
       failingCode = code;
@@ -2492,6 +2524,7 @@ function isRetryableWatchError(error: Error): boolean {
 
 export async function runPanesCreate(parsed: ParsedArgs): Promise<number> {
   const request = await buildPaneCreateRequest(parsed);
+  if (parsed.waitForResult && request.panes.length !== 1) throw new RunpaneError('ERR_RUNPANE_WAIT_MULTI_PANE', 'panes create --wait accepts one Pane, but this request has several. No workers were created.', 'Create several without --wait, then dispatch each with panels submit --wait.');
   if (parsed.expectReport !== undefined) request.expectReport = parsed.expectReport;
   await confirmPaneCreate(parsed, request);
 
@@ -2501,10 +2534,13 @@ export async function runPanesCreate(parsed: ParsedArgs): Promise<number> {
   });
   if (parsed.waitForResult) {
     const [item] = result.items;
-    if (result.items.length !== 1) throw new Error('panes create --wait waits for one Pane; create several without --wait and dispatch each with panels submit --wait.');
+    if (result.items.length !== 1) {
+      printJson(result);
+      throw new RunpaneError('ERR_RUNPANE_WAIT_CREATE_RESULTS', 'Pane returned an unexpected number of creation results; the creation results are printed above.', 'Inspect the returned ids before retrying.');
+    }
     // A Pane queued behind setup has no panel yet; its first agent panel's events still name the Pane.
     if (result.ok && item && 'paneId' in item && item.paneId) {
-      return waitForDispatchResult(parsed, { paneId: item.paneId, panelId: item.panelId, since: result.generation });
+      return waitForDispatchResult(parsed, { paneId: item.paneId, panelId: item.panelId, since: result.generation, epoch: result.epoch });
     }
   }
 
@@ -2741,7 +2777,7 @@ export async function runPanelsCreate(parsed: ParsedArgs): Promise<number> {
     timeoutMs: (parsed.readyTimeoutMs ?? 30_000) + 10_000,
   });
   if (parsed.waitForResult && result.ok) {
-    return waitForDispatchResult(parsed, { paneId: result.paneId, panelId: result.panelId, since: result.generation });
+    return waitForDispatchResult(parsed, { paneId: result.paneId, panelId: result.panelId, since: result.generation, epoch: result.epoch });
   }
 
   if (parsed.json) {
@@ -3089,7 +3125,7 @@ export async function runPanelsSubmit(parsed: ParsedArgs): Promise<number> {
     paneDir: parsed.paneDir,
   });
   if (parsed.waitForResult && result.ok) {
-    return waitForDispatchResult(parsed, { paneId: result.paneId, panelId: result.panelId, since: result.generation });
+    return waitForDispatchResult(parsed, { paneId: result.paneId, panelId: result.panelId, since: result.generation, epoch: result.epoch });
   }
 
   if (parsed.json) {
@@ -3125,7 +3161,8 @@ const DISPATCH_WAIT_KINDS: DispatchOutcomeKind[] = ['agent.report', 'agent.repor
 /** What `--wait` prints (`dispatchWaitResult` in the contract). */
 interface DispatchWaitResult {
   ok: boolean;
-  outcome: (typeof DISPATCH_OUTCOMES)[DispatchOutcomeKind]['outcome'] | 'timeout';
+  outcome: (typeof DISPATCH_OUTCOMES)[DispatchOutcomeKind]['outcome'] | 'timeout' | 'indeterminate';
+  nextCommand?: string;
   paneId: string;
   paneName?: string;
   panelId?: string;
@@ -3138,9 +3175,6 @@ interface DispatchWaitResult {
   reason?: string;
   exitCode?: number;
 }
-const DISPATCH_TIMEOUT_EXIT_CODE = 124;
-/** One daemon request waits at most this long, so a dropped connection is noticed. */
-const DISPATCH_WAIT_CALL_MS = 60_000;
 
 function isDispatchOutcomeKind(kind: WorkspaceEntryKind): kind is DispatchOutcomeKind {
   return Object.hasOwn(DISPATCH_OUTCOMES, kind);
@@ -3153,40 +3187,21 @@ function isDispatchOutcomeKind(kind: WorkspaceEntryKind): kind is DispatchOutcom
  */
 async function waitForDispatchResult(
   parsed: ParsedArgs,
-  target: { paneId?: string; panelId?: string; since?: number },
+  target: { paneId?: string; panelId?: string; since?: number; epoch?: string },
 ): Promise<number> {
-  const { paneId, panelId } = target;
-  if (!paneId || target.since === undefined) {
+  if (!target.paneId || target.since === undefined) {
     throw new Error('This Pane daemon does not return a journal position, so --wait cannot follow the work. Update Pane, or use runpane watch --until-event.');
   }
-  let since = target.since;
-  const deadline = parsed.waitTimeoutMs ? Date.now() + parsed.waitTimeoutMs : undefined;
-  for (;;) {
-    const remaining = deadline === undefined ? DISPATCH_WAIT_CALL_MS : Math.max(0, deadline - Date.now());
-    if (remaining === 0) {
-      console.log(JSON.stringify({ ok: false, outcome: 'timeout', paneId, panelId, generation: since } satisfies DispatchWaitResult));
-      return DISPATCH_TIMEOUT_EXIT_CODE;
-    }
-    const timeoutMs = Math.min(DISPATCH_WAIT_CALL_MS, remaining);
-    let result: WorkspaceWaitResult;
-    try {
-      result = await invokeDaemon('runpane:workspace:wait', [{ since, timeoutMs, kinds: DISPATCH_WAIT_KINDS, paneIds: [paneId] }],
-        workspaceWaitResultSchema, { paneDir: parsed.paneDir, timeoutMs: timeoutMs + 5_000, eventInclude: [] });
-    } catch (error) {
-      // A daemon restart drops the connection; the saved journal keeps the position.
-      if (!(error instanceof Error) || !isRetryableWatchError(error)) throw error;
-      await new Promise(resolve => setTimeout(resolve, 1_000));
-      continue;
-    }
-    const entry = result.entries.find(candidate => !candidate.replay && !candidate.baseline
-      && (candidate.kind === 'pane.gone' || !panelId || candidate.panelId === panelId));
-    if (entry && isDispatchOutcomeKind(entry.kind)) {
-      const { outcome, exitCode } = DISPATCH_OUTCOMES[entry.kind];
-      console.log(JSON.stringify(compactDispatchResult(outcome, entry)));
-      return exitCode;
-    }
-    since = Math.max(since, result.generation);
-  }
+  return runWatch({ ...parsed, follow: false, untilEvent: true,
+    watchAs: undefined, watchFrom: undefined, watchSince: target.since, watchEpoch: target.epoch,
+    watchKinds: DISPATCH_WAIT_KINDS, watchPaneIds: [target.paneId],
+    sessionId: undefined, repo: undefined, includeShells: true, noHeldInput: true,
+    timeoutMs: parsed.waitTimeoutMs || undefined,
+  }, { paneId: target.paneId, panelId: target.panelId });
+}
+
+function printDispatchResult(result: DispatchWaitResult): void {
+  console.log(JSON.stringify(result));
 }
 
 /** The `--wait` result: what the orchestrator needs to act, never the transcript. */

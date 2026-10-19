@@ -36,6 +36,55 @@ describe('ExpectedReportTracker', () => {
     vi.useRealTimers();
   });
 
+  it('refuses overlapping work until output collection finishes, even if a report arrives', async () => {
+    const journal = new WorkspaceJournal();
+    let release!: (value: PanelLastOutput) => void;
+    const tracker = new ExpectedReportTracker({ journal, lastReportAt: () => undefined,
+      lastOutput: () => new Promise(resolve => { release = resolve; }) });
+    tracker.arm('panel-1', '2026-10-15T10:00:00.000Z');
+    journal.appendPaneEntry('pane-1', { kind: 'agent.ready', panelId: 'panel-1', source: 'agent' });
+    expect(() => tracker.arm('panel-1', '2026-10-15T10:01:00.000Z')).toThrow(/wait/i);
+    journal.appendPaneEntry('pane-1', { kind: 'agent.report', panelId: 'panel-1', source: 'agent' });
+    expect(() => tracker.arm('panel-1', '2026-10-15T10:01:00.000Z')).toThrow(/wait/i);
+    release({ text: 'A finished', source: 'screen' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(journal.readAfter(0, { kinds: ['agent.report.missing'] }).entries).toEqual([]);
+    expect(() => tracker.arm('panel-1', '2026-10-15T10:01:00.000Z')).not.toThrow();
+    tracker.dispose();
+  });
+
+  it('retries a failed durable missing outcome after reopening the stores', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-missing-retry-'));
+    const journalPath = path.join(directory, 'journal', 'state.json');
+    const filePath = path.join(directory, 'expected.json');
+    const options = { filePath, lastReportAt: () => undefined,
+      lastOutput: async () => ({ text: 'Finished silently', source: 'screen' as const }) };
+    let journal = new WorkspaceJournal({ filePath: journalPath });
+    let tracker = new ExpectedReportTracker({ ...options, journal });
+    tracker.arm('panel-1', '2026-10-15T10:00:00.000Z');
+    journal.appendPaneEntry('pane-1', { kind: 'agent.ready', panelId: 'panel-1', source: 'agent' });
+    // Fail the outcome's rename, after READY was committed and before output resolves.
+    fs.mkdirSync(journalPath + '.saved');
+    fs.renameSync(journalPath, path.join(journalPath + '.saved', 'state.json'));
+    fs.mkdirSync(journalPath);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(tracker.expectation('panel-1')).toEqual({ since: '2026-10-15T10:00:00.000Z' });
+    tracker.dispose();
+    journal.dispose();
+    fs.rmdirSync(journalPath);
+    fs.renameSync(path.join(journalPath + '.saved', 'state.json'), journalPath);
+    journal = new WorkspaceJournal({ filePath: journalPath });
+    tracker = new ExpectedReportTracker({ ...options, journal });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(journal.readAfter(0, { kinds: ['agent.report.missing'] }).entries).toEqual([
+      expect.objectContaining({ lastOutput: 'Finished silently', expectedSince: '2026-10-15T10:00:00.000Z' }),
+    ]);
+    expect(tracker.expectation('panel-1')).toBeUndefined();
+    tracker.dispose();
+    journal.dispose();
+    fs.rmSync(directory, { recursive: true });
+  });
+
   it('journals agent.report.missing with the last reply when an expected report never came', async () => {
     const { expectations, ready, missing, settle } = setup();
     expectations.set('panel-1', { since: '2026-10-15T10:00:00.000Z' });

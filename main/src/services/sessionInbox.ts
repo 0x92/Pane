@@ -1,6 +1,7 @@
 import fs from 'fs';
+import { PaneError, reasonOf } from '../../../shared/paneError';
 import path from 'path';
-import { randomBytes, randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { boundary, decodeBoundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
 import type { WorkspaceJournal } from './workspaceJournal';
 import type {
@@ -70,6 +71,8 @@ const itemSchema = boundary.object({
 const inboxFileSchema = boundary.object({
   version: boundary.literal(1),
   items: boundary.array(boundary.json),
+  epoch: boundary.optional(boundary.string),
+  generation: boundary.optional(boundary.number),
 });
 
 /** Which ids an acknowledgement cleared, and which matched no item. */
@@ -81,25 +84,38 @@ export interface SessionInboxAckOutcome {
 export interface SessionInboxOptions {
   /** The Sessions a Pane (and panel) belongs to, never counting a Session's own orchestrator. */
   sessionIdsFor(paneId: string, panelId: string): string[];
-  now?: () => number;
 }
 
 export class SessionInbox {
   private loaded = false;
   private items: RunpaneInboxItem[] = [];
-  private readonly now: () => number;
+  private epoch?: string;
+  private generation = 0;
   private unsubscribe?: () => void;
 
   constructor(
     private readonly filePath: string,
     private readonly options: SessionInboxOptions,
   ) {
-    this.now = options.now ?? Date.now;
+
   }
 
   /** Starts feeding the inbox from `journal`. */
   attach(journal: WorkspaceJournal): void {
     this.unsubscribe?.();
+    this.ensureLoaded();
+    if (this.epoch && this.epoch !== journal.epoch) {
+      console.warn('[SessionInbox] Journal was replaced; inbox history before the new epoch cannot be recovered.');
+      this.generation = 0;
+    }
+    this.epoch = journal.epoch;
+    const recovered = journal.readAfter(this.generation, {
+      kinds: ['agent.report', 'agent.report.missing', 'agent.blocked', ...UNBLOCKING_KINDS],
+    }, Number.MAX_SAFE_INTEGER);
+    if (recovered.dropped) console.warn(`[SessionInbox] ${recovered.dropped} journal entries expired before inbox recovery; older unprojected outcomes cannot be recovered.`);
+    for (const entry of recovered.entries) this.observe(entry);
+    this.generation = recovered.generation;
+    this.replace(this.items);
     this.unsubscribe = journal.subscribe(entry => this.observe(entry));
   }
 
@@ -122,7 +138,7 @@ export class SessionInbox {
       .filter(item => wanted.has(item.id) && (sessionId === undefined || item.sessionId === sessionId))
       .map(item => item.id);
     const cleared = new Set(acknowledged);
-    if (cleared.size > 0) this.replace(this.items.filter(item => !cleared.has(item.id)));
+    if (cleared.size > 0) this.replace(this.items.filter(item => !cleared.has(item.id)), true);
     return { acknowledged, unknown: [...wanted].filter(id => !cleared.has(id)) };
   }
 
@@ -132,9 +148,10 @@ export class SessionInbox {
   }
 
   private observe(entry: RunpaneWorkspaceEntry): void {
+    this.ensureLoaded();
+    this.generation = entry.gen;
     const panelId = entry.panelId;
     if (!panelId || entry.replay || entry.baseline) return;
-    this.ensureLoaded();
     let next = this.items;
     if (UNBLOCKING_KINDS.includes(entry.kind)) {
       next = next.filter(item => !(item.kind === 'blocked' && item.panelId === panelId));
@@ -159,10 +176,10 @@ export class SessionInbox {
     kind: RunpaneInboxItemKind,
   ): RunpaneInboxItem {
     const item: RunpaneInboxItem = {
-      id: `in-${randomBytes(4).toString('hex')}`,
+      id: `in-${createHash('sha256').update(`${this.epoch}:${entry.gen}:${sessionId}`).digest('hex').slice(0, 24)}`,
       sessionId,
       kind,
-      at: new Date(this.now()).toISOString(),
+      at: entry.at,
       paneId: entry.paneId,
       paneName: entry.paneName,
       panelId,
@@ -177,11 +194,18 @@ export class SessionInbox {
     return item;
   }
 
-  private replace(items: RunpaneInboxItem[]): void {
+  private replace(items: RunpaneInboxItem[], requireDurable = false): void {
+    const previous = this.items;
     this.items = items;
     try {
       this.persist();
     } catch (error) {
+      if (requireDurable) {
+        this.items = previous;
+        throw new PaneError('ERR_RUNPANE_INBOX_ACK_WRITE',
+          `Pane could not save the acknowledgement (${reasonOf(error)}); the inbox items remain unacknowledged.`,
+          'Check permissions and available space in PANE_DIR, then retry the acknowledgement.');
+      }
       console.warn('[SessionInbox] Could not save the inbox; it stays in memory:', error);
     }
   }
@@ -191,6 +215,8 @@ export class SessionInbox {
     this.loaded = true;
     try {
       const parsed = decodeBoundary(JSON.parse(fs.readFileSync(this.filePath, 'utf8')), inboxFileSchema);
+      this.epoch = parsed.epoch;
+      this.generation = parsed.generation ?? 0;
       this.items = parsed.items.flatMap(value => {
         const item: RunpaneInboxItem | undefined = decodeOptionalBoundary(value, itemSchema);
         return item ? [item] : [];
@@ -205,7 +231,7 @@ export class SessionInbox {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
     const temporaryPath = `${this.filePath}.tmp-${process.pid}-${randomUUID()}`;
     try {
-      fs.writeFileSync(temporaryPath, `${JSON.stringify({ version: 1, items: this.items }, null, 2)}\n`, { mode: 0o600 });
+      fs.writeFileSync(temporaryPath, `${JSON.stringify({ version: 1, items: this.items, epoch: this.epoch, generation: this.generation }, null, 2)}\n`, { mode: 0o600 });
       fs.renameSync(temporaryPath, this.filePath);
     } finally {
       if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);

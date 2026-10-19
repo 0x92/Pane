@@ -404,11 +404,11 @@ def run_pr_watch_command(parsed: Any) -> int:
     return 0
 
 
-def run_watch(parsed: Any) -> int:
+def run_watch(parsed: Any, dispatch: Optional[Dict[str, Any]] = None) -> int:
     stdout = sys.stdout
     sys.stdout = _ReaderClosedGuard(stdout)
     try:
-        return watch_until_done(parsed)
+        return watch_until_done(parsed, dispatch)
     except WatchReaderClosed:
         # End quietly, and keep the interpreter's final flush from reporting the closed pipe.
         os.dup2(os.open(os.devnull, os.O_WRONLY), stdout.fileno())
@@ -417,7 +417,7 @@ def run_watch(parsed: Any) -> int:
         sys.stdout = stdout
 
 
-def watch_until_done(parsed: Any) -> int:
+def watch_until_done(parsed: Any, dispatch: Optional[Dict[str, Any]] = None) -> int:
     if parsed.watch_as and parsed.watch_since is not None:
         raise ValueError("runpane watch accepts either --as or --since, not both.")
 
@@ -458,7 +458,7 @@ def watch_until_done(parsed: Any) -> int:
         if parsed.until_event and parsed.timeout_ms is not None else None
     )
     # --quiet drops lines that only prove liveness; --self-test still prints its WATCH OK result.
-    quiet = False
+    quiet = dispatch is not None
     request: Dict[str, Any] = {
         **optional_value("as", watch_as),
         **optional_value("since", parsed.watch_since),
@@ -501,6 +501,9 @@ def watch_until_done(parsed: Any) -> int:
                 emit_watch_non_entry("_expired", output_format, expireAfterMs=expire_after_ms)
                 return 0
             if deadline_at is not None and time.monotonic() * 1_000 >= deadline_at:
+                if dispatch:
+                    print_dispatch_result({"ok": False, "outcome": "timeout", **dispatch, "generation": request.get("since")})
+                    return 124
                 if not quiet:
                     emit_watch_non_entry("_timeout", output_format, timeoutMs=parsed.timeout_ms)
                 return 124
@@ -586,10 +589,23 @@ def watch_until_done(parsed: Any) -> int:
             if parsed.until_event:
                 # A reset restates current state; it never ends the wait. Nor does the caller's own panel.
                 if result.get("reset") or result.get("dropped") is not None:
+                    if dispatch:
+                        print_dispatch_result({"ok": False, "outcome": "indeterminate", **dispatch, "generation": result.get("generation"),
+                            "reason": (result.get("reset") or {}).get("reason") or "history-dropped",
+                            "nextCommand": f"runpane panels screen --panel {dispatch.get('panelId') or '<panel-id>'} --json; runpane inbox --json"})
+                        return 6
                     if not quiet:
                         print_workspace_wait_result(result, output_format)
                 else:
-                    entries = [
+                    if dispatch:
+                        entry = next((entry for entry in result.get("entries", [])
+                            if not entry.get("replay") and not entry.get("baseline") and entry.get("kind") in DISPATCH_OUTCOMES
+                            and (entry.get("kind") == "pane.gone" or not dispatch.get("panelId") or entry.get("panelId") == dispatch["panelId"])), None)
+                        if entry:
+                            outcome, exit_code = DISPATCH_OUTCOMES[entry["kind"]]
+                            print_dispatch_result(compact_dispatch_result(outcome, entry))
+                            return exit_code
+                    entries = [] if dispatch else [
                         entry for entry in result.get("entries", [])
                         if not own_panel_id or entry.get("panelId") != own_panel_id
                     ]
@@ -618,7 +634,7 @@ def watch_until_done(parsed: Any) -> int:
             if not keeps_waiting:
                 break
     except KeyboardInterrupt:
-        return 0
+        return 130 if dispatch else 0
 
     return 0
 
@@ -653,6 +669,9 @@ def effective_watch_heartbeat_ms(seconds: float) -> float:
 
 def run_panes_create(parsed: Any) -> int:
     request = build_pane_create_request(parsed)
+    if parsed.wait_for_result and len(request["panes"]) != 1:
+        raise PaneDaemonClientError("panes create --wait accepts one Pane, but this request has several. No workers were created.",
+            "ERR_RUNPANE_WAIT_MULTI_PANE", "Create several without --wait, then dispatch each with panels submit --wait.")
     if parsed.expect_report is not None:
         request["expectReport"] = parsed.expect_report
     confirm_pane_create(parsed, request)
@@ -665,10 +684,12 @@ def run_panes_create(parsed: Any) -> int:
     if parsed.wait_for_result:
         items = result.get("items") or []
         if len(items) != 1:
-            raise ValueError("panes create --wait waits for one Pane; create several without --wait and dispatch each with panels submit --wait.")
+            print_json(result)
+            raise PaneDaemonClientError("Pane returned an unexpected number of creation results; the creation results are printed above.",
+                "ERR_RUNPANE_WAIT_CREATE_RESULTS", "Inspect the returned ids before retrying.")
         # A Pane queued behind setup has no panel yet; its first agent panel's events still name the Pane.
         if result.get("ok") and items[0].get("paneId"):
-            return wait_for_dispatch_result(parsed, items[0].get("paneId"), items[0].get("panelId"), result.get("generation"))
+            return wait_for_dispatch_result(parsed, items[0].get("paneId"), items[0].get("panelId"), result.get("generation"), result.get("epoch"))
 
     if parsed.json:
         print_json(result)
@@ -897,7 +918,7 @@ def run_panels_create(parsed: Any) -> int:
         timeout_ms=(parsed.ready_timeout_ms or 30_000) + 10_000,
     )
     if parsed.wait_for_result and result.get("ok"):
-        return wait_for_dispatch_result(parsed, result.get("paneId"), result.get("panelId"), result.get("generation"))
+        return wait_for_dispatch_result(parsed, result.get("paneId"), result.get("panelId"), result.get("generation"), result.get("epoch"))
 
     if parsed.json:
         print_json(result)
@@ -1174,62 +1195,30 @@ DISPATCH_OUTCOMES = {
     "panel.exited": ("exited", 5),
     "pane.gone": ("gone", 5),
 }
-DISPATCH_TIMEOUT_EXIT_CODE = 124
-# One daemon request waits at most this long, so a dropped connection is noticed.
-DISPATCH_WAIT_CALL_MS = 60_000
-RETRYABLE_DISPATCH_WAIT_ERRORS = {
-    "ERR_RUNPANE_DAEMON_CLOSED",
-    "ERR_RUNPANE_DAEMON_CONNECT_FAILED",
-    "ERR_RUNPANE_DAEMON_TIMEOUT",
-    "ECONNREFUSED",
-    "ENOENT",
-}
-
-
-def wait_for_dispatch_result(parsed: Any, pane_id: Optional[str], panel_id: Optional[str], since: Optional[int]) -> int:
-    """`--wait`: block until the dispatched panel reports, misses its report, waits on a prompt, or
-    exits, then print the result as one line of JSON. `since` is the journal generation the daemon
-    took before delivering the work, so an event right after delivery is never missed."""
+def wait_for_dispatch_result(parsed: Any, pane_id: Optional[str], panel_id: Optional[str], since: Optional[int], epoch: Optional[str] = None) -> int:
+    """Dispatch adapts the existing one-shot watch reader and its cursor recovery."""
     if not pane_id or since is None:
-        raise RuntimeError(
-            "This Pane daemon does not return a journal position, so --wait cannot follow the work. "
-            "Update Pane, or use runpane watch --until-event."
-        )
-    deadline = time.monotonic() * 1_000 + parsed.wait_timeout_ms if parsed.wait_timeout_ms else None
-    try:
-        while True:
-            remaining = DISPATCH_WAIT_CALL_MS if deadline is None else max(0, deadline - time.monotonic() * 1_000)
-            if remaining == 0:
-                print(json.dumps({"ok": False, "outcome": "timeout", "paneId": pane_id, "panelId": panel_id, "generation": since}, ensure_ascii=False), flush=True)
-                return DISPATCH_TIMEOUT_EXIT_CODE
-            timeout_ms = int(min(DISPATCH_WAIT_CALL_MS, remaining))
-            try:
-                result = invoke_daemon(
-                    "runpane:workspace:wait",
-                    [{"since": since, "timeoutMs": timeout_ms, "kinds": list(DISPATCH_OUTCOMES), "paneIds": [pane_id]}],
-                    pane_dir=parsed.pane_dir,
-                    timeout_ms=timeout_ms + 5_000,
-                    event_include=[],
-                )
-            except PaneDaemonClientError as error:
-                # A daemon restart drops the connection; the saved journal keeps the position.
-                if error.code not in RETRYABLE_DISPATCH_WAIT_ERRORS:
-                    raise
-                time.sleep(1)
-                continue
-            entry = next((
-                candidate for candidate in result.get("entries") or []
-                if not candidate.get("replay") and not candidate.get("baseline")
-                and candidate.get("kind") in DISPATCH_OUTCOMES
-                and (candidate.get("kind") == "pane.gone" or not panel_id or candidate.get("panelId") == panel_id)
-            ), None)
-            if entry:
-                outcome, exit_code = DISPATCH_OUTCOMES[entry["kind"]]
-                print(json.dumps(compact_dispatch_result(outcome, entry), ensure_ascii=False), flush=True)
-                return exit_code
-            since = max(since, result.get("generation", since))
-    except KeyboardInterrupt:
-        return 130
+        raise RuntimeError("This Pane daemon does not return a journal position, so --wait cannot follow the work. Update Pane, or use runpane watch --until-event.")
+    from copy import copy
+    watch = copy(parsed)
+    watch.follow = False
+    watch.until_event = True
+    watch.watch_as = None
+    watch.watch_from = None
+    watch.watch_since = since
+    watch.watch_epoch = epoch
+    watch.watch_kinds = list(DISPATCH_OUTCOMES)
+    watch.watch_pane_ids = [pane_id]
+    watch.session_id = None
+    watch.repo = None
+    watch.include_shells = True
+    watch.no_held_input = True
+    watch.timeout_ms = parsed.wait_timeout_ms or None
+    return run_watch(watch, {"paneId": pane_id, **optional_value("panelId", panel_id)})
+
+
+def print_dispatch_result(result: Dict[str, Any]) -> None:
+    print(json.dumps(result, ensure_ascii=False), flush=True)
 
 
 def compact_dispatch_result(outcome: str, entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -1271,7 +1260,7 @@ def run_panels_submit(parsed: Any) -> int:
     confirm_panel_input(parsed, request, "submit")
     result = invoke_daemon("runpane:panels:submit", [request], pane_dir=parsed.pane_dir)
     if parsed.wait_for_result and result.get("ok"):
-        return wait_for_dispatch_result(parsed, result.get("paneId"), result.get("panelId"), result.get("generation"))
+        return wait_for_dispatch_result(parsed, result.get("paneId"), result.get("panelId"), result.get("generation"), result.get("epoch"))
 
     if parsed.json:
         print_json(result)
