@@ -19,6 +19,32 @@ function partial<Contract>(value: Partial<Contract>): Contract {
 afterEach(() => vi.restoreAllMocks());
 
 describe('desktop worker Session access', () => {
+  it.each(['{broken-json', '{"version":1,"sessions":[{}]}', null])('opens an unassociated terminal when Session storage is invalid or unreadable: %s', async contents => {
+    const paneId = `unassociated-${contents?.length ?? 'unreadable'}`;
+    databaseService.createSession({ id: paneId, name: paneId, initial_prompt: '', worktree_name: paneId, worktree_path: '/tmp/worker', project_id: null, tool_type: 'none' });
+    const registry = new PaneCommandRegistry();
+    registerPanelHandlers(partial<IpcMain>({ handle: vi.fn() }), partial<AppServices>({}), registry);
+    const storePath = path.join(getAppDirectory(), 'orchestration-sessions.json');
+    const previous = fs.existsSync(storePath) ? fs.readFileSync(storePath) : undefined;
+    if (contents === null) {
+      fs.rmSync(storePath, { force: true });
+      fs.mkdirSync(storePath);
+    } else fs.writeFileSync(storePath, contents);
+    try {
+      const result = await registry.invoke('panels:create', [{ sessionId: paneId, type: 'terminal' }]);
+      expect(result).toMatchObject({ success: true, data: { sessionId: paneId, type: 'terminal' } });
+      // SAFETY: Successful panels:create returns a ToolPanel.
+      const panel = (result as { data: ToolPanel }).data;
+      expect(panel.state.customState).not.toHaveProperty('sessionFolder');
+      if (contents === null) expect(fs.statSync(storePath).isDirectory()).toBe(true);
+      else expect(fs.readFileSync(storePath, 'utf8')).toBe(contents);
+      await expect(registry.invoke('panels:list', [paneId])).resolves.toMatchObject({ success: true, data: [expect.objectContaining({ id: panel.id })] });
+    } finally {
+      fs.rmSync(storePath, { recursive: true, force: true });
+      if (previous) fs.writeFileSync(storePath, previous);
+    }
+  });
+
   it('grants Session access only to tabs created after association, including plain shells', async () => {
     const paneId = 'desktop-worker';
     databaseService.createSession({ id: paneId, name: paneId, initial_prompt: '', worktree_name: paneId, worktree_path: '/tmp/worker', project_id: null, tool_type: 'none' });
