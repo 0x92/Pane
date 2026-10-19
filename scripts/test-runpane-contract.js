@@ -856,7 +856,7 @@ function scriptedWatch(responses, requests) {
 /** `panels submit --wait`: deliver, then follow the journal from the daemon's pre-delivery position, on that panel only. */
 async function checkDispatchWait() {
   const submitted = {
-    ok: true, generation: 10, panelId: 'panel-2', paneId: 'pane-1', inputBytes: 7, enter: 'cr', sequenceName: 'enter-cr',
+    ok: true, epoch: 'dispatch-epoch', generation: 10, panelId: 'panel-2', paneId: 'pane-1', inputBytes: 7, enter: 'cr', sequenceName: 'enter-cr',
     verifiedSubmitted: true, sentAt: '2026-10-16T19:00:00.000Z', expectedReport: { since: '2026-10-16T19:00:00.000Z' },
   };
   const at = '2026-10-16T19:01:00.000Z';
@@ -891,6 +891,8 @@ async function checkDispatchWait() {
       assert.strictEqual(requests[0].expectReport, true, `${runtime} --wait turns the expected report on`);
       const waits = requests.filter(request => request.channel === 'runpane:workspace:wait');
       assert.deepStrictEqual(waits.map(request => request.since), [10, 11], `${runtime} follows from the pre-delivery generation`);
+      assert.strictEqual(waits[0].epoch, 'dispatch-epoch');
+      assert.strictEqual(waits[1].epoch, 'test-epoch');
       assert.deepStrictEqual(waits[0].paneIds, ['pane-1']);
       assert.deepStrictEqual(waits[0].kinds, ['agent.report', 'agent.report.missing', 'agent.blocked', 'panel.exited', 'pane.gone']);
 
@@ -905,6 +907,29 @@ async function checkDispatchWait() {
         () => runCliOnce(runtime, [...dispatch, '--timeout', '1s'], paneDir));
       assert.strictEqual(run.code, 124, `${runtime} --wait --timeout exits 124. stdout=${run.stdout} stderr=${run.stderr}`);
       assert.strictEqual(JSON.parse(run.stdout).outcome, 'timeout');
+
+      for (const reset of ['cursor-truncated', 'epoch-changed']) {
+        requests = [];
+        run = await withFakeDaemon(paneDir, daemon([{ result: {
+          ...watchResult(20), reset: { reason: reset }, dropped: reset === 'cursor-truncated' ? 4 : undefined,
+          entries: [{ ...report, replay: true }],
+        } }], requests), () => runCliOnce(runtime, [...dispatch, '--timeout', '1s'], paneDir));
+        assert.strictEqual(run.code, 6, `${runtime} reports lost history without accepting replay or timing out: ${run.stdout} ${run.stderr}`);
+        assert.strictEqual(JSON.parse(run.stdout).outcome, 'indeterminate');
+        assert.match(JSON.parse(run.stdout).nextCommand, /inbox|screen/);
+        assert.strictEqual(requests.filter(request => request.channel === 'runpane:workspace:wait').length, 1);
+      }
+      requests = [];
+      const multiPaneFile = path.join(paneDir, 'multi.json');
+      fs.writeFileSync(multiPaneFile, JSON.stringify({ repo: 'active', panes: [
+        { name: 'one', tool: { agent: 'claude' } }, { name: 'two', tool: { agent: 'claude' } },
+      ] }));
+      run = await withFakeDaemon(paneDir, daemon([], requests), () => runCliOnce(runtime, [
+        'panes', 'create', '--from-json', multiPaneFile, '--wait', '--yes',
+      ], paneDir));
+      assert.notStrictEqual(run.code, 0);
+      assert.match(run.stderr, /accepts one Pane/);
+      assert.deepStrictEqual(requests, [], `${runtime} rejects multi-Pane wait before any daemon mutation`);
 
       for (const args of [[...dispatch, '--no-expect-report'], ['panels', 'submit', '--panel', 'panel-2', '--text', 'x', '--timeout', '1s', '--yes']]) {
         run = await runCliOnce(runtime, args, paneDir);

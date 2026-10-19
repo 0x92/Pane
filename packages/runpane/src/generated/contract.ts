@@ -4826,7 +4826,7 @@ export const RUNPANE_CONTRACT = {
       "`runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task (a new tab in the work's Pane with `--pane <id>`, or a new Pane for new work), check on it, and send it a follow-up.",
       "`runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (`panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`. It prints how many watches were waiting for the report and received it (`Delivered to 1 waiting watcher.`, `liveWatchers` in JSON). Zero means nobody was waiting right now, not that the report is lost: it stays on the panel, and a named-cursor watch receives it when it next waits.",
       "Work sent to an agent through `runpane panels create`, `panes create` (with a prompt), or `panels submit` records that the sender waits for a `runpane report`, unless the request says `--source user` (Pane's own UI does) or `--no-expect-report`; `--expect-report` asks for one anyway. Typing into a tab never does. If the agent then goes ready or its panel exits without a report, Pane journals one opt-in `agent.report.missing` entry (`MISSING REPORT <pane-name> pane <pane-id> panel <panel-id> ready|exited`) whose `lastOutput` is the agent's last transcript reply or last screen lines; it skips the `--min-interval` batch and reaches only watchers that list it in `--kinds`. While the agent's screen shows background work (Claude's `· 1 shell` footer or a running background subagent row, Codex's `background terminal running` line), Pane waits and looks again every 10 seconds instead. `agent.blocked` entries carry `screenLines`, the prompt the agent waits on, and are journalled once a panel has stayed blocked for 2 seconds.",
-      "`--wait` on `runpane panels submit`, `panels create`, and `panes create` turns the expected report on and blocks on that panel until the first `agent.report`, `agent.report.missing`, `agent.blocked`, `panel.exited`, or `pane.gone`, then prints one line of JSON (`dispatchWaitResult`): the outcome, ids, the report's state, summary, `summaryPath`, PR and head, `screenLines` for a prompt, or `lastOutput` for a missing report, never the transcript. It exits 0 for a report, 3 missing, 4 blocked, 5 exited or gone, and 124 when `--timeout <duration>` passes. It follows the journal from the position the daemon took before delivering the work, so nothing that happens right after delivery is missed. An orchestrator dispatches this way, as one background tool call, and answers a blocked panel with another `panels submit --wait`.",
+      "`--wait` on `runpane panels submit`, `panels create`, and `panes create` turns the expected report on and blocks on that panel until the first `agent.report`, `agent.report.missing`, `agent.blocked`, `panel.exited`, or `pane.gone`, then prints one line of JSON (`dispatchWaitResult`): the outcome, ids, the report's state, summary, `summaryPath`, PR and head, `screenLines` for a prompt, or `lastOutput` for a missing report, never the transcript. It exits 0 for a report, 3 missing, 4 blocked, 5 exited or gone, and 124 when `--timeout <duration>` passes. It follows the journal from the position the daemon took before delivering the work, so nothing that happens right after delivery is missed. It reuses watch --until-event and returns indeterminate (exit 6) if the journal epoch changes or retained history is lost; inspect the panel and inbox before retrying. Report-expected dispatches are serialized per panel and refused before writing while a result or missing-output collection is outstanding. Answer a blocked panel with panels submit --no-expect-report, then watch for the original result.",
       "`runpane inbox [--session <id|name>] [--json]` lists what a Session's orchestrator has not acknowledged: reports, missing reports, and on-screen questions (a question clears itself once its panel moves on). `runpane inbox ack <item-id>...` or `--all --session <id|name>` clears items. An orchestrator runs it when it starts or resumes, to catch anything that finished while it was down; Pane never injects the inbox into its turns.",
       "`runpane panels resume --panel <panel-id>` restarts a stopped terminal panel in place, keeping its panel id: an agent panel relaunches with its resume command (Claude `--resume <session>`, `codex resume <session>`, Agent Farm `agent-farm run <profile> --resume <id>` with the ID Agent Farm printed; the result's `agentSessionId` names it), the same restart the app runs when it shows the panel, without taking focus. A running panel is left alone (`action: \"already-running\"`); one whose agent exited back to its shell is stopped, and resume runs its saved command again in that shell (`action: \"resumed\"`). If that command exits at once, `--wait-ready` returns `ok: false` with `reason.code: \"command-exited\"` and the error line it printed. `--session <id|name>` or `--all-stopped` resumes every stopped agent panel in that scope, `--concurrency` at a time (default 3), then, with `--wait-ready`, waits on the resumed panels together, and returns `{ resumed, alreadyRunning, failed, notReady, items[] }` with each panel's own result, readiness, and blocker or error. After a Pane restart, or once an agent exits back to its shell, stopped panels report `running: false` (`initialized` stays true while the shell lives) in `panels list`, `panels screen`, and `panels wait` (which returns `stopped: true` instead of timing out), and `nextCommand` points at `panels resume`. `runpane watch` reports them as `panel.stopped` (`STOPPED ...`) when `--kinds` lists that kind; other consumers and `workspace state` see `agent.unknown` with `running: false`, never `agent.ready`.",
       "`runpane panels last-message --panel <panel-id>` reads a Claude or Codex agent's last reply from its transcript (up to `--limit` characters, default 20,000, keeping the end and reporting `truncated`). It never scrapes the screen: without a transcript it prints `{ ok: false, reason: \"transcript-unavailable\" }` and exits 1.",
@@ -7254,6 +7254,10 @@ export const RUNPANE_CONTRACT = {
               }
             ]
           }
+        },
+        "epoch": {
+          "type": "string",
+          "description": "Epoch of the journal position captured before dispatch; pass it with generation when waiting."
         }
       },
       "additionalProperties": false
@@ -9198,6 +9202,10 @@ export const RUNPANE_CONTRACT = {
           },
           "additionalProperties": false,
           "description": "The report Pane now waits for: set for work an agent sent, or with --expect-report."
+        },
+        "epoch": {
+          "type": "string",
+          "description": "Epoch of the journal position captured before dispatch; pass it with generation when waiting."
         }
       },
       "additionalProperties": false
@@ -10191,6 +10199,10 @@ export const RUNPANE_CONTRACT = {
           },
           "additionalProperties": false,
           "description": "The report Pane now waits for: set for work an agent sent, or with --expect-report."
+        },
+        "epoch": {
+          "type": "string",
+          "description": "Epoch of the journal position captured before dispatch; pass it with generation when waiting."
         }
       },
       "additionalProperties": false
@@ -11382,7 +11394,7 @@ export const RUNPANE_CONTRACT = {
     },
     "dispatchWaitResult": {
       "type": "object",
-      "description": "What `--wait` prints, as one line: how the dispatched work ended. Exit codes: 0 report, 3 missing, 4 blocked, 5 exited or gone, 124 timeout.",
+      "description": "What `--wait` prints, as one line: how the dispatched work ended. Exit codes: 0 report, 3 missing, 4 blocked, 5 exited or gone, 124 timeout. Exit 6 is indeterminate after journal replacement or history loss; inspect the panel and inbox before retrying.",
       "required": [
         "ok",
         "outcome"
@@ -11399,7 +11411,8 @@ export const RUNPANE_CONTRACT = {
             "blocked",
             "exited",
             "gone",
-            "timeout"
+            "timeout",
+            "indeterminate"
           ]
         },
         "paneId": {
@@ -11473,6 +11486,10 @@ export const RUNPANE_CONTRACT = {
         },
         "exitCode": {
           "type": "number"
+        },
+        "nextCommand": {
+          "type": "string",
+          "description": "Recovery command when the outcome is indeterminate."
         }
       },
       "additionalProperties": false
@@ -15844,7 +15861,7 @@ export const RUNPANE_CONTRACT = {
           "inboxListResult"
         ],
         "notes": [
-          "Items: report (agent.report), report.missing (agent.report.missing), and blocked (agent.blocked, with the prompt's screen lines). A blocked item goes by itself once its panel moves on; the others stay until `runpane inbox ack`.",
+          "Items: report (agent.report), report.missing (agent.report.missing), and blocked (agent.blocked, with the prompt's screen lines). Reports coalesce per panel, blockers clear when the panel moves on, and each Session keeps at most 200 items until acknowledged or superseded. A journal replay watermark recovers committed outcomes after restart within journal retention.",
           "A newer report replaces the panel's older report or missing report."
         ]
       },

@@ -841,20 +841,25 @@ contract) and exits:
 | `missing` | 3 | `lastOutput` and `lastOutputSource` |
 | `blocked` | 4 | `screenLines`, the prompt the worker waits on |
 | `exited`, `gone` | 5 | `exitCode` or `reason` |
+| `indeterminate` | 6 | history was lost; inspect the panel and inbox before retrying |
 | `timeout` | 124 | after `--timeout <duration>` (`30m`, `2h`) |
 
 The result never includes the transcript. The daemon stamps the result of
-every create and submit with the journal generation it read before delivering
-the work, and `--wait` follows the journal from there
-(`runpane:workspace:wait` filtered to the Pane), so an event that fires right
-after delivery can't be missed, and a daemon restart only reconnects. Like
+every create and submit with the journal generation and epoch it read before
+delivering the work. `--wait` adapts the existing `watch --until-event` reader,
+filtered to the Pane and panel. It reconnects after a daemon restart; a replaced
+or truncated journal returns an explicit indeterminate result (exit 6), since
+the task's outcome can no longer be established from that history. Like
 `--until-event`, it is a single-event wait: it delivers at once, without
 `--follow`'s settling or batching, and since it exits on the event, a plain
 background task is enough (no line-delivering monitor). Claude
 Code wakes the orchestrator when the background call exits, and the line
 arrives as the tool result. To answer a blocked worker, send the answer with
-another `panels submit --wait`, which takes a new position and arms a new
-expectation.
+`panels submit --no-expect-report`, then watch for the original work's result.
+Report-expected work is serialized per panel: a new dispatch is refused before
+writing while an expectation or missing-output collection is outstanding.
+Held starting input is reserved but does not count startup readiness as task
+completion; tracking activates immediately before the prompt's submit or launch.
 
 ### Expected reports
 
@@ -909,8 +914,13 @@ Pane keeps, per Session, what its orchestrator has not acknowledged:
 reports (`agent.report`), missing reports (`agent.report.missing`), and
 questions on screen (`agent.blocked`, with `screenLines`). It is fed from the
 journal for every Pane associated with the Session (`main/src/services/sessionInbox.ts`)
-and saved in `session-inbox.json` below `PANE_DIR`, so a dead or never-armed
-watcher cannot hide a finished worker. A newer report replaces the panel's
+and saved with a journal epoch and replay watermark in `session-inbox.json`
+below `PANE_DIR`. Restart replays committed events after the watermark, with
+stable item IDs, including a report whose inbox write failed. Acknowledgements
+and the watermark are saved together; replay does not resurrect handled items.
+Recovery is bounded by the journal's retention. If entries expired before
+projection, or the journal was replaced, Pane logs the history loss explicitly;
+already projected items remain available. A newer report replaces the panel's
 older report or missing report; a blocked item goes once its panel moves on
 (busy, ready, exited, or reported). Each Session keeps at most 200 items.
 
