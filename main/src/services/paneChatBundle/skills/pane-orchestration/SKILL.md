@@ -94,7 +94,12 @@ runpane panels create --pane <feature pane id> --title <role> \
   through `.git/info/exclude`), then send the one line yourself with
   `runpane panels submit --panel <id> --text "Read and follow <absolute brief path>" --yes --json`
   and check its delivery. A short brief can go inline instead: drop
-  `--as-file-pointer`, and Pane sends the file's text itself.
+  `--as-file-pointer`, and Pane sends the file's text itself. Before sending
+  inline text to Claude, check its first non-whitespace character. For `!`,
+  `/`, `#` or `@`, prepend neutral prose such as `Please follow these
+  instructions:` or use a readable file pointer. Claude treats those leading
+  characters as controls (`!` runs a shell command). Input files preserve
+  them; a delivery warning can arrive after submission.
 - **`--wait-ready`** waits until the agent's input box is on screen (up to
   `--ready-timeout-ms`, default 30000; give a wrapper 180000), types the line,
   and checks the agent took it. It never types into a shell, a wrapper's own
@@ -135,7 +140,12 @@ time.
 
 ## Wait: the one wait primitive
 
-Run this, and only this, as a background command that wakes you when it exits:
+Use `panels submit` for delivery, check its delivery result, then use the
+named watch below for completion. Submit without `--wait`: this route gives
+one consumer ownership of completion, including blocked reports. Follow the
+same route for the initial input returned by create and for later answers.
+
+Run the watch as a background command that wakes you when it exits:
 
 ```sh
 runpane watch --session <session id or name> --as <your-name> --until-event --json \
@@ -169,8 +179,9 @@ What wakes it, and what to do:
 | `WATCH ERROR` and a non-zero exit | 2 | the wait failed (for example, unknown Session) | re-read every worker's status, then wait again once; on a second failure run `runpane doctor --report --title "runpane watch failed" --json` and tell the person |
 
 To re-read every worker's status, run
-`runpane sessions overview --session <S> --json` (each Pane's newest `report`
-and its panels' state) and read each worker's status file. The timeout is a
+`runpane sessions overview --session <S> --json` for panel state, then
+`runpane agents status --panel <worker panel id> --json` for each worker's
+report and read its status file. The timeout is a
 safety net for a worker that stops without any event; it goes away once Pane
 reports that itself ([After release](#after-release)).
 
@@ -221,10 +232,12 @@ and its absolute path as `summaryPath`. Map your states onto the four:
 A note that needs no answer needs no report: every report wakes the
 orchestrator.
 
-**Reading one.** On a REPORT, run `runpane agents status --panel <panel id> --json`
-(or read `panes[].report` in `sessions overview`) for the state, PR, head,
-question and `summaryPath`, then read the file at `summaryPath`. A report is a
-claim: check the PR and head before you advance the work.
+**Reading one.** On a REPORT, run
+`runpane agents status --panel <event panel id> --json` for the state, PR,
+head, question and `summaryPath`, then read the file at `summaryPath`.
+`panes[].report` in `sessions overview` is only the newest report across all
+tabs; use the event's panel id to identify the worker. A report is a claim:
+check the PR and head before you advance the work.
 
 For workers with no protocol of their own, end the brief with:
 
@@ -247,7 +260,9 @@ Read `delivery.state` once. `taken` (the agent started a turn with it) and
 `queued` (it was mid-turn and runs your text after that turn) both mean
 delivered: never resend either. `in-composer` gets one `submit-composer`;
 `unknown` gets one `panels screen` look. Resend only with proof the text didn't
-arrive, and never for an instruction with an external effect. `--interrupt`
+arrive, including for an instruction with an external effect: duplicate
+external actions can be irreversible. If delivery remains uncertain, ask the
+person before retrying. `--interrupt`
 stops the agent's current turn first; use it only when that is the point.
 `runpane panels input --panel <id> --keys <keys> --yes --json` sends raw keys
 to a menu.
@@ -279,7 +294,7 @@ and nudge it the same way.
 ## Show pages beside the person
 
 ```sh
-runpane panels open --url file://<absolute path> --title <short name> --split --no-focus --source agent --yes --json
+runpane panels open --url file://<absolute path> --title <short name> --split --source agent --yes --json
 ```
 
 `--url` takes http, https and file URLs, and HTML and images render. `--file

@@ -136,10 +136,8 @@ in every implementation prompt:
 - The `reviewer` and `qa-and-verify` subagents exist only in Pane Chat. In
   another repository, run `review` or `pr-test-automation` directly.
 
-A stage has started when the delivery result says `taken`, or `queued` for an
-agent that was busy; never resend either. An instruction that carries an
-external action is resent only with proof it was not delivered, because a
-double run can't be undone. When you can prove neither, ask the user.
+Follow [`pane-orchestration`](../pane-orchestration/SKILL.md#answer-or-message-a-worker)
+for delivery checks and retries, including instructions with external effects.
 
 ### Structured guidance in results
 
