@@ -1157,6 +1157,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       invokeIpc('agent-usage:get', force),
   },
 
+  // Whether Dictate's watcher shows Pane's alerts, so Pane skips its desktop notification
+  notifications: {
+    isHandedOff: async (): Promise<boolean> => decodeBoundary(await invokeIpc('notifications:handed-off'), boundary.boolean),
+  },
+
   // Window state queries (invoke, not event subscriptions)
   window: {
     isFocused: async (): Promise<boolean> => decodeBoundary(await invokeIpc('window:is-focused'), boundary.boolean),

@@ -26,6 +26,7 @@ import { registerSpotlightHandlers } from './spotlight';
 import { registerJourneyTimingHandlers } from './journeyTimings';
 import { registerRemoteDaemonHandlers } from './remoteDaemon';
 import { registerRunpaneHandlers } from './runpane';
+import { registerDesktopAlertHandlers } from './desktopAlerts';
 import { registerClipboardHandlers } from './clipboard';
 import { registerResourceMonitorHandlers } from './resourceMonitor';
 import { registerOnboardingHandlers } from './onboarding';
@@ -111,6 +112,7 @@ export function registerIpcHandlers(services: AppServices): PaneCommandRegistry 
   registerRemoteDaemonHandlers(ipcMain, services);
   registerWorkspaceAccessHandlers(ipcMain, services, commandRegistry);
   registerRunpaneHandlers(ipcMain, services, commandRegistry);
+  registerDesktopAlertHandlers(ipcMain, services);
   registerPaneLinkHandler(commandRegistry, {
     repoExists: (repoId) => Boolean(services.databaseService.getProject(repoId)),
     navigate: (target) => {

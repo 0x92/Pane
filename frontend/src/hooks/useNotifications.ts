@@ -5,6 +5,7 @@ import { API } from '../utils/api';
 import { useConfigStore } from '../stores/configStore';
 import { ToolPanel } from '../../../shared/types/panels';
 import type { AgentState } from '../../../shared/types/agentStatus';
+import { isDesktopAlertHandedOff } from './desktopAlertHandoff';
 import { openPanelOnClick } from './notificationClick';
 
 // Extend window interface for webkit audio context compatibility
@@ -213,7 +214,10 @@ export function useNotifications() {
     const context = findPanelContext(panelId);
     if (!context) return;
 
-    fireNotification(`${context.panelName} finished`, context.body, undefined, context.panelTarget);
+    void isDesktopAlertHandedOff(window.electronAPI?.notifications?.isHandedOff).then((handedOff) => {
+      if (handedOff) return;
+      fireNotification(`${context.panelName} finished`, context.body, undefined, context.panelTarget);
+    });
   }
 
   // Fires as soon as an agent flips to blocked: it is waiting on the human, so
@@ -226,7 +230,10 @@ export function useNotifications() {
     const context = findPanelContext(panelId);
     if (!context) return;
 
-    fireNotification(`${context.panelName} needs your input`, context.body, undefined, context.panelTarget);
+    void isDesktopAlertHandedOff(window.electronAPI?.notifications?.isHandedOff).then((handedOff) => {
+      if (handedOff) return;
+      fireNotification(`${context.panelName} needs your input`, context.body, undefined, context.panelTarget);
+    });
   }
 
   // Subscribe to panelStore.agentStatus (the unified per-panel agent state) and
