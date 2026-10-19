@@ -85,6 +85,25 @@ describe('ExpectedReportTracker', () => {
     fs.rmSync(directory, { recursive: true });
   });
 
+  it.each([['panel.exited', 'exited'], ['agent.ready', 'ready']] as const)('wakes an agents-only missing-report watch for an unidentified wrapper on %s', async (kind, reason) => {
+    const { journal, tracker } = setup();
+    try {
+      tracker.arm('wrapper-1', '2026-10-15T10:00:00.000Z');
+      const waiting = journal.waitAfter(0, { agentsOnly: true, kinds: ['agent.report.missing'] }, 100);
+      journal.appendPaneEntry('pane-1', { kind, panelId: 'wrapper-1', source: 'agent' });
+
+      expect(await waiting).toMatchObject({ timedOut: false, entries: [{
+        kind: 'agent.report.missing', panelId: 'wrapper-1',
+        reason,
+        lastOutput: 'All done, PR #12 is open.',
+      }] });
+      expect(journal.readAfter(0, { agentsOnly: true }).entries.some(entry => entry.kind === 'agent.report.missing')).toBe(false);
+    } finally {
+      tracker.dispose();
+      journal.dispose();
+    }
+  });
+
   it('journals agent.report.missing with the last reply when an expected report never came', async () => {
     const { expectations, ready, missing, settle } = setup();
     expectations.set('panel-1', { since: '2026-10-15T10:00:00.000Z' });

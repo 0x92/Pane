@@ -149,10 +149,10 @@ const OPT_IN_KINDS: readonly RunpaneWorkspaceEntryKind[] = [
   'github.recovered',
 ];
 /**
- * Kinds that still pass `agentsOnly` without an agent type: Pane-level kinds, and `agent.report`,
- * which a panel only raises on purpose (a shell tab, or a wrapper launch not yet detected).
+ * Kinds that still pass `agentsOnly` without an agent type: Pane-level kinds and reports,
+ * including an expected report missing from a wrapper launch not yet detected.
  */
-const AGENTS_ONLY_EXEMPT_KINDS: readonly RunpaneWorkspaceEntryKind[] = ['pane.created', 'pane.gone', 'agent.report', ...OPT_IN_KINDS];
+const AGENTS_ONLY_EXEMPT_KINDS: readonly RunpaneWorkspaceEntryKind[] = ['pane.created', 'pane.gone', 'agent.report', ...EXPLICIT_ONLY_KINDS, ...OPT_IN_KINDS];
 /**
  * Agent-state kinds are only journalled for agent panels, so they pass `agentsOnly` without an
  * agent type: a wrapper launch (`agent-farm run`) whose agent Pane has not identified yet.
