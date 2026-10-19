@@ -252,6 +252,8 @@ interface PaneCreateItem {
   sessionPrompt?: string;
   pinned?: boolean;
   tool: PaneToolSpec;
+  /** A native session id the new Pane's agent resumes, as panes adopt --resume. */
+  resume?: string;
 }
 
 type PaneToolSpec =
@@ -676,6 +678,8 @@ interface PanelCreateRequest {
   paneId: string;
   type?: 'terminal';
   tool: PaneToolSpec;
+  /** A native session id the new tab resumes, as panes adopt --resume. */
+  resume?: string;
   noFocus?: boolean;
   focus?: boolean;
   source?: 'user' | 'agent';
