@@ -902,6 +902,20 @@ async function checkDispatchWait() {
       assert.strictEqual(run.code, 0, `${runtime} --wait exits 0 for a report. stderr=${run.stderr}`);
       assert.deepStrictEqual(JSON.parse(run.stdout).report, { state: 'done', pr: 7, head: 'abc1234', summary: 'Shipped.', summaryPath: '/tmp/s.md' });
 
+      // Dispatch promises one JSON record even when its watch reconnects.
+      for (const flags of [[], ['--json']]) {
+        requests = [];
+        run = await withFakeDaemon(paneDir, daemon([
+          { destroy: true },
+          { result: { ...watchResult(12), timedOut: false, entries: [report] } },
+        ], requests), () => runCliOnce(runtime, [...dispatch, ...flags], paneDir));
+        assert.strictEqual(run.code, 0, `${runtime} reconnects dispatch successfully: ${run.stderr}`);
+        assert.strictEqual(lf(run.stdout).split('\n').filter(Boolean).length, 1,
+          `${runtime} reconnect diagnostics must not pollute the single dispatch result: ${run.stdout}`);
+        assert.strictEqual(JSON.parse(run.stdout).outcome, 'report');
+        assert.strictEqual(requests.filter(request => request.channel === 'runpane:workspace:wait').length, 2);
+      }
+
       requests = [];
       run = await withFakeDaemon(paneDir, daemon([{ result: { ...watchResult(10), timedOut: true }, delayMs: 50 }], requests),
         () => runCliOnce(runtime, [...dispatch, '--timeout', '1s'], paneDir));
