@@ -904,8 +904,9 @@ and the report is the signal.
 
 ### Dispatching with `--wait`
 
-An orchestrator dispatches a worker with one background tool call that
-returns the worker's result:
+The [orchestrator guide](#orchestrator-guide) prescribes submission without
+`--wait`, followed by its named watch as the completion consumer. The CLI also
+offers an optional per-dispatch result for callers choosing that route instead:
 
 ```text
 runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --wait --yes

@@ -758,26 +758,12 @@ What each line means under follow (the JSON \`kind\` is in parentheses):
 - Other lines arrive together, at most one batch every 10 minutes (2
   minutes).
 
-Dispatch each worker with one background tool call that returns its result:
-
-    runpane panels submit --panel <panel-id> --input-file <prompt-file> --as-file-pointer --wait --yes
-
-(\`panels create\` and \`panes create\` with a prompt take \`--wait\` too). Run
-it in the background (Claude Code: Bash with run_in_background), so you are
-woken when it exits and its output arrives as the tool result, never in your
-chat. Like \`--until-event\`, it is a single-event wait: it delivers at once,
-without follow's settling or batching, and because it exits, backgrounding it
-is enough; it needs no line-delivering monitor. It returns once, as one JSON line: \`outcome: "report"\` (exit 0) with
-the report's state, summary, summaryPath, PR and head; \`"missing"\` (exit
-3) when the worker went ready or exited without \`runpane report\`, with
-\`lastOutput\`; \`"blocked"\` (exit 4) when it waits on a prompt, with
-\`screenLines\`; \`"exited"\` or \`"gone"\` (exit 5); \`"indeterminate"\`
-(exit 6) if journal history was lost; \`"timeout"\` (exit 124) after \`--timeout <duration>\`. A worker that ended its turn while its
-own background shells or subagents still run is not done; the call keeps
-waiting. Answer a blocked worker with \`panels submit --no-expect-report\`
-carrying the answer, then watch for the original work's result. A panel accepts
-new report-expected work after its current result is committed.
-\`--no-expect-report\` (without \`--wait\`) sends fire-and-forget input.
+For worker dispatch, delivery checks and completion waits, follow
+\`pane-orchestration\` (Wait: the one wait primitive). Submit without
+\`--wait\`, then use its named \`watch --until-event\` command. That watch
+owns completion handling, including blocked reports. The optional CLI
+\`--wait\` result contract is documented in \`agent-context\`; do not add
+it as a second consumer for this route.
 
 Inbox: Pane coalesces reports per panel, clears BLOCKED when the panel moves
 on, and keeps at most 200 items per Session until acknowledged or superseded.
