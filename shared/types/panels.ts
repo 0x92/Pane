@@ -112,6 +112,12 @@ export interface TerminalPanelState {
   orchestrationSessionId?: string;
   /** Session-owned working directory, also used by legacy shared terminal owners. */
   orchestrationWorkspace?: string;
+  /**
+   * The folder a resumed Codex conversation is pinned to with `--cd`, because the
+   * conversation was recorded in another checkout or machine. Quoted for the
+   * terminal's own shell at launch.
+   */
+  resumeDirectory?: string;
   /** Applied when the terminal next starts, not while its agent is running. */
   orchestrationProfile?: string;
   /** Folder of the Session this worker's Pane belongs to, as the agent sees it; exported as PANE_SESSION_DIR. */
