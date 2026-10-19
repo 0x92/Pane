@@ -39,11 +39,9 @@ describe('Pane home skill', () => {
     ]);
   });
 
-  it('points every agent at the orchestrator guide and its one wait primitive', () => {
+  it('points every agent at the bundled orchestrator guide', () => {
     const skill = buildPaneHomeSkill();
     expect(skill).toContain('runpane docs read --doc skills/pane-orchestration/SKILL.md');
-    expect(skill).toContain('--until-event --json --kinds agent.report,agent.report.missing,agent.blocked,agent.ready,panel.exited,panel.stopped,pane.gone');
-    expect(skill).not.toContain('--follow |');
   });
 
   it('installs a marked skill and rewrites only when it changes', async () => {

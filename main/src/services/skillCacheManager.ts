@@ -633,11 +633,8 @@ delivery, handling external text, PR readiness, and reporting.
 
 When delegating, name the stage, the relevant artifact, and the skills to use.
 
-Dispatch a long prompt (more than a few lines) as a one-line pointer: write
-the full prompt to a file under the Pane data directory, outside the
-worktree, and submit only \`Read and follow <absolute-path-to-prompt-file>\`.
-A single short line can't be cut off or mangled on its way into the
-composer, and the file keeps a record of what you asked.
+Follow \`pane-orchestration\` for brief placement and delivery (including
+restricted harnesses), completion waits, and retries.
 
 When workers share a resource (a dev server port, a database, a simulator, a
 device, or a deploy target), tell each one in its prompt to wait for the

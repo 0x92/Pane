@@ -103,7 +103,12 @@ runpane panels create --pane <feature pane id> --title <role> \
   pointer, outside the worker's working directory. Such a worker can stop on
   "Read outside the working directories" and wake you with BLOCKED; send a
   short brief inline instead (drop `--as-file-pointer`, and Pane sends the
-  file's text itself).
+  file's text itself). Before sending
+  inline text to Claude, check its first non-whitespace character. For `!`,
+  `/`, `#` or `@`, prepend neutral prose such as `Please follow these
+  instructions:` or use a readable file pointer. Claude treats those leading
+  characters as controls (`!` runs a shell command). Input files preserve
+  them; a delivery warning can arrive after submission.
 - **`--wait-ready`** waits until the agent's input box is on screen (up to
   `--ready-timeout-ms`, default 30000; give a wrapper 180000), types the line,
   and checks the agent took it. It never types into a shell, a wrapper's own
@@ -144,7 +149,12 @@ time.
 
 ## Wait: the one wait primitive
 
-Run this, and only this, as a background command that wakes you when it exits:
+Use `panels submit` for delivery, check its delivery result, then use the
+named watch below for completion. Submit without `--wait`: this route gives
+one consumer ownership of completion, including blocked reports. Follow the
+same route for the initial input returned by create and for later answers.
+
+Run the watch as a background command that wakes you when it exits:
 
 ```sh
 runpane watch --session <session id or name> --as <your-name> --until-event --json \
@@ -267,7 +277,9 @@ Read `delivery.state` once. `taken` (the agent started a turn with it) and
 `queued` (it was mid-turn and runs your text after that turn) both mean
 delivered: never resend either. `in-composer` gets one `submit-composer`;
 `unknown` gets one `panels screen` look. Resend only with proof the text didn't
-arrive, and never for an instruction with an external effect. `--interrupt`
+arrive, including for an instruction with an external effect: duplicate
+external actions can be irreversible. If delivery remains uncertain, ask the
+person before retrying. `--interrupt`
 stops the agent's current turn first; use it only when that is the point.
 `runpane panels input --panel <id> --keys <keys> --yes --json` sends raw keys
 to a menu.
@@ -302,7 +314,7 @@ the lid or choosing Sleep still does.
 ## Show pages beside the person
 
 ```sh
-runpane panels open --url file://<absolute path> --title <short name> --split --no-focus --source agent --yes --json
+runpane panels open --url file://<absolute path> --title <short name> --split --source agent --yes --json
 ```
 
 `--url` takes http, https and file URLs, and HTML and images render. `--file
