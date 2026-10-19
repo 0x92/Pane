@@ -98,6 +98,18 @@ async function worktreePromptsDirectory(worktreePath: string): Promise<{ root: s
   } catch {
     return undefined;
   }
+  // Check each repository-controlled component before mkdir/chmod can follow it.
+  // Even a link inside this checkout bypasses the lexical Git exclusion.
+  for (const component of ['.pane', WORKTREE_PROMPTS_DIRECTORY]) {
+    const candidate = path.join(top, component);
+    const stat = await fs.lstat(candidate).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (stat?.isSymbolicLink()) {
+      throw new PaneError('ERR_PROMPT_STORAGE_SYMLINK', `Cannot store the prompt: ${candidate} is a symbolic link. No prompt or attachments were written.`, 'Replace the symbolic link with a directory, then retry.');
+    }
+  }
   const current = await fs.readFile(exclude, 'utf8').catch(() => '');
   if (!current.split(/\r?\n/u).includes(WORKTREE_PROMPTS_EXCLUDE)) {
     await fs.mkdir(path.dirname(exclude), { recursive: true });
