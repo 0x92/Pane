@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { EventEmitter } from 'events';
 import * as pty from '@lydell/node-pty';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetPaneRuntimeForTests, setPaneRuntime, type PtyHandleLike, type PtyHostRuntime } from '../core/runtime';
@@ -13,6 +14,7 @@ import { DatabaseService, PANEL_STATE_CEILING_BYTES } from '../database/database
 import { splitPanelBufferState } from '../database/panelBuffers';
 import { trimAnsiSafe } from '../utils/ansiTrim';
 import { ConfigManager } from './configManager';
+import { PowerSaveManager } from './powerSaveManager';
 import { databaseService } from './database';
 import { panelManager as panelManagerMock } from '../test/setup';
 import { inProcessEmulatorHost } from '../test/inProcessEmulatorHost';
@@ -847,6 +849,38 @@ function emitOpenCodeIdleFrame(handle: FakePtyHandle, transparent = false): void
       await vi.advanceTimersByTimeAsync(300);
       expect(pause).toHaveBeenCalledTimes(2);
     } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['failed spawn', 'missing panel'])('releases keep-awake when PTY recovery leaves no terminal (%s)', async (failure) => {
+    vi.useFakeTimers();
+    const panel = makePanel(`keep-awake-recovery-${failure}`);
+    const { manager, handle } = await startTerminal(panel);
+    const sessions = Object.assign(new EventEmitter(), { getPowerSaveSnapshotSessions: () => [] });
+    const blocker = { start: vi.fn(() => 42), stop: vi.fn() };
+    const power = new PowerSaveManager(configManager, sessions, manager, blocker);
+    try {
+      handle.emit('Agent working...\r\n');
+      await vi.advanceTimersByTimeAsync(500);
+      expect(manager.getAgentStatus(panel.id)).toBe('working');
+      expect(blocker.start).toHaveBeenCalledWith('prevent-app-suspension');
+      expect(blocker.stop).not.toHaveBeenCalled();
+
+      if (failure === 'failed spawn') ptyHost.spawnError = new Error('PTY host spawn failed');
+      else panelManagerMock.getPanel.mockReturnValue(undefined);
+      panelManagerMock.emitPanelEvent.mockClear();
+
+      await manager.respawnAll();
+
+      expect(manager.getActiveTerminals()).toEqual([]);
+      expect(blocker.stop).toHaveBeenCalledTimes(1);
+      expect(blocker.stop).toHaveBeenCalledWith(42);
+      expect(panelManagerMock.emitPanelEvent).not.toHaveBeenCalledWith(panel.id, 'terminal:exit', expect.anything());
+      expect(events.some(event => event.channel === 'terminal:exited')).toBe(false);
+    } finally {
+      power.dispose();
       vi.clearAllTimers();
       vi.useRealTimers();
     }

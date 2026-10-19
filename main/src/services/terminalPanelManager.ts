@@ -3040,6 +3040,12 @@ export class TerminalPanelManager extends EventEmitter {
         continue;
       }
 
+      // The old PTY lifetime has ended even if its replacement cannot start
+      // or its panel has disappeared. Clear activity without reporting an exit.
+      this.agentStatusMonitor.unregister(panelId);
+      this.maybeStopAgentStatusPoll();
+      this.emitAgentStatus(terminal, 'idle', 'pty_host_restart');
+
       const panel = panelManager.getPanel(panelId);
       if (!panel) {
         console.warn(`[ptyHost] respawnAll: panel ${panelId} no longer exists, skipping`);
