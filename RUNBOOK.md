@@ -15,7 +15,7 @@ build of the Remote PWA.
 | Nightly / canary | `Nightly / Canary Release` (`nightly-release.yml`) | manual, with `channel` and `source_ref` | Publishes a GitHub prerelease that is not marked Latest and has no update metadata, so auto-update never moves stable users onto it |
 | Remote PWA preview | `Deploy Remote PWA Preview` (`deploy-remote-pwa-preview.yml`) | push to `main` or `nightly` | Builds `frontend`, pushes an image to Google Artifact Registry, and deploys it to Cloud Run |
 | Website notification | `Notify website on release` (`notify-website.yml`) | manual only | Re-sends the release event to the website repo; tag releases already do this from `Build & Release` |
-| PR checks | `Code Quality` (`quality.yml`) | pull requests and pushes to `main` | Typecheck, lint, markdown link check, unit tests on Linux, macOS and Windows, the runpane wrapper matrix, and the Playwright smoke suite |
+| PR checks | `Code Quality` (`quality.yml`) | pull requests and pushes to `main` | Typecheck, lint, markdown link check, runpane contract drift check, unit tests on Linux, macOS and Windows, the runpane wrapper matrix, and the Playwright smoke suite |
 | React review | `React Doctor` (`react-doctor.yml`) | pull requests that touch `frontend/` | Comments on new React findings; advisory, never blocks |
 | Traffic snapshot | `GitHub traffic → PostHog` (`traffic-snapshot.yml`) | daily 06:00 UTC | Copies GitHub traffic and release download counts into PostHog |
 
