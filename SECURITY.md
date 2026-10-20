@@ -29,7 +29,8 @@ fixes; auto-update brings the app to it.
 [.oss-scanner/threat_model.md](.oss-scanner/threat_model.md) describes where
 untrusted input enters Pane, what is in and out of scope, and how we rate
 severity. In short: Pane itself (the Electron main process, its IPC, the
-`runpane` CLI and its daemon connection, the remote web client and its server,
-terminal handling, git and worktree operations, and the update path) is in
+`runpane` CLI and its daemon connection, the remote web client, the phone apps
+and the server they talk to, terminal handling, git and worktree operations,
+and the update path) is in
 scope. The coding agents Pane launches, and third-party dependencies, are not;
 report those to their maintainers.

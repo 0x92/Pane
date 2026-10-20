@@ -55,4 +55,5 @@ RUN pnpm run build:main \
 # Run the unit tests so the image is known to work, without letting a failure
 # abort the build.
 RUN (pnpm --filter main exec vitest run || echo "WARNING: main tests reported failures") \
-    && (pnpm --filter frontend test || echo "WARNING: frontend tests reported failures")
+    && (pnpm --filter frontend test || echo "WARNING: frontend tests reported failures") \
+    && (pnpm --filter @pane/native test || echo "WARNING: native tests reported failures")

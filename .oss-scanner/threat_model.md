@@ -4,7 +4,9 @@ Pane is an Electron desktop app for running coding agents (Claude Code, Codex,
 Cursor and others) in parallel git worktrees. Each agent runs in a real
 terminal with the user's shell access. Pane also runs a local daemon that the
 `runpane` CLI and the `pane` MCP server talk to, and it can optionally serve
-the Remote Pane web app (PWA) and other machines over Tailscale.
+the Remote Pane web app (PWA) and other machines over Tailscale. Phones reach
+it through the PWA, its Capacitor shell (`mobile/`) and a React Native
+companion app (`native/`).
 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) shows how the processes fit
 together.
 
@@ -26,14 +28,15 @@ device on the network, or another local process.
 | Local daemon socket / named pipe | Any process running as the same OS user | `main/src/daemon/server.ts`, `socketPath.ts`, `socketFraming.ts`, `commandRegistry.ts`; the CLI side is `packages/runpane/src/daemonClient.ts` |
 | Remote HTTP / WebSocket / SSE API | Paired phones and browsers; anyone who can reach the port | `main/src/daemon/httpApiServer.ts`, `auth.ts`, `remotePairing.ts`, `previewProxy.ts`, `phonePreviews.ts` |
 | Tailscale workspaces (port 8443) | Other machines and people on the tailnet, per the owner's visibility setting | `main/src/daemon/workspaceHost.ts`, `auth.ts` (`authenticateWorkspaceRequest`), `workspacePassword.ts`, [docs/RUNPANE_WORKSPACES.md](../docs/RUNPANE_WORKSPACES.md) |
+| `pane-remote://` connection codes (pasted, tapped or scanned as a QR code), and host responses and SSE events seen by the phone apps | Whoever made the code or link; a host or network path the phone talks to | `shared/remoteClient/` (`pairing.ts`, `remoteDaemonClient.ts`, `storage.ts`); in the native app `native/src/features/pairing/deepLink.ts`, `ConnectForm.tsx`, `native/src/auth/secureStore.ts`, and the terminal WebView and its message bridge (`native/src/features/terminal/TerminalWebView.tsx`, `bridge.ts`) |
 | Pull request state, checks and review comments that Pane polls | Anyone who can open, push to or comment on a PR | `main/src/services/sessionPrMonitor.ts`, `githubWatchClient.ts` (GitHub GraphQL with the user's `gh` token); agents also read PR and issue text themselves |
 | Update metadata and downloads | The release feed, or whoever sits on the network path | `main/src/autoUpdater.ts` (electron-updater, GitHub provider); `packages/runpane/src/download.ts`, `updateArtifacts.ts` (SHA-256 manifest check) |
 
 ## In scope
 
 All of Pane's own code: `main/`, `frontend/`, `shared/`, `packages/runpane`
-and `packages/runpane-py`, and `mobile/` where it differs from `frontend/`.
-The parts that matter most:
+and `packages/runpane-py`, the React Native companion in `native/`, and
+`mobile/` where it differs from `frontend/`. The parts that matter most:
 
 1. **Main process and IPC.** The renderer is sandboxed with context isolation
    and reaches the main process only through `main/src/preload.ts`. The
@@ -76,6 +79,16 @@ The parts that matter most:
 8. **Stored secrets.** The SQLite database, pairing records and workspace
    passwords (`main/src/database/`, `main/src/daemon/remotePairing.ts`,
    `workspacePassword.ts`).
+9. **The phone clients.** The native app (`native/`) and the PWA hold a
+   host's bearer token and send it only in the `Authorization` header
+   (`shared/remoteClient/`, `native/src/auth/secureStore.ts`). A
+   `pane-remote://` link only fills in the pairing screen; the person confirms
+   before it connects (`native/src/features/pairing/deepLink.ts`). The
+   terminal renders host output in a WebView that talks to the app over a
+   message bridge (`native/src/features/terminal/`). Report anything that
+   leaks a token (to logs, URLs, another host or another app), pairs or
+   connects without that confirmation, or lets host output or a malicious
+   host run script in the app or drive the bridge.
 
 ## Out of scope
 
@@ -108,6 +121,8 @@ better-sqlite3 in place. Nothing needs the network.
   the daemon, auth, pairing, proxy and IPC handlers) and
   `pnpm --filter frontend test`. A single file:
   `pnpm --filter main exec vitest run src/daemon/auth.test.ts`.
+- The native app's plain TypeScript modules (pairing, terminal sessions, the
+  controller): `pnpm --filter @pane/native test`.
 - The CLI: `node packages/runpane/dist/cli.js --help`.
 - Electron: run `pane-sqlite-abi electron` first, then start it under Xvfb
   as root with `ELECTRON_DISABLE_SANDBOX=1 xvfb-run -a pnpm exec electron --no-sandbox .`
@@ -165,7 +180,9 @@ together.
 
 - The Windows- and macOS-only paths (named pipes, WSL, `codesign`, the
   universal-binary checks) cannot run in this Linux image. Read them, but do not
-  report "does not work on Linux".
+  report "does not work on Linux". The same goes for the iOS and Android
+  builds of `native/` and `mobile/`: read their source and run the native
+  Vitest suite, since the apps themselves cannot start in this image.
 - Test fixtures and `__fixtures__/` directories with deliberately hostile
   content.
 - Development scripts under `scripts/` that only maintainers run, unless one
