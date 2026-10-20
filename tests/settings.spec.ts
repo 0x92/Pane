@@ -339,6 +339,21 @@ test.describe('Settings', () => {
     ]);
   });
 
+  test('a failed keep-awake option save shows the error and the saved value', async ({ page }) => {
+    await bootSettings(page);
+    await page.evaluate(() => {
+      // SAFETY: installElectronApiMock defines this test-only bridge before the page loads.
+      (window as typeof window & { __paneTestElectronMock: SettingsMock }).__paneTestElectronMock.failNextConfigUpdate('Disk is read-only');
+    });
+
+    const onBattery = page.getByRole('checkbox', { name: /While on battery/ });
+    await onBattery.click();
+
+    await expect(page.getByRole('alert')).toContainText('Disk is read-only');
+    await expect(onBattery).not.toBeChecked();
+    await expect(onBattery).toBeEnabled();
+  });
+
   test('keep-awake options start open and the chevron hides them', async ({ page }) => {
     await bootSettings(page);
 

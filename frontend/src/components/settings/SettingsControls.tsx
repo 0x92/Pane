@@ -41,28 +41,26 @@ interface ImmediateCheckboxProps {
   disabled?: boolean;
 }
 
-/** A labelled checkbox that saves on change, like ImmediateToggle, and rolls back when the save fails. */
+/**
+ * A labelled checkbox that saves on change. It shows the new value while the
+ * save runs, then the saved config's value, so a failed save shows the old one.
+ */
 export function ImmediateCheckbox({ value, onSave, label, description, disabled }: ImmediateCheckboxProps) {
-  const [localValue, setLocalValue] = useState(value);
-  const [saving, setSaving] = useState(false);
-  useEffect(() => setLocalValue(value), [value]);
+  const [pendingValue, setPendingValue] = useState<boolean | null>(null);
 
   return (
     <label className={cn('flex items-start gap-2.5', disabled ? 'cursor-not-allowed' : 'cursor-default')}>
       <input
         type="checkbox"
-        checked={localValue}
-        disabled={disabled || saving}
-        onChange={(event) => {
-          const previous = localValue;
-          const nextValue = event.target.checked;
-          setLocalValue(nextValue);
-          setSaving(true);
-          void onSave(nextValue)
-            .then((saved) => {
-              if (!saved) setLocalValue(previous);
-            })
-            .finally(() => setSaving(false));
+        checked={pendingValue ?? value}
+        disabled={disabled || pendingValue !== null}
+        onChange={async (event) => {
+          setPendingValue(event.target.checked);
+          try {
+            await onSave(event.target.checked);
+          } finally {
+            setPendingValue(null);
+          }
         }}
         className="mt-0.5 rounded border-border-primary text-interactive focus:ring-interactive"
       />
