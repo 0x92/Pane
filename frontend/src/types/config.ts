@@ -82,8 +82,11 @@ export interface AppConfig {
   autoCheckUpdates?: boolean;
   // Start Pane automatically when the user logs in
   autoStartOnBoot?: boolean;
-  // Keep the computer awake while any session is active
+  // Master toggle: keep the computer awake while any session is active
   keepAwakeWhileSessionsActive?: boolean;
+  // Under the master toggle: on AC power (default on) and on battery (default off)
+  keepAwakeWhilePluggedIn?: boolean;
+  keepAwakeOnBattery?: boolean;
   // Theme preference
   appearanceMode?: AppearanceMode;
   theme?: Theme;
@@ -198,6 +201,8 @@ export interface UpdateConfigRequest {
   autoCheckUpdates?: boolean;
   autoStartOnBoot?: boolean;
   keepAwakeWhileSessionsActive?: boolean;
+  keepAwakeWhilePluggedIn?: boolean;
+  keepAwakeOnBattery?: boolean;
   theme?: AppConfig['theme'];
   appearanceMode?: AppearanceMode;
   systemLightTheme?: LightTheme;

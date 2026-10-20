@@ -1136,7 +1136,7 @@ async function initializeServices() {
   logger = services.logger;
   archiveProgressManager = services.archiveProgressManager;
   analyticsManager = services.analyticsManager;
-  powerSaveManager = new PowerSaveManager(configManager, sessionManager, terminalPanelManager);
+  powerSaveManager = new PowerSaveManager(configManager, sessionManager, terminalPanelManager, { logger });
   powerSaveManager.sync();
 
   leaderboardService = new LeaderboardService(configManager);

@@ -21,8 +21,30 @@ class ConfigManagerStub extends EventEmitter {
   }
 
   setKeepAwake(enabled: boolean): void {
-    this.config = { ...this.config, keepAwakeWhileSessionsActive: enabled };
+    this.update({ keepAwakeWhileSessionsActive: enabled });
+  }
+
+  update(changes: Partial<AppConfig>): void {
+    this.config = { ...this.config, ...changes };
     this.emit('config-updated', this.getConfig());
+  }
+}
+
+class PowerSourceStub extends EventEmitter {
+  onBattery = false;
+
+  isOnBattery(): boolean {
+    return this.onBattery;
+  }
+
+  unplug(): void {
+    this.onBattery = true;
+    this.emit('on-battery');
+  }
+
+  plugIn(): void {
+    this.onBattery = false;
+    this.emit('on-ac');
   }
 }
 
@@ -40,6 +62,23 @@ class PanelActivityStub extends EventEmitter {
   setState(panelId: string, state: AgentState): void {
     this.emit('agent-status', { panelId, sessionId: 'session-1', state, reason: null });
   }
+}
+
+function createLogger() {
+  return { info: vi.fn(), warn: vi.fn() };
+}
+
+function createHelper(calls: () => string[], stops: Array<() => void>) {
+  return {
+    start: vi.fn((mode: string) => {
+      calls().push(`helper:start:${mode}`);
+      const stop = vi.fn(() => {
+        calls().push(`helper:stop:${mode}`);
+      });
+      stops.push(stop);
+      return { stop };
+    }),
+  };
 }
 
 function createSession(
@@ -64,6 +103,7 @@ describe('PowerSaveManager', () => {
   let configManager: ConfigManagerStub;
   let sessionManager: SessionManagerStub;
   let panelActivity: PanelActivityStub;
+  let powerSource: PowerSourceStub;
   let manager: PowerSaveManager;
 
   beforeEach(() => {
@@ -73,7 +113,12 @@ describe('PowerSaveManager', () => {
     configManager = new ConfigManagerStub();
     sessionManager = new SessionManagerStub();
     panelActivity = new PanelActivityStub();
-    manager = new PowerSaveManager(configManager, sessionManager, panelActivity, powerSaveBlocker);
+    powerSource = new PowerSourceStub();
+    manager = new PowerSaveManager(configManager, sessionManager, panelActivity, {
+      blocker: powerSaveBlocker,
+      powerSource,
+      helper: null,
+    });
   });
 
   afterEach(() => {
@@ -215,7 +260,11 @@ describe('PowerSaveManager', () => {
       createSession('archived-session', 'running', { archived: true }),
       createSession('stopped-session', 'stopped'),
     ]);
-    manager = new PowerSaveManager(configManager, sessionManager, panelActivity, powerSaveBlocker);
+    manager = new PowerSaveManager(configManager, sessionManager, panelActivity, {
+      blocker: powerSaveBlocker,
+      powerSource,
+      helper: null,
+    });
     manager.sync();
 
     expect(powerSaveBlocker.start).toHaveBeenCalledTimes(1);
@@ -280,9 +329,246 @@ describe('PowerSaveManager', () => {
     expect(panelActivity.listenerCount('agent-status')).toBe(0);
   });
 
-  it('defaults keep-awake to enabled for a fresh ConfigManager', () => {
-    const freshConfigManager = new ConfigManager();
+  describe('power modes', () => {
+    let calls: string[] = [];
+    let helperStops: Array<() => void> = [];
+    let helper = createHelper(() => calls, helperStops);
+    let logger = createLogger();
 
-    expect(freshConfigManager.getConfig().keepAwakeWhileSessionsActive).toBe(true);
+    function createManager(options: { windows?: boolean; pollMs?: number | null } = {}): void {
+      manager.dispose();
+      calls = [];
+      manager = new PowerSaveManager(configManager, sessionManager, panelActivity, {
+        blocker: powerSaveBlocker,
+        powerSource,
+        helper: options.windows === false ? null : helper,
+        powerSourcePollMs: options.pollMs ?? null,
+        logger,
+      });
+    }
+
+    function startWork(): void {
+      sessionManager.emit('session-created', createSession('session-1', 'running'));
+    }
+
+    beforeEach(() => {
+      helperStops = [];
+      logger = createLogger();
+      helper = createHelper(() => calls, helperStops);
+      powerSaveBlocker.start.mockImplementation((type: string) => {
+        calls.push(`blocker:start:${type}`);
+        return 42;
+      });
+      powerSaveBlocker.stop.mockImplementation(() => {
+        calls.push('blocker:stop');
+      });
+      createManager();
+    });
+
+    afterEach(() => {
+      powerSaveBlocker.start.mockImplementation(() => 42);
+      powerSaveBlocker.stop.mockImplementation(() => undefined);
+    });
+
+    it('holds app suspension and the Windows system request while plugged in', () => {
+      startWork();
+
+      expect(calls).toEqual(['blocker:start:prevent-app-suspension', 'helper:start:system-required']);
+    });
+
+    it('holds nothing on battery while the battery option is off (the default)', () => {
+      powerSource.onBattery = true;
+      startWork();
+
+      expect(calls).toEqual([]);
+    });
+
+    it('keeps the screen on and presses F15 on Windows battery when the battery option is on', () => {
+      configManager.update({ keepAwakeOnBattery: true });
+      powerSource.onBattery = true;
+      startWork();
+
+      expect(calls).toEqual(['blocker:start:prevent-display-sleep', 'helper:start:press-f15']);
+    });
+
+    it('holds only Electron blockers on macOS and Linux', () => {
+      createManager({ windows: false });
+      configManager.update({ keepAwakeOnBattery: true });
+      startWork();
+      powerSource.unplug();
+
+      expect(calls).toEqual([
+        'blocker:start:prevent-app-suspension',
+        'blocker:stop',
+        'blocker:start:prevent-display-sleep',
+      ]);
+    });
+
+    it('holds nothing while plugged in when the plugged-in option is off', () => {
+      configManager.update({ keepAwakeWhilePluggedIn: false, keepAwakeOnBattery: true });
+      startWork();
+
+      expect(calls).toEqual([]);
+    });
+
+    it('holds nothing in either power state when both options are off', () => {
+      configManager.update({ keepAwakeWhilePluggedIn: false, keepAwakeOnBattery: false });
+      startWork();
+      powerSource.unplug();
+      powerSource.plugIn();
+
+      expect(calls).toEqual([]);
+    });
+
+    it('holds nothing when the master toggle is off, whatever the options say', () => {
+      configManager.update({ keepAwakeWhileSessionsActive: false, keepAwakeOnBattery: true });
+      startWork();
+      powerSource.unplug();
+
+      expect(calls).toEqual([]);
+    });
+
+    it('releases the plugged-in mode before holding battery mode when unplugged, and back', () => {
+      configManager.update({ keepAwakeOnBattery: true });
+      startWork();
+      calls = [];
+
+      powerSource.unplug();
+      expect(calls).toEqual([
+        'blocker:stop',
+        'helper:stop:system-required',
+        'blocker:start:prevent-display-sleep',
+        'helper:start:press-f15',
+      ]);
+
+      calls = [];
+      powerSource.plugIn();
+      expect(calls).toEqual([
+        'blocker:stop',
+        'helper:stop:press-f15',
+        'blocker:start:prevent-app-suspension',
+        'helper:start:system-required',
+      ]);
+    });
+
+    it('releases everything when unplugged with the battery option off', () => {
+      startWork();
+      calls = [];
+
+      powerSource.unplug();
+
+      expect(calls).toEqual(['blocker:stop', 'helper:stop:system-required']);
+      expect(logger.info).toHaveBeenLastCalledWith(expect.stringContaining('plugged-in -> off'));
+    });
+
+    it('applies the mode again from scratch after the computer wakes', () => {
+      startWork();
+      calls = [];
+
+      powerSource.emit('resume');
+
+      expect(calls).toEqual([
+        'blocker:stop',
+        'helper:stop:system-required',
+        'blocker:start:prevent-app-suspension',
+        'helper:start:system-required',
+      ]);
+      expect(logger.info).toHaveBeenLastCalledWith(expect.stringContaining('applied again because the computer woke'));
+    });
+
+    it('does nothing on wake when nothing is held', () => {
+      powerSource.emit('resume');
+
+      expect(calls).toEqual([]);
+      expect(logger.info).not.toHaveBeenCalled();
+    });
+
+    it('releases the blocker and the helper when the master toggle turns off mid-session', () => {
+      startWork();
+      calls = [];
+
+      configManager.setKeepAwake(false);
+      expect(calls).toEqual(['blocker:stop', 'helper:stop:system-required']);
+
+      calls = [];
+      configManager.setKeepAwake(true);
+      expect(calls).toEqual(['blocker:start:prevent-app-suspension', 'helper:start:system-required']);
+    });
+
+    it('releases the helper when the last session goes idle', () => {
+      startWork();
+      sessionManager.emit('session-updated', createSession('session-1', 'stopped'));
+
+      expect(helperStops[0]).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the Electron blocker and warns when the helper fails to start', () => {
+      helper.start.mockImplementation(() => {
+        throw new Error('spawn powershell.exe ENOENT');
+      });
+      startWork();
+
+      expect(calls).toEqual(['blocker:start:prevent-app-suspension']);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(String(logger.warn.mock.calls[0][0])).toContain('spawn powershell.exe ENOENT');
+    });
+
+    it('logs each mode change once', () => {
+      startWork();
+      sessionManager.emit('session-created', createSession('session-2', 'running'));
+      panelActivity.setState('panel-1', 'working');
+
+      expect(logger.info).toHaveBeenCalledTimes(1);
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('off -> plugged-in'));
+    });
+
+    it('releases the helper and the blocker on dispose', () => {
+      startWork();
+      calls = [];
+      manager.dispose();
+
+      expect(calls).toEqual(['blocker:stop', 'helper:stop:system-required']);
+    });
+
+    describe('polling a power source without events (Linux)', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+        createManager({ windows: false, pollMs: 60_000 });
+        configManager.update({ keepAwakeOnBattery: true });
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('switches mode within one poll of the power source changing', () => {
+        startWork();
+        calls = [];
+        powerSource.onBattery = true;
+
+        vi.advanceTimersByTime(59_999);
+        expect(calls).toEqual([]);
+        vi.advanceTimersByTime(1);
+        expect(calls).toEqual(['blocker:stop', 'blocker:start:prevent-display-sleep']);
+      });
+
+      it('stops polling once there is no activity', () => {
+        const isOnBattery = vi.spyOn(powerSource, 'isOnBattery');
+        startWork();
+        sessionManager.emit('session-updated', createSession('session-1', 'stopped'));
+        isOnBattery.mockClear();
+
+        vi.advanceTimersByTime(10 * 60_000);
+        expect(isOnBattery).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  it('defaults keep-awake to on while plugged in and off on battery for a fresh ConfigManager', () => {
+    const config = new ConfigManager().getConfig();
+
+    expect(config.keepAwakeWhileSessionsActive).toBe(true);
+    expect(config.keepAwakeWhilePluggedIn).toBe(true);
+    expect(config.keepAwakeOnBattery).toBe(false);
   });
 });
