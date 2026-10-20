@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { Writable } from 'stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createWindowsKeepAwakeHelper,
@@ -14,7 +15,7 @@ function createLogger() {
 
 class FakeHelperProcess extends EventEmitter implements HelperProcess {
   readonly stdout = new EventEmitter();
-  readonly stdin = { write: vi.fn(), end: vi.fn() };
+  readonly stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
   readonly kill = vi.fn(() => true);
 
   say(line: string): void {
@@ -147,6 +148,26 @@ describe('Windows keep-awake helper', () => {
 
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(String(logger.warn.mock.calls[0][0])).toContain('spawn powershell.exe ENOENT');
+  });
+
+  it('fails soft when writing to the helper fails with EPIPE', async () => {
+    const child = new FakeHelperProcess();
+    const failingStdin = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+      },
+    });
+    Object.assign(child, { stdin: failingStdin });
+    const helper = createWindowsKeepAwakeHelper({ spawn: () => child, logger });
+
+    helper.start('press-f15');
+    child.say('ready');
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledTimes(1));
+
+    expect(String(logger.warn.mock.calls[0][0])).toContain('write EPIPE');
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(F15_INTERVAL_MS * 3);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   it('warns when a ready helper exits on its own, and may start again later', () => {

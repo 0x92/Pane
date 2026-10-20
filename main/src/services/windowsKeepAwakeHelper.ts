@@ -26,7 +26,7 @@ export interface WindowsKeepAwakeHelper {
 
 export interface HelperProcess extends EventEmitter {
   stdout: EventEmitter | null;
-  stdin: { write(chunk: string): void; end(): void } | null;
+  stdin: { write(chunk: string): void; end(): void; on(event: 'error', listener: (error: Error) => void): void } | null;
   kill(): boolean;
 }
 
@@ -125,6 +125,9 @@ export function createWindowsKeepAwakeHelper({
         }
       });
       child.on('error', (error: Error) => fail(`could not run: ${reasonOf(error)}`));
+      // A write to a helper that just exited fails with EPIPE on the stream,
+      // not on the process; unhandled, it would crash Pane's main process.
+      child.stdin?.on('error', (error: Error) => fail(`stopped reading its input: ${reasonOf(error)}`));
       child.on('exit', (code: number | null) => {
         if (failureReason) fail(`failed: ${failureReason}`);
         else fail(`exited with code ${code ?? 'none'}`);
