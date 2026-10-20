@@ -73,6 +73,8 @@ export class ConfigManager extends EventEmitter {
       defaultOrchestratorAgent: DEFAULT_PANE_CHAT_AGENT,
       autoStartOnBoot: true,
       keepAwakeWhileSessionsActive: true,
+      keepAwakeWhilePluggedIn: true,
+      keepAwakeOnBattery: false,
       notifications: {
         playSound: true,
         enabled: true
