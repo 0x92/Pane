@@ -43,7 +43,7 @@ RUN pnpm install --frozen-lockfile --ignore-scripts \
 # them in /opt/pane-sqlite; the Node build ends up installed.
 # `pane-sqlite-abi electron` switches to the Electron build before starting the
 # app, and `pane-sqlite-abi node` switches back for the tests.
-RUN ln -s /src/.oss-scanner/pane-sqlite-abi /usr/local/bin/pane-sqlite-abi \
+RUN ln -s /src/.oss-scanner/pane-sqlite-abi.sh /usr/local/bin/pane-sqlite-abi \
     && pnpm run electron:rebuild && pane-sqlite-abi save electron \
     && pnpm rebuild better-sqlite3-multiple-ciphers && pane-sqlite-abi save node
 
