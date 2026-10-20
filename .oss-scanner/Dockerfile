@@ -13,9 +13,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PANE_DIR=/tmp/pane-scan
 
 # git drives worktrees; python3 and build-essential cover node-gyp fallbacks;
-# xvfb lets Electron start without a display.
+# xvfb lets Electron start without a display; the port monitor and its tests
+# call ss, lsof and nc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git python3 build-essential xvfb xauth \
+      iproute2 lsof netcat-openbsd procps \
     && rm -rf /var/lib/apt/lists/*
 
 # scanner contract: the checkout lives inside the image, at /src
