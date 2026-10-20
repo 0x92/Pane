@@ -88,6 +88,17 @@ jobs:
     - name: Run frontend unit tests
       run: CI=1 pnpm --filter frontend test
 
+    # Catches hand edits to the generated contract files (docs, TS, Python,
+    # fixture). It needs no dependencies, and runs even if the tests above
+    # failed so it never hides behind them.
+    - name: Check runpane contract generated files
+      if: ${{ !cancelled() }}
+      run: |
+        node scripts/generate-runpane-contract.js --check || {
+          echo "::error title=runpane contract drift::Generated runpane contract files differ from contracts/runpane/contract.json. Edit contract.json, not the generated files, then run: node scripts/generate-runpane-contract.js and commit the result."
+          exit 1
+        }
+
     - name: Finish type checking
       if: ${{ !cancelled() }}
       run: scripts/ci-background.sh wait typecheck
