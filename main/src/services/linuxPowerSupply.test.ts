@@ -63,11 +63,39 @@ describe('readLinuxOnBattery', () => {
     expect(readLinuxOnBattery(join(root, 'missing'))).toBe(false);
   });
 
-  it('skips a supply whose files cannot be read', () => {
-    mkdirSync(join(root, 'BROKEN'));
-    supply('AC', { type: 'Mains', online: '1' });
+  it.each(['USB_PD', 'USB_TYPE_C', 'USB_DCP', 'Wireless'])('reads plugged in when a %s charger is online', type => {
+    supply('charger', { type, online: '1' });
     supply('BAT0', { type: 'Battery' });
 
     expect(readLinuxOnBattery(root)).toBe(false);
+  });
+
+  it('reads battery when every charger type reports offline', () => {
+    supply('AC', { type: 'Mains', online: '0' });
+    supply('ucsi-source-psy-USBC000-001', { type: 'USB', online: '0' });
+    supply('BAT0', { type: 'Battery' });
+
+    expect(readLinuxOnBattery(root)).toBe(true);
+  });
+
+  it("reads plugged in when a charger's online state cannot be read", () => {
+    supply('AC', { type: 'Mains' });
+    supply('BAT0', { type: 'Battery' });
+
+    expect(readLinuxOnBattery(root)).toBe(false);
+  });
+
+  it('reads plugged in when a supply of unknown type sits next to a battery', () => {
+    mkdirSync(join(root, 'BROKEN'));
+    supply('BAT0', { type: 'Battery' });
+
+    expect(readLinuxOnBattery(root)).toBe(false);
+  });
+
+  it("ignores a peripheral's charger state", () => {
+    supply('BAT0', { type: 'Battery' });
+    supply('phone', { type: 'USB', scope: 'Device', online: '1' });
+
+    expect(readLinuxOnBattery(root)).toBe(true);
   });
 });

@@ -154,7 +154,10 @@ Keep-awake (macOS only):
   \`powernap\` or \`tcpkeepalive\` is 0; leave both settings as they are. If
   \`pmset -g batt\` reports battery power, tell the user once that plugged in
   with the lid open is the only fully awake setup.
-- Pane's own keep-awake setting prevents app suspension only.
+- Pane's own keep-awake setting only holds off idle sleep while sessions are
+  active. Plugged in (on by default) it prevents app suspension. On battery it
+  holds nothing unless "While on battery" is ticked, and then it keeps the
+  display on. It never changes what closing the lid does.
 
 Auto-resume:
 
