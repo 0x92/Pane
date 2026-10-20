@@ -683,4 +683,3 @@ Desktop local control reports useful failures as `runpane_local_control_failed`;
 Local implementation, build, and dry-run validation do not need npm or PyPI API tokens.
 Release publishing should prefer npm Trusted Publishing and PyPI Trusted Publishing from GitHub Actions.
 Fallback `NPM_TOKEN` or `PYPI_API_TOKEN` credentials may be used for first package reservation or manual publication only. They must be supplied through local environment variables or GitHub Actions secrets, never committed, and revoked or rotated after use.
-drift: deliberate hand edit to prove the CI check fails
