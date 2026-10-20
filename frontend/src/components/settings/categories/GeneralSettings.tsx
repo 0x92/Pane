@@ -9,6 +9,7 @@ import type { VersionInfo } from '../../../types/session';
 import { API } from '../../../utils/api';
 import type { HtmlFileOpenMode } from '../../../types/config';
 import { htmlFileOpenModeOf } from '../../../stores/configStore';
+import { KeepAwakeSetting } from './KeepAwakeSetting';
 
 interface GeneralSettingsProps {
   persistence: SettingsPersistence;
@@ -110,18 +111,7 @@ export function GeneralSettings({ persistence, onUpdate, onSendFeedback }: Gener
       </SettingsSection>
 
       <SettingsSection title="Power" description="System sleep behavior while sessions are active.">
-        <SettingRow
-          settingId="keep-awake"
-          label="Keep computer awake while sessions are active"
-          description="Prevents the system from idle-sleeping while an agent is working or any session is active. The display can still turn off; closing the lid or choosing Sleep still sleeps the machine."
-          saveState={persistence.saveStates['keep-awake']}
-        >
-          <ImmediateToggle
-            label="Keep computer awake while sessions are active"
-            value={config.keepAwakeWhileSessionsActive !== false}
-            onSave={(value) => persistence.saveConfig('keep-awake', { keepAwakeWhileSessionsActive: value })}
-          />
-        </SettingRow>
+        <KeepAwakeSetting persistence={persistence} />
       </SettingsSection>
 
       <SettingsSection title="Files" description="How Pane opens files you click in Explorer.">

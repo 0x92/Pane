@@ -33,6 +33,47 @@ export function ImmediateToggle({ value, onSave, label, disabled }: ImmediateTog
   );
 }
 
+interface ImmediateCheckboxProps {
+  value: boolean;
+  onSave: (value: boolean) => Promise<boolean>;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+}
+
+/** A labelled checkbox that saves on change, like ImmediateToggle, and rolls back when the save fails. */
+export function ImmediateCheckbox({ value, onSave, label, description, disabled }: ImmediateCheckboxProps) {
+  const [localValue, setLocalValue] = useState(value);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setLocalValue(value), [value]);
+
+  return (
+    <label className={cn('flex items-start gap-2.5', disabled ? 'cursor-not-allowed' : 'cursor-default')}>
+      <input
+        type="checkbox"
+        checked={localValue}
+        disabled={disabled || saving}
+        onChange={(event) => {
+          const previous = localValue;
+          const nextValue = event.target.checked;
+          setLocalValue(nextValue);
+          setSaving(true);
+          void onSave(nextValue)
+            .then((saved) => {
+              if (!saved) setLocalValue(previous);
+            })
+            .finally(() => setSaving(false));
+        }}
+        className="mt-0.5 rounded border-border-primary text-interactive focus:ring-interactive"
+      />
+      <span className="min-w-0">
+        <span className="block text-sm text-text-primary">{label}</span>
+        {description && <span className="block text-xs leading-relaxed text-text-tertiary">{description}</span>}
+      </span>
+    </label>
+  );
+}
+
 interface SegmentedOption<T extends string | number> {
   id: T;
   label: string;
