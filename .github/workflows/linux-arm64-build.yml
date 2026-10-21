@@ -10,6 +10,7 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - '.github/workflows/build.yml'
+      - '.github/workflows/nightly-release.yml'
       - '.github/workflows/linux-arm64-build.yml'
   workflow_dispatch:
 

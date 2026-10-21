@@ -66,6 +66,8 @@ can upload; a host x64 SQLite binary cannot ship inside an ARM64 app. Use
 `release:linux:x64` or `release:linux:arm64` on the matching native host for
 manual builds. The generic multi-architecture command does not provide a
 cross-compiler or bypass this guard.
+Nightly and canary builds use the same native runner split and architecture
+commands, so their artifacts pass the same packaging guard.
 
 ```
 build (macOS + Linux) ─┐

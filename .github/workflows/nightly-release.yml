@@ -79,8 +79,14 @@ jobs:
             artifact_path: |
               dist-electron/*.dmg
           - os: ubuntu-latest
-            command: build:linux:ci
-            artifact_name: pane-linux
+            command: build:linux:x64
+            artifact_name: pane-linux-x64
+            artifact_path: |
+              dist-electron/*.deb
+              dist-electron/*.AppImage
+          - os: ubuntu-24.04-arm
+            command: build:linux:arm64
+            artifact_name: pane-linux-arm64
             artifact_path: |
               dist-electron/*.deb
               dist-electron/*.AppImage
