@@ -20,7 +20,7 @@ Output files will be in `dist-electron/`:
 
 ## Prerequisites
 
-1. **Node.js** - v22.23.4 or later
+1. **Node.js** - 22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ (26.x)
 2. **pnpm** - v10
 3. **Python** - v3.x (for native module compilation)
 4. **Visual Studio Build Tools** - With C++ workload
