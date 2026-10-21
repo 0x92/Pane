@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/after-pack.js'
       - 'scripts/test-packaged-native-architecture.js'
+      - 'scripts/test-packaged-headless-remote-setup.sh'
       - 'main/package.json'
       - 'package.json'
       - 'pnpm-lock.yaml'
