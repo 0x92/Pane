@@ -20,7 +20,7 @@ Output files will be in `dist-electron/`:
 
 ## Prerequisites
 
-1. **Node.js** - v22.18 or later
+1. **Node.js** - v22.23.4 or later
 2. **pnpm** - v10
 3. **Python** - v3.x (for native module compilation)
 4. **Visual Studio Build Tools** - With C++ workload
@@ -85,8 +85,8 @@ pnpm install --ignore-scripts
 # Navigate to the better-sqlite3-multiple-ciphers package directory
 cd node_modules/.pnpm/better-sqlite3-multiple-ciphers@*/node_modules/better-sqlite3-multiple-ciphers
 
-# Download the Electron-compatible prebuilt (replace 42.11.18 with your Electron version)
-npx prebuild-install --runtime electron --target 42.11.18 --arch x64 --verbose
+# Download the Electron-compatible prebuilt (replace 43.8.1 with your Electron version)
+npx prebuild-install --runtime electron --target 43.8.1 --arch x64 --verbose
 
 # Return to project root
 cd -
@@ -116,7 +116,7 @@ pnpm exec electron-builder --win --x64 --publish never --config.npmRebuild=false
 The better-sqlite3 native module was built for Node.js instead of Electron. Run the prebuild-install step:
 ```bash
 cd node_modules/.pnpm/better-sqlite3-multiple-ciphers@*/node_modules/better-sqlite3-multiple-ciphers
-npx prebuild-install --runtime electron --target 42.11.18 --arch x64 --verbose
+npx prebuild-install --runtime electron --target 43.8.1 --arch x64 --verbose
 ```
 
 ### Native modules not working at runtime

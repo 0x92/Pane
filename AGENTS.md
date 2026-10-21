@@ -14,7 +14,7 @@ Canonical repo: `greenfield-inc/Pane` (`dcouple/Pane` redirects to it).
 
 ## Commands
 
-- Node >= 22.18 (`.nvmrc`), pnpm 10. Setup `pnpm run setup`; run
+- Node >= 22.23.4 (`.nvmrc`), pnpm 10. Setup `pnpm run setup`; run
   `PANE_DIR=~/.pane_test pnpm dev` (not `electron-dev`: its watcher overwrites
   the bundled preload). Build the local CLI with `pnpm --filter runpane build`.
 - Before a PR: `pnpm typecheck && pnpm lint`, plus the tests your change touches.

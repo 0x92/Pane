@@ -10,7 +10,7 @@ Pane is an open source project created by [Dcouple Inc](https://dcouple.ai). Dco
 
 ## Getting Started
 
-You need Node 22.18 or newer (`.nvmrc` pins 22.18.0) and pnpm 10. If you don't
+You need Node 22.23.4 or newer (`.nvmrc` pins 22.23.4) and pnpm 10. If you don't
 have pnpm 10, `corepack enable` provides the version pinned in `package.json`.
 
 1. Fork the repository on GitHub and clone your fork.
