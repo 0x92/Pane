@@ -154,6 +154,9 @@ jobs:
 
     - name: Configure Electron sandbox
       run: |
+        # Electron 42+ fetches its binary on first use and logs that to stdout,
+        # so fetch it first to keep require('electron') printing only the path.
+        node node_modules/electron/install.js
         electron_path="$(node -p "require('electron')")"
         electron_dir="$(dirname "${electron_path}")"
         sudo chown root "${electron_dir}/chrome-sandbox"

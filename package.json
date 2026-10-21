@@ -126,7 +126,7 @@
     "@playwright/test": "^1.52.0",
     "ajv": "6.12.6",
     "concurrently": "^9.1.0",
-    "electron": "41.10.3",
+    "electron": "42.11.18",
     "electron-builder": "26.7.0",
     "electron-builder-squirrel-windows": "26.7.0",
     "esbuild": "0.25.7",
