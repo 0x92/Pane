@@ -9,6 +9,8 @@ on:
       - 'main/package.json'
       - 'package.json'
       - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
       - '.github/workflows/build.yml'
       - '.github/workflows/nightly-release.yml'
       - '.github/workflows/linux-arm64-build.yml'

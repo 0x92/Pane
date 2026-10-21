@@ -4,8 +4,13 @@ on:
   pull_request:
     paths:
       - 'scripts/build-win.js'
+      - 'scripts/after-pack.js'
+      - 'scripts/verify-packaged-icon.js'
+      - 'package.json'
       - 'main/package.json'
       - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
       - '.github/workflows/windows-arm64-build.yml'
   workflow_dispatch:
 
