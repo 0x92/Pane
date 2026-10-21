@@ -246,7 +246,8 @@ Releases, CI and deploys are covered in [RUNBOOK.md](RUNBOOK.md).
 ### Manual Testing
 
 Test UI and packaging changes in a packaged build for your platform
-(`pnpm build:mac`, `pnpm build:linux` or `pnpm build:win:x64`; output in
+(`pnpm build:mac`, `pnpm build:linux:x64` on x64 Linux,
+`pnpm build:linux:arm64` on ARM64 Linux, or `pnpm build:win:x64`; output in
 `dist-electron/`). The packaged app can show problems that development mode
 hides. Check that you can create a pane, run an agent, use git operations and
 run scripts, and that settings persist after a restart.

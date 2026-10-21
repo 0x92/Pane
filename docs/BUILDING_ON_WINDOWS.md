@@ -41,7 +41,7 @@ Make sure to install the "Desktop development with C++" workload.
 
 The Windows build uses a custom script (`scripts/build-win.js`). It:
 
-1. Downloads the Electron prebuilt for `better-sqlite3-multiple-ciphers` for the target architecture.
+1. Downloads the Electron prebuilt for `better-sqlite3-multiple-ciphers` for the target architecture, or compiles its pinned source with `@electron/rebuild` for that exact Electron version and architecture when the prebuilt is unavailable. The resulting PE architecture must match the target.
 2. When building for a different architecture than the host, installs the matching `@lydell/node-pty-win32-<arch>` prebuilt package.
 3. Builds the frontend and main process, injects build info, and generates notices.
 4. Runs electron-builder with native module rebuild disabled.
@@ -53,7 +53,7 @@ The Windows build uses a custom script (`scripts/build-win.js`). It:
 
 **Problem:** When using `pnpm install --ignore-scripts`, the `prebuild-install` postinstall script doesn't run, so the package gets the wrong binary (Node.js ABI instead of Electron ABI). This causes "is not a valid Win32 application" errors at runtime.
 
-**Solution:** The build script runs `prebuild-install` manually with the correct Electron runtime and version to download the Electron-compatible prebuilt binary.
+**Solution:** The build script runs `prebuild-install` with the correct Electron runtime and version. If the upstream release lacks that ABI/architecture combination (for example Electron 43 / ABI 148 / Windows ARM64), it builds the pinned package from source using the existing `@electron/rebuild` tool. Install Visual Studio 2022 C++ build tools, including the ARM64 compiler when cross-compiling. A failed rebuild or mismatched PE architecture stops packaging; the script never substitutes a host-architecture binary.
 
 #### Cross-Architecture node-pty
 
@@ -66,7 +66,7 @@ The Windows build uses a custom script (`scripts/build-win.js`). It:
 **Problem:** Rebuilding native modules for Electron can fail on Windows due to pnpm path issues.
 
 **Solution:** The build script disables npm rebuild (`--config.npmRebuild=false`) and relies on:
-- Manually downloaded Electron prebuilts for `better-sqlite3-multiple-ciphers`
+- Downloaded or explicitly source-built Electron binaries for `better-sqlite3-multiple-ciphers`, checked against the target PE architecture
 - Prebuilt platform packages for `@lydell/node-pty` (no rebuild needed)
 
 ## Manual Build Process
@@ -141,7 +141,7 @@ The following native modules are used:
 - `better-sqlite3-multiple-ciphers` - SQLite database (has Windows Electron prebuilts)
 - `@lydell/node-pty` - Terminal emulation (has Windows x64 prebuilts, validate after each Electron major upgrade)
 
-Both modules have prebuilt binaries that work on Windows without compilation.
+Prebuilt availability depends on the Electron ABI and target architecture. SQLite falls back to source compilation when necessary; node-pty uses the matching platform package. The Windows ARM64 build workflow exercises the installer build, but running the ARM64 app still requires an ARM64 machine.
 
 ## CI/CD
 

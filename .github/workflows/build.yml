@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
         include:
           - os: macos-latest
             release_cmd: release:mac
@@ -33,12 +33,18 @@ jobs:
               dist-electron/*.zip
               dist-electron/latest-mac.yml
           - os: ubuntu-latest
-            release_cmd: release:linux
-            ci_cmd: build:linux:ci
+            release_cmd: release:linux:x64
+            ci_cmd: build:linux:x64
             artifact_path: |
               dist-electron/*.deb
               dist-electron/*.AppImage
               dist-electron/latest-linux.yml
+          - os: ubuntu-24.04-arm
+            release_cmd: release:linux:arm64
+            ci_cmd: build:linux:arm64
+            artifact_path: |
+              dist-electron/*.deb
+              dist-electron/*.AppImage
               dist-electron/latest-linux-arm64.yml
 
     runs-on: ${{ matrix.os }}
