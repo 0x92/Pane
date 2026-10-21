@@ -38,6 +38,7 @@ jobs:
             - 'scripts/generate-runpane-contract.js'
             - 'scripts/sync-runpane-package-versions.js'
             - 'scripts/test-runpane-contract.js'
+            - 'scripts/test-runpane-node-runtime.js'
             - 'scripts/test-runpane-mcp.js'
             - 'scripts/test-runpane-package-smoke.js'
             - 'scripts/test-runpane-workspace.js'
