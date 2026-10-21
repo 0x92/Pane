@@ -237,7 +237,7 @@ function downloadBetterSqlitePrebuiltForArch(targetArch) {
 
   // Get Electron version from package.json
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
-  const electronVersion = packageJson.devDependencies?.electron?.replace('^', '') || '41.10.3';
+  const electronVersion = packageJson.devDependencies?.electron?.replace('^', '') || '43.8.3';
 
   console.log(`  📦 Electron version: ${electronVersion}, arch: ${targetArch}`);
 

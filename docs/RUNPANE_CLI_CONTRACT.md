@@ -21,8 +21,10 @@ Work starts only when a user runs `runpane ...`.
 
 ## Compatibility Floors
 
-The npm wrapper should run on Node.js `>=20.0.0` and newer. The root Electron app
-may require a newer Node.js version for development and packaging.
+The npm wrapper requires Node.js `^22.23.4 || ^24.22.1 || ^26.12.1`, matching the root development baseline.
+The CLI rejects unsupported runtimes before dispatching commands and before staging an independent updater runtime.
+
+The Pane-managed CLI also accepts the audited Electron 43.8.3 / embedded Node 24.22.0 pair, whose CA backport passed actual TLS probes. This does not support standalone Node 24.22.0; independent updater runtimes must satisfy the standalone ranges.
 
 The PyPI wrapper should run on Python `>=3.8` and newer. Keep runtime dependencies
 out of the wrapper unless a compatibility test covers the new dependency.
@@ -635,7 +637,7 @@ These flags are consumed by local daemon-control commands:
 --all
 ```
 
-`runpane doctor --json`, `runpane repos list`, `runpane panes ...`, and `runpane panels ...` commands use or describe the local framed daemon socket/pipe for a running Pane app. `--pane-dir` points the wrapper at a non-default Pane data directory, such as `PANE_DIR=~/.pane_test` in development. `runpane agent-context` is local/offline and can be used before Pane is running. `agent-context` and `version` accept and ignore `--pane-dir`, so one `--pane-dir` can be passed to every runpane command. In a Pane repository checkout, if `runpane` is not on PATH, build the local wrapper with `pnpm --filter runpane build` and run it with Node 22 or newer, for example `node packages/runpane/dist/cli.js doctor --json`. From WSL, if the user runs Windows Pane, call the Windows wrapper through `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane ...'` so the command can reach the Windows named-pipe daemon and avoid UNC cwd issues.
+`runpane doctor --json`, `runpane repos list`, `runpane panes ...`, and `runpane panels ...` commands use or describe the local framed daemon socket/pipe for a running Pane app. `--pane-dir` points the wrapper at a non-default Pane data directory, such as `PANE_DIR=~/.pane_test` in development. `runpane agent-context` is local/offline and can be used before Pane is running. `agent-context` and `version` accept and ignore `--pane-dir`, so one `--pane-dir` can be passed to every runpane command. In a Pane repository checkout, if `runpane` is not on PATH, build the local wrapper with `pnpm --filter runpane build` and run it with patched Node 22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ (26.x), for example `node packages/runpane/dist/cli.js doctor --json`. From WSL, if the user runs Windows Pane, call the Windows wrapper through `powershell.exe -NoProfile -Command 'Set-Location $env:TEMP; runpane ...'` so the command can reach the Windows named-pipe daemon and avoid UNC cwd issues.
 
 ## Daemon Passthrough Flags
 

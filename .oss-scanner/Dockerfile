@@ -4,7 +4,7 @@
 # the tests or the Electron app need is fetched here.
 # Build it yourself: docker build -f .oss-scanner/Dockerfile -t pane-oss-scanner .
 # Then check it offline: docker run --rm -it --network none pane-oss-scanner bash
-FROM node:22.18.0-bookworm
+FROM node:22.23.4-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     CI=1 \
@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       iproute2 lsof netcat-openbsd procps \
       libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils libatspi2.0-0 \
       libuuid1 libasound2 libgbm1 libdrm2 libxkbcommon0 libsecret-1-0 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge '20250419~deb12u2' \
     && rm -rf /var/lib/apt/lists/*
 
 # scanner contract: the checkout lives inside the image, at /src
