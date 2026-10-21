@@ -528,7 +528,8 @@ isolate Electron's browser profile; see
 pnpm build:win:x64    # Windows (x64)
 pnpm build:win:arm64  # Windows (ARM64)
 pnpm build:mac        # macOS (Apple Silicon + Intel)
-pnpm build:linux      # Linux (x64 + ARM64)
+pnpm build:linux:x64  # Linux x64 (run on an x64 Linux host)
+pnpm build:linux:arm64 # Linux ARM64 (run on an ARM64 Linux host)
 ```
 
 ### Releasing
