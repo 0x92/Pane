@@ -12,7 +12,7 @@ with `runpane watch`. See the
 
 ## Quick Start
 
-Run the guided setup (Node 20 or newer):
+Run the guided setup (patched Node 22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ (26.x)):
 
 ```bash
 npx --yes runpane@latest
@@ -51,7 +51,7 @@ See [docs/PANE_MCP.md](https://github.com/greenfield-inc/Pane/blob/main/docs/PAN
 
 When debugging RunPane from a Pane repository checkout, prefer the built local
 wrapper over `npx --yes runpane@latest` so diagnostics exercise local changes.
-Use Node 22 or newer:
+Use patched Node 22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ (26.x):
 
 ```bash
 node packages/runpane/dist/cli.js doctor --json
@@ -434,7 +434,7 @@ shared installer behavior:
   behavior.
 - If daemon setup flags change, update docs, README files, and wrapper tests
   together.
-- Keep the CI wrapper matrix green: Linux, macOS, Windows, Node 20/22, and
+- Keep the CI wrapper matrix green: Linux, macOS, Windows, Node 22.23.4/24.22.1, and
   Python 3.8/3.13 (runs on PRs that touch the wrappers or contract).
 
 ## Publishing

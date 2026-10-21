@@ -183,7 +183,7 @@ jobs:
 
   # Published wrapper CLIs (npm + PyPI). Runs only when wrapper/contract files
   # change on a PR; always runs on pushes to main. Each OS is tested once at
-  # the runtime floors (Node 20 / Python 3.8) and once at current (Node 22 /
+  # the runtime floors (Node 22.23.4 / Python 3.8) and once at current (Node 24.22.1 /
   # Python 3.13) instead of the full Node x Python cross product. The Linux
   # floor entry is pinned to ubuntu-24.04: setup-python has no Python 3.8 build
   # for Ubuntu 26.04 (ubuntu-latest).
@@ -196,12 +196,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04, node-version: '20.0.0', python-version: '3.8' }
-          - { os: ubuntu-latest, node-version: '22.23.4', python-version: '3.13' }
-          - { os: macos-latest, node-version: '20.0.0', python-version: '3.8' }
-          - { os: macos-latest, node-version: '22.23.4', python-version: '3.13' }
-          - { os: windows-2022, node-version: '20.0.0', python-version: '3.8' }
-          - { os: windows-2022, node-version: '22.23.4', python-version: '3.13' }
+          - { os: ubuntu-24.04, node-version: '22.23.4', python-version: '3.8' }
+          - { os: ubuntu-latest, node-version: '24.22.1', python-version: '3.13' }
+          - { os: macos-latest, node-version: '22.23.4', python-version: '3.8' }
+          - { os: macos-latest, node-version: '24.22.1', python-version: '3.13' }
+          - { os: windows-2022, node-version: '22.23.4', python-version: '3.8' }
+          - { os: windows-2022, node-version: '24.22.1', python-version: '3.13' }
 
     steps:
     - name: Checkout code
@@ -228,6 +228,9 @@ jobs:
 
     - name: Run wrapper contract tests
       run: node scripts/test-runpane-contract.js
+
+    - name: Check patched Node runtime guard
+      run: node --test scripts/test-runpane-node-runtime.js
 
     - name: Run MCP server tests
       run: node --test scripts/test-runpane-mcp.js

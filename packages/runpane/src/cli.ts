@@ -78,6 +78,7 @@ import {
   type WrapperTelemetryContext
 } from './telemetry';
 import { printVersion } from './version';
+import { assertSupportedCliRuntime } from './nodeRuntime';
 import {
   readTailnet,
   readWorkspaceSummary,
@@ -94,6 +95,7 @@ import {
 const SOURCE = 'npm' as const;
 
 export async function main(argv: string[]): Promise<number> {
+  assertSupportedCliRuntime(process.versions.node, process.versions.electron);
   if (argv[0] === '__update-runner' && argv.length === 2) return runUpdateHelper(argv[1]);
   const telemetryContext = createInitialTelemetryContext(argv);
   if (argv.length === 0) {
