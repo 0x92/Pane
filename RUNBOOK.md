@@ -60,6 +60,13 @@ worktree and run it again.
 
 ### What the tag runs
 
+Linux x64 and ARM64 packages build separately on native x64 and ARM64 runners.
+The packaged SQLite ELF architecture must match the target before either format
+can upload; a host x64 SQLite binary cannot ship inside an ARM64 app. Use
+`release:linux:x64` or `release:linux:arm64` on the matching native host for
+manual builds. The generic multi-architecture command does not provide a
+cross-compiler or bypass this guard.
+
 ```
 build (macOS + Linux) ─┐
                        ├─ publish-windows ─ publish-release ─ checksums ─┬─ notify-website
