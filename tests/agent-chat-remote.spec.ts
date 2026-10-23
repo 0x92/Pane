@@ -45,6 +45,25 @@ test('streams a bounded Chat thread through the remote client and reconnects wit
     await emitRemoteHostEvent(page, 'agent-chat:event', decodeBoundary(event, boundary.json));
   }
   await expect(composer).toBeVisible();
+  await expect(page.getByText('Stream reply 12', { exact: true })).toBeInViewport();
+  // Reading older output pauses follow; the latest control must leave the
+  // pinned page as well as scrolling its viewport.
+  const viewport = page.getByRole('region', { name: 'Conversation messages' });
+  await viewport.hover();
+  await page.mouse.wheel(0, -600);
+  await expect(page.getByText('Stream reply 12', { exact: true })).not.toBeInViewport();
+  const next: AgentChatEvent = { panelId: conversation.panelId, generation: 2, revision: 13, change: { type: 'append', id: 'stream-13', role: 'assistant', part: { type: 'text', text: 'Stream reply 13' } } };
+  view.transcript!.revision = 13;
+  view.transcript!.messages.push({ id: 'stream-13', role: 'assistant', parts: [{ type: 'text', text: 'Stream reply 13' }] });
+  await emitRemoteHostEvent(page, 'agent-chat:event', decodeBoundary(next, boundary.json));
+  await expect(page.getByRole('button', { name: 'Latest messages (1 newer)', exact: true })).toBeAttached();
+  await expect(page.getByText('Stream reply 13', { exact: true })).not.toBeAttached();
+  await page.getByRole('button', { name: 'Scroll to latest message', exact: true }).click();
+  await expect(page.getByText('Stream reply 13', { exact: true })).toBeInViewport();
+  await page.getByRole('button', { name: /^Earlier messages/ }).click();
+  await expect(page.getByText('Stream reply 13', { exact: true })).not.toBeAttached();
+  await page.getByRole('button', { name: 'Scroll to latest message', exact: true }).click();
+  await expect(page.getByText('Stream reply 13', { exact: true })).toBeInViewport();
   await dropRemoteConnection(page);
   await expect(page.getByText('Reconnecting…', { exact: true })).toBeVisible();
   const previousReads = reads;
@@ -57,7 +76,7 @@ test('streams a bounded Chat thread through the remote client and reconnects wit
   await page.getByRole('button', { name: 'Reject this edit' }).click();
   await expect.poll(() => mutations).toEqual(['agent-chat:permission']);
   view.error = 'The agent could not complete this turn: Provider authentication expired. Check the provider connection.';
-  await emitRemoteHostEvent(page, 'agent-chat:state', decodeBoundary(view, boundary.json));
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Provider authentication expired');
   expect(mutations).toEqual(['agent-chat:permission']);
   view.error = undefined;

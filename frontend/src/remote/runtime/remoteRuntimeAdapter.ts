@@ -1,4 +1,5 @@
 import type { AgentChatClient } from '../../../../shared/types/agentChat';
+import { boundary, decodeOptionalBoundary } from '../../../../shared/validation/boundaryDecoder';
 import { decodeAgentChatEvent, decodeAgentChatView } from '../../../../shared/types/agentChatDecoders';
 import type {
   OrchestrationSessionCreateInput,
@@ -305,5 +306,5 @@ export class RemoteRuntimeAdapter {
 }
 
 function isIpcResponse<T>(value: IpcLikeResponse<T> | T): value is IpcLikeResponse<T> {
-  return Boolean(value && value instanceof Object && ('success' in value || 'data' in value || 'error' in value));
+  return decodeOptionalBoundary(value, boundary.object({ success: boundary.boolean })) !== undefined;
 }

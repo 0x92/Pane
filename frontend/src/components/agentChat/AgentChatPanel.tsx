@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import {
   AssistantRuntimeProvider, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive,
-  SimpleImageAttachmentAdapter, useAuiState, useExternalStoreRuntime,
+  SimpleImageAttachmentAdapter, useAuiState, useExternalStoreRuntime, useThreadViewport, useThreadViewportStore,
   type DataMessagePartComponent, type ReasoningMessagePartComponent, type TextMessagePartComponent, type ToolCallMessagePartProps,
 } from '@assistant-ui/react';
 import ReactMarkdown from 'react-markdown';
@@ -62,15 +63,41 @@ function ChatViewport({ viewer, loading }: { viewer: ReturnType<typeof agentChat
   const snapshot = useSyncExternalStore(viewer.subscribe, viewer.snapshot, viewer.snapshot);
   const end = Math.min(snapshot.windowEnd ?? messages.length, messages.length);
   const start = Math.max(0, end - 200);
+  const viewportStore = useThreadViewportStore();
+  const showLatest = () => {
+    flushSync(() => viewer.setWindowEnd(undefined));
+    viewportStore.getState().scrollToBottom({ behavior: 'instant' });
+  };
   const restoreScroll = useCallback((element: HTMLDivElement | null) => { if (element && viewer.scrollTop !== undefined) element.scrollTop = viewer.scrollTop; }, [viewer]);
   return (
-      <ThreadPrimitive.Viewport ref={restoreScroll} autoScroll scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={viewer.scrollTop === undefined} scrollToBottomOnThreadSwitch={false} onScroll={event => { const viewport = event.currentTarget; viewer.scrollTop = viewport.scrollTop; if (end === messages.length && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 32) { if (snapshot.windowEnd !== undefined) viewer.setWindowEnd(undefined); } else if (snapshot.windowEnd === undefined) viewer.setWindowEnd(messages.length); }} className="min-h-0 flex-1 overflow-y-auto px-4 sm:px-6">
+      <ThreadPrimitive.Viewport aria-label="Conversation messages" role="region" ref={restoreScroll} autoScroll scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={viewer.scrollTop === undefined} scrollToBottomOnThreadSwitch={false} onScroll={event => {
+        const viewport = event.currentTarget;
+        const previousTop = viewer.scrollTop;
+        viewer.scrollTop = viewport.scrollTop;
+        if (end === messages.length && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 32) {
+          if (snapshot.windowEnd !== undefined) viewer.setWindowEnd(undefined);
+        } else if (snapshot.windowEnd === undefined && previousTop !== undefined && viewport.scrollTop < previousTop) {
+          // Pin only when the reader moves up. Growth can briefly move the
+          // bottom away before assistant-ui follows it; that is not a pause.
+          viewer.setWindowEnd(messages.length);
+        }
+      }} className="min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 [overflow-anchor:none]">
         <ThreadPrimitive.Empty><p className="mx-auto max-w-3xl py-8 text-sm text-text-secondary">{loading ? 'Loading conversation…' : 'Send a message to this conversation.'}</p></ThreadPrimitive.Empty>
         {start > 0 && <button type="button" className="my-2 rounded border border-border-primary px-3 py-2 text-xs" onClick={() => viewer.setWindowEnd(start)}>Earlier messages ({start})</button>}
         {messages.slice(start, end).map((message, index) => <ThreadPrimitive.MessageByIndex key={message.id} index={start + index} components={{ Message: MessageRow }} />)}
-        {end < messages.length && <div className="flex gap-2 py-2 text-xs"><button type="button" className="rounded border border-border-primary px-3 py-2" onClick={() => viewer.setWindowEnd(Math.min(messages.length, end + 200))}>Newer messages</button><button type="button" className="rounded border border-border-primary px-3 py-2" onClick={() => viewer.setWindowEnd(undefined)}>Latest messages ({messages.length - end} newer)</button></div>}
+        {end < messages.length && <div className="flex gap-2 py-2 text-xs"><button type="button" className="rounded border border-border-primary px-3 py-2" onClick={() => viewer.setWindowEnd(Math.min(messages.length, end + 200))}>Newer messages</button><button type="button" className="rounded border border-border-primary px-3 py-2" onClick={showLatest}>Latest messages ({messages.length - end} newer)</button></div>}
       </ThreadPrimitive.Viewport>
   );
+}
+
+function ScrollToLatest({ viewer }: { viewer: ReturnType<typeof agentChatViewer> }) {
+  const { windowEnd } = useSyncExternalStore(viewer.subscribe, viewer.snapshot, viewer.snapshot);
+  const isAtBottom = useThreadViewport(state => state.isAtBottom);
+  const viewportStore = useThreadViewportStore();
+  return <button type="button" disabled={windowEnd === undefined && isAtBottom} onClick={() => {
+    flushSync(() => viewer.setWindowEnd(undefined));
+    viewportStore.getState().scrollToBottom({ behavior: 'instant' });
+  }} className="self-center rounded-full border border-border-primary bg-surface-primary p-2 disabled:opacity-40" aria-label="Scroll to latest message"><ArrowDown className="h-4 w-4" /></button>;
 }
 
 export default function AgentChatPanel({ panelId, client, connected = true }: { panelId: string; client: AgentChatClient; connected?: boolean }) {
@@ -155,7 +182,7 @@ export default function AgentChatPanel({ panelId, client, connected = true }: { 
       </div>}
       <ChatViewport viewer={viewer} loading={!view} />
       <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col gap-2 px-4 pb-4 pt-2">
-        <ThreadPrimitive.ScrollToBottom className="self-center rounded-full border border-border-primary bg-surface-primary p-2" aria-label="Scroll to latest message"><ArrowDown className="h-4 w-4" /></ThreadPrimitive.ScrollToBottom>
+        <ScrollToLatest viewer={viewer} />
         <AgentChatPermissions permissions={view?.permissions ?? []} disabled={disabled || answering} onAnswer={async (permission, optionId) => {
           setAnswering(true);
           try { await client.permission(panelId, permission.generation, permission.id, optionId); await viewer.refresh(); }
