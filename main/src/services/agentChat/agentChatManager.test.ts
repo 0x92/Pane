@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { boundary, decodeOptionalBoundary } from '../../../../shared/validation/boundaryDecoder';
 import { describe, expect, it, vi } from 'vitest';
 import { databaseService } from '../database';
 import { panelManager } from '../panelManager';
@@ -38,6 +39,8 @@ it.skipIf(process.platform === 'win32')('keeps a supported native conversation u
   databaseService.createSession({ id, name: id, initial_prompt: '', worktree_name: id, worktree_path: directory, project_id: null, tool_type: 'none' });
   const panel = await panelManager.createPanel({ sessionId: id, type: 'terminal', initialState: { agentType: 'claude', initialCommand: executable, agentSessionId: nativeId } });
   const manager = new AgentChatManager({ enabled: () => true, supportsNativeHost: () => true });
+  const { getPaneEventSink } = await import('../../core/runtime');
+  const events = vi.spyOn(getPaneEventSink(), 'send');
   try {
     manager.attachNative({ pid: () => child.pid, writeControl: () => undefined, destroy: async () => undefined, initialize: async () => undefined });
     const command = await manager.prepareNativeLaunch(panel, directory, process.env, `${executable} --session-id ${nativeId}`, 'bash', false);
@@ -47,11 +50,14 @@ it.skipIf(process.platform === 'win32')('keeps a supported native conversation u
     expect(saved.conversation).toMatchObject({ active: 'terminal', nativeSessionId: nativeId, generation: 1 });
     recordNativeHook(saved.launch.journalFile, { session_id: nativeId, hook_event_name: 'SessionStart', cwd: directory, source: 'startup' });
     recordNativeHook(saved.launch.journalFile, { session_id: nativeId, hook_event_name: 'Stop', permission_mode: 'default', background_tasks: [], session_crons: [] });
+    await expect.poll(() => events.mock.calls.some(([channel, payload]) => channel === 'agent-chat:state' && decodeOptionalBoundary(payload, boundary.object({ running: boundary.boolean }))?.running === false)).toBe(true);
     expect(manager.view(panel.id)).toMatchObject({ available: true, setupRequired: true });
     await expect(manager.switchTo(panel.id, 'chat', 1)).rejects.toMatchObject({ code: 'CHAT_ADAPTER_MISSING' });
     expect(manager.view(panel.id).conversation?.active).toBe('terminal');
     expect(() => manager.guardNativeInput(panel.id, 'New prompt\r')).not.toThrow();
-  } finally { child.kill(); await exit; manager.detachObservers(); rmSync(directory, { recursive: true, force: true }); }
+    events.mockClear();
+    await expect.poll(() => events.mock.calls.some(([channel, payload]) => channel === 'agent-chat:state' && decodeOptionalBoundary(payload, boundary.object({ running: boundary.boolean }))?.running === true)).toBe(true);
+  } finally { events.mockRestore(); child.kill(); await exit; manager.detachObservers(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 it.skipIf(process.platform === 'win32')('switches one exact conversation through native, ACP and native while all viewers share the durable generation', async () => {

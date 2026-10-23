@@ -159,11 +159,19 @@ export class AgentChatManager {
     if (!pid) throw new PaneError('CHAT_NATIVE_OWNER_MISSING', 'The native terminal owner disappeared before launch. The agent was not started.', 'Resume this tab after inspecting its stopped state.');
     await tracker.capture([pid]);
     let observing = false;
+    let checkpointReady: boolean | undefined;
     const timer = setInterval(() => {
       const current = this.record(panel.id);
       if (current?.conversation.active === 'terminal' && !current.conversation.transition && this.journals.get(panel.id)?.ended()) {
         panelManager.commitAgentChat(panel.id, { ...current, conversation: { ...current.conversation, active: 'stopped', generation: current.conversation.generation + 1, pendingSwitch: undefined, recovery: 'The native agent exited. Recover this exact conversation to continue.' } });
         this.publish(panel.id);
+      }
+      if (this.record(panel.id)?.conversation.active === 'terminal' && !current?.conversation.transition) {
+        const ready = this.journals.get(panel.id)?.checkpoint().ready ?? false;
+        if (ready !== checkpointReady) {
+          checkpointReady = ready;
+          this.publish(panel.id);
+        }
       }
       if (observing) return;
       observing = true;

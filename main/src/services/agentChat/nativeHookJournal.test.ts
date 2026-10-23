@@ -5,6 +5,28 @@ import { describe, expect, it } from 'vitest';
 import { NativeHookJournal, recordNativeHook } from './nativeHookJournal';
 
 describe('native lifecycle checkpoint journal', () => {
+  it('accepts fresh trust navigation after the complete captured startup replies at every split', () => {
+    const prefix = '\x1b]11;rgb:f9f9/fcfc/ffff\x1b\\\x1b]10;rgb:0000/0000/0000\x07\x1b[?0u\x1bP>|xterm.js(6.1.0-beta.302)\x1b\\\x1b_Gi=31;OK\x1b\\\x1b[6;18;8t\x1b[?62;4;9;22c\x1b[?1;2c';
+    const dir = mkdtempSync(path.join(tmpdir(), 'pane-chat-startup-'));
+    try {
+      for (let split = 0; split <= prefix.length; split++) {
+        const file = path.join(dir, `${split}.jsonl`);
+        const journal = new NativeHookJournal(file, 'conversation-a');
+        const hook = (name: string, extra = {}) => recordNativeHook(file, { session_id: 'conversation-a', hook_event_name: name, ...extra });
+        journal.input(prefix.slice(0, split));
+        journal.input(prefix.slice(split));
+        journal.input('\x1b[B\r');
+        hook('SessionStart');
+        journal.input('actual prompt\r');
+        hook('UserPromptSubmit', { prompt: 'actual prompt' });
+        hook('Stop', { background_tasks: [], session_crons: [] });
+        expect(journal.checkpoint().ready, `split ${split}`).toBe(true);
+        journal.input('\x1b[200~' + prefix + '\x1b[201~');
+        expect(journal.checkpoint().ready).toBe(false);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('keeps an idle checkpoint through real xterm replies, including fragmented replies, but still blocks actual queued work', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'pane-chat-protocol-'));
     const file = path.join(dir, 'events.jsonl');
