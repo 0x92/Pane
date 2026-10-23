@@ -1186,6 +1186,8 @@ export interface RunpanePanelInputResult {
 
 export interface RunpanePanelSubmitRequest {
   panelId: string;
+  /** Stable delivery ID for explicit reconciliation of a Chat submission. */
+  operationId?: string;
   input: string;
   /** Stop the current turn and wait for an empty idle composer before sending. */
   interrupt?: boolean;
@@ -1210,7 +1212,7 @@ export type RunpanePanelVerification = 'observed' | 'unverifiable';
  */
 export interface RunpaneDelivery {
   state: 'taken' | 'queued' | 'in-composer' | 'unknown';
-  evidence: 'transcript' | 'screen' | 'argv';
+  evidence: 'transcript' | 'screen' | 'argv' | 'acp-receipt';
   message?: string;
 }
 
@@ -1222,8 +1224,9 @@ export interface RunpanePanelSubmitResult {
   panelId: string;
   paneId?: string;
   inputBytes: number;
-  enter: 'cr' | 'tab';
-  sequenceName: 'codex-ctrl-enter-cr' | 'enter-cr' | 'tab';
+  enter: 'cr' | 'tab' | 'none';
+  sequenceName: 'codex-ctrl-enter-cr' | 'enter-cr' | 'tab' | 'acp';
+  operationId?: string;
   verifiedSubmitted: boolean;
   verification?: RunpanePanelVerification;
   /** Present for Claude and Codex composers; `verifiedSubmitted` is true when it is `taken` or `queued`. */
@@ -1285,7 +1288,7 @@ export interface RunpanePanelWaitResult {
   reason?: RunpaneReadinessReason;
   /** The panel's terminal is not running, so it cannot become ready until `panels resume`. */
   stopped?: true;
-  screen: Pick<RunpanePanelScreenResult, 'source' | 'text' | 'hasMore'>;
+  screen: { source: RunpanePanelScreenSource | 'acpTranscript'; text: string; hasMore: boolean };
   nextCommand?: string;
 }
 

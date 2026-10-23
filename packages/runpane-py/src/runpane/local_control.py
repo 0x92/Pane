@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -1259,6 +1260,7 @@ def compact_dispatch_result(outcome: str, entry: Dict[str, Any]) -> Dict[str, An
 
 def run_panels_submit(parsed: Any) -> int:
     request = build_panel_input_request(parsed, "submit")
+    request["operationId"] = str(uuid.uuid4())
     confirm_panel_input(parsed, request, "submit")
     result = invoke_daemon("runpane:panels:submit", [request], pane_dir=parsed.pane_dir)
     if parsed.wait_for_result and result.get("ok"):
