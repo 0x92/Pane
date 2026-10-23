@@ -1,4 +1,4 @@
-import { AssistantRuntimeProvider, ThreadPrimitive, generateId, useAuiState, useExternalStoreRuntime } from '@assistant-ui/react-native';
+import { AssistantRuntimeProvider, ThreadPrimitive, generateId, useAuiState, useExternalStoreRuntime, type ThreadState } from '@assistant-ui/react-native';
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, TextInput, View } from 'react-native';
@@ -13,17 +13,35 @@ import { ComposerSheet } from '../composer/ComposerSheet';
 import { ChatButton } from './ChatButton';
 import { ChatMessage, NativePermissionContext, PermissionChoices } from './ChatMessage';
 import { pickChatImage } from './pickChatImage';
+import { captureReadingPosition, resolveReadingPosition, MESSAGE_TOP_PADDING } from './readingPosition';
 import type { useAgentChat } from './useAgentChat';
 
 type Chat = ReturnType<typeof useAgentChat>;
 
+const MESSAGE_COMPONENTS = { Message: ChatMessage };
+
 function ConversationList({ chat, approvalScroll }: { chat: Chat; approvalScroll: RefObject<(() => void) | null> }) {
-  // Indices belong to the runtime snapshot, which may lag the host by a render.
   const messages = useAuiState(state => state.thread.messages);
+  // Wait for assistant-ui's actual message data before freezing restoration.
+  return messages.length ? <MessageList chat={chat} approvalScroll={approvalScroll} messages={messages} /> : <View style={styles.fill} />;
+}
+
+function MessageList({ chat, approvalScroll, messages }: { chat: Chat; approvalScroll: RefObject<(() => void) | null>; messages: ThreadState['messages'] }) {
+  const conversationId = chat.view?.conversation?.nativeSessionId ?? '';
+  const [initialPosition] = useState(() => resolveReadingPosition(chat.readingPosition, conversationId, messages));
+  // An oversized anchor must be measured even when its estimated height
+  // would put the requested within-row offset beyond the virtualized window.
+  const [pinnedAnchor, setPinnedAnchor] = useState(() => initialPosition.index ? { keys: [messages[initialPosition.index.index].id] } : undefined);
   const list = useRef<LegendListRef>(null);
+  const ready = useRef(false);
   const { chat: colors } = useTheme();
   const reducedMotion = useReducedMotion();
-  const [atBottom, setAtBottom] = useState(chat.readingPosition.atBottom);
+  const [atBottom, setAtBottom] = useState(initialPosition.atBottom);
+  const savePosition = () => {
+    const state = list.current?.getState();
+    const position = state && captureReadingPosition(conversationId, state, ready.current);
+    if (position) { chat.saveReadingPosition(position); setAtBottom(position.atBottom); }
+  };
   useEffect(() => {
     approvalScroll.current = () => {
       const ids = new Set(chat.view?.permissions.map(permissionToolId));
@@ -33,14 +51,17 @@ function ConversationList({ chat, approvalScroll }: { chat: Chat; approvalScroll
     };
     return () => { approvalScroll.current = null; };
   }, [approvalScroll, chat.view?.permissions, messages, reducedMotion]);
-  if (!chat.view?.transcript) return <View style={styles.loading}><ActivityIndicator color={colors.mutedForeground} /><Text style={{ color: colors.mutedForeground }}>Loading conversation…</Text></View>;
   return <View style={styles.fill}>
-    <LegendList ref={list} testID="chat-messages" data={messages} keyExtractor={message => message.id} recycleItems={false} estimatedItemSize={120} contentContainerStyle={styles.messages} keyboardShouldPersistTaps="handled" maintainVisibleContentPosition maintainScrollAtEnd={{ animated: false }} maintainScrollAtEndThreshold={0.04} initialScrollAtEnd={chat.readingPosition.atBottom} initialScrollOffset={chat.readingPosition.offset} onScroll={event => {
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      const bottom = contentSize.height - contentOffset.y - layoutMeasurement.height < 32;
-      chat.saveReadingPosition(contentOffset.y, bottom);
-      setAtBottom(bottom);
-    }} renderItem={({ index }) => <ThreadPrimitive.MessageByIndex index={index} components={{ Message: ChatMessage }} />} />
+    <LegendList ref={list} testID="chat-messages" data={messages} keyExtractor={message => message.id} recycleItems={false} estimatedItemSize={120} contentContainerStyle={styles.messages} keyboardShouldPersistTaps="handled" maintainVisibleContentPosition maintainScrollAtEnd={{ animated: false }} maintainScrollAtEndThreshold={0.04} initialScrollAtEnd={initialPosition.atBottom} initialScrollIndex={initialPosition.index} alwaysRender={pinnedAnchor} onLoad={() => {
+      ready.current = true;
+      setPinnedAnchor(undefined);
+      const target = initialPosition.index;
+      const size = target && list.current?.getState().sizeAtIndex(target.index);
+      // A row may shrink while this surface is detached. Keep its bookmark
+      // inside the now-measured row rather than scrolling beyond its content.
+      if (target && size && -target.viewOffset >= size) void list.current?.scrollToIndex({ ...target, viewOffset: 1 - size, animated: false });
+      savePosition();
+    }} onContentSizeChange={savePosition} onLayout={savePosition} onScroll={savePosition} onMomentumScrollEnd={savePosition} onScrollEndDrag={savePosition} renderItem={({ item }) => <ThreadPrimitive.Unstable_MessageById messageId={item.id} components={MESSAGE_COMPONENTS} />} />
     {!atBottom && <Pressable testID="chat-latest" accessibilityRole="button" accessibilityLabel="Scroll to latest message" onPress={() => void list.current?.scrollToEnd({ animated: !reducedMotion })} style={[styles.latest, { backgroundColor: colors.background, borderColor: colors.border }]}><Icon ios="arrow.down" android="arrow_downward" size={18} color={colors.foreground} /></Pressable>}
   </View>;
 }
@@ -89,13 +110,13 @@ export function AgentChatPanel({ chat, draft, onChangeDraft, confirmDraft }: { c
     <NativePermissionContext.Provider value={{ permissions: view?.permissions ?? [], disabled, answer: chat.permission }}>
     <ThreadPrimitive.Root testID="agent-chat-panel" style={[styles.fill, { backgroundColor: theme.chat.background }]}>
       {error && <View accessibilityLiveRegion="polite" testID="chat-error" style={[styles.error, { backgroundColor: theme.chat.dangerSoft, borderColor: theme.chat.danger }]}><Text selectable variant="subhead" style={{ color: theme.chat.danger }}>{error}</Text><ChatButton testID="chat-refresh" title="Refresh" onPress={() => void chat.refresh()} /></View>}
-      {chat.pendingDelivery && <View style={styles.delivery}><Text variant="footnote" style={{ color: theme.chat.mutedForeground }}>{chat.delivering ? 'Confirming delivery…' : 'Delivery is unconfirmed.'}</Text><ChatButton testID="chat-check-delivery" title="Check delivery" disabled={!chat.connected || checking || chat.delivering} onPress={() => void check(false)} /><ChatButton testID="chat-retry-delivery" title="Retry same delivery" disabled={!chat.connected || checking || chat.delivering} onPress={() => void check(true)} /></View>}
+      {chat.pendingDelivery && !chat.delivering && <View style={styles.delivery}><Text variant="footnote" style={{ color: theme.chat.mutedForeground }}>Delivery is unconfirmed.</Text><ChatButton testID="chat-check-delivery" title="Check delivery" disabled={!chat.connected || checking || chat.delivering} onPress={() => void check(false)} /><ChatButton testID="chat-retry-delivery" title="Retry same delivery" disabled={!chat.connected || checking || chat.delivering} onPress={() => void check(true)} /></View>}
       {view?.conversation?.active === 'stopped' ? <View style={styles.recovery}>
         <Text style={{ color: theme.chat.foreground }}>{view.conversation.recovery ?? 'This conversation is stopped.'}</Text>
         <Text selectable variant="footnote" style={{ color: theme.chat.mutedForeground }}>Conversation {view.conversation.nativeSessionId}</Text>
         <Text variant="subhead" style={{ color: theme.chat.mutedForeground }}>Recovery opens Terminal to restore this conversation’s launch environment.</Text>
         <ChatButton testID="chat-recover" title={recovering ? 'Recovering…' : 'Recover exact conversation'} disabled={!chat.connected || recovering} onPress={() => { setRecovering(true); void chat.recover().finally(() => setRecovering(false)); }} />
-      </View> : <ConversationList chat={chat} approvalScroll={approvalScroll} />}
+      </View> : !view?.transcript ? <View style={styles.loading}><ActivityIndicator color={theme.chat.mutedForeground} /><Text style={{ color: theme.chat.mutedForeground }}>Loading conversation…</Text></View> : <ConversationList key={view.conversation?.nativeSessionId} chat={chat} approvalScroll={approvalScroll} />}
       <View style={styles.composerArea}>
         {/* A phone must keep an approval reachable even while its tool row is offscreen. */}
         {!!view?.permissions.length && unmatchedPermissions.length === 0 && <ChatButton testID="chat-approval-needed" title="Approval needed" onPress={() => approvalScroll.current?.()} />}
@@ -119,7 +140,7 @@ export function AgentChatPanel({ chat, draft, onChangeDraft, confirmDraft }: { c
   </AssistantRuntimeProvider>;
 }
 const styles = StyleSheet.create({
-  fill: { flex: 1, minHeight: 0 }, loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }, messages: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32 },
+  fill: { flex: 1, minHeight: 0 }, loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }, messages: { paddingHorizontal: 16, paddingTop: MESSAGE_TOP_PADDING, paddingBottom: 32 },
   latest: { position: 'absolute', bottom: 12, alignSelf: 'center', width: 44, height: 44, borderRadius: 22, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   composerArea: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4, gap: 8 }, composer: { borderWidth: 1, borderRadius: 24, padding: 8, gap: 8 }, input: { minHeight: 40, maxHeight: 192, paddingHorizontal: 10, paddingVertical: 4, fontSize: 16, lineHeight: 24, textAlignVertical: 'top' },
   composerActions: { flexDirection: 'row', alignItems: 'center' }, target: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, send: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }, config: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, minHeight: 44, paddingHorizontal: 6 },

@@ -22,6 +22,7 @@ export class AcpProcess {
   private identities: ArchiveProcessIdentity[] = [];
   private timer?: ReturnType<typeof setInterval>;
   private observation: Promise<void> = Promise.resolve();
+  private observing = false;
   private observationError?: unknown;
   private releasePromise?: Promise<void>;
   private startupError?: Error;
@@ -48,7 +49,9 @@ export class AcpProcess {
     await this.tracker.capture([this.child.pid]);
     if (this.identities.length === 0) throw new PaneError('CHAT_PROCESS_IDENTITY_UNVERIFIED', 'The adapter exited before its process identity could be verified.', 'Inspect the stopped runtime before recovering the conversation.');
     this.timer = setInterval(() => {
-      this.observation = this.observation.then(() => this.tracker.refresh()).catch(error => { this.observationError = error; });
+      if (this.observing) return;
+      this.observing = true;
+      this.observation = this.tracker.refresh().catch(error => { this.observationError = error; }).finally(() => { this.observing = false; });
     }, 200);
     this.timer.unref();
   }
@@ -60,20 +63,23 @@ export class AcpProcess {
 
   private async releaseOnce(): Promise<void> {
     let protocolError: unknown;
-    try { await this.session.close(); } catch (error) { protocolError = error; }
-    this.child.stdin.end();
-    const deadline = Date.now() + 1500;
-    while (this.child.exitCode === null && this.child.signalCode === null && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    if (this.child.exitCode === null && this.child.signalCode === null) {
-      const root = this.identities.find(identity => identity.pid === this.child.pid);
-      const current = (await readArchiveProcesses()).find(identity => identity.pid === this.child.pid);
-      if (root && current?.started === root.started && !current.exited) this.child.kill('SIGTERM');
-    }
-    if (this.timer) clearInterval(this.timer);
+    try {
+      try { await this.session.close(); } catch (error) { protocolError = error; }
+      this.child.stdin.end();
+      const deadline = Date.now() + 1500;
+      while (this.child.exitCode === null && this.child.signalCode === null && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      if (this.child.exitCode === null && this.child.signalCode === null) {
+        await this.tracker.refresh();
+        const root = this.identities.find(identity => identity.pid === this.child.pid);
+        const current = (await readArchiveProcesses()).find(identity => identity.pid === this.child.pid);
+        if (root && current?.started === root.started && !current.exited) this.child.kill('SIGTERM');
+      }
+    } finally { if (this.timer) clearInterval(this.timer); }
     await this.observation;
     await this.tracker.refresh();
+    await this.tracker.terminateSurvivors();
     await this.tracker.verifyExited(5000);
     if (this.observationError) throw new PaneError('CHAT_PROCESS_OBSERVATION_FAILED', `Process ownership observation failed: ${reasonOf(this.observationError)}.`, 'Verify the stopped conversation before explicitly recovering it.');
     if (protocolError) throw new PaneError('CHAT_CLOSE_UNCONFIRMED', `The adapter exited, but did not acknowledge session close: ${reasonOf(protocolError)}.`, 'Recover the exact conversation explicitly after inspecting its state.');
