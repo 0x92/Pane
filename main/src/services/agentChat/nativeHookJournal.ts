@@ -1,5 +1,6 @@
 import { appendFileSync, closeSync, existsSync, openSync, readSync, statSync } from 'fs';
 import { boundary, decodeBoundary, decodeOptionalBoundary } from '../../../../shared/validation/boundaryDecoder';
+import { NativeInput } from './nativeInput';
 import { NativeCheckpoint, type NativeCheckpointState } from './nativeCheckpoint';
 
 const MAX_JOURNAL_BYTES = 16 * 1024 * 1024;
@@ -45,6 +46,7 @@ export class NativeHookJournal {
   private directory?: string;
   private pendingSubmissions = 0;
   private composerDirty = false;
+  private readonly terminalInput = new NativeInput();
   private awaitingPermission = false;
   private readonly observer: NativeCheckpoint;
 
@@ -89,11 +91,16 @@ export class NativeHookJournal {
 
   input(data: string): void {
     this.drain();
+    const userInput = this.terminalInput.take(data);
+    if (!userInput) return;
+    // First-run trust navigation precedes SessionStart and is not a prompt.
+    // Typed startup prompts still enter the same queue accounting as usual.
+    if (!this.started && !this.composerDirty && !this.pendingSubmissions && userInput.replace(/[\r\t]/g, '').split('\x1b').every((part, index) => index === 0 ? part === '' : /^\[[ABCD]$/.test(part))) return;
     this.observer.input();
     if (this.awaitingPermission) return;
-    const submissions = data.split('\r').length - 1;
+    const submissions = userInput.split('\r').length - 1;
     this.pendingSubmissions += submissions;
-    this.composerDirty = !data.endsWith('\r');
+    this.composerDirty = !userInput.endsWith('\r');
   }
   ended(): boolean { this.drain(); return this.finished && !this.fault; }
   initialized(): boolean { this.drain(); return this.started && !this.fault; }
@@ -105,7 +112,7 @@ export class NativeHookJournal {
   checkpoint(): NativeCheckpointState {
     this.drain();
     if (this.fault) return { ready: false, reason: `${this.fault}. Keep using Terminal; this runtime cannot safely switch.` };
-    if (this.pendingSubmissions || this.composerDirty) return { ready: false, reason: 'Terminal input has not reached a confirmed turn. Submit the draft and wait for queued prompts to finish before switching.' };
+    if (this.pendingSubmissions || this.composerDirty || this.terminalInput.incomplete()) return { ready: false, reason: 'Terminal input has not reached a confirmed turn. Submit the draft and wait for queued prompts to finish before switching.' };
     return this.observer.read();
   }
 }

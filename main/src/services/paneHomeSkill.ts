@@ -87,6 +87,9 @@ export function syncPaneHomeSkill(
   dirs: string[] = paneHomeSkillDirs(),
   wslDistros: string[] = [],
 ): Promise<PaneHomeSkillResult[]> {
+  // PANE_DIR isolates app data, not the user's agent configuration. Test/dev
+  // runtimes that disable OS integration must also leave these home files alone.
+  if (process.env.PANE_DISABLE_OS_INTEGRATION === '1') return Promise.resolve([]);
   const result = syncQueue.then(() => syncPaneHomeSkillNow(config, dirs, wslDistros));
   syncQueue = result.then(() => {}, () => {});
   return result;
