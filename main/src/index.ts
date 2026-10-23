@@ -1,3 +1,4 @@
+import { agentChatManager } from './services/agentChat/agentChatManager';
 import { acknowledgeUpdateQuiescence } from './services/updateShutdown';
 // Answer --version before any import below logs or touches the database.
 import './versionQuery';
@@ -1321,7 +1322,7 @@ if (launchRemoteSetup) {
   // legacy in-main `pty.spawn` path with zero ptyHost code executing.
   if (configManager.getUsePtyHost()) {
     try {
-      ptyHostSupervisor = new PtyHostSupervisor();
+      ptyHostSupervisor = new PtyHostSupervisor((ptyId, data) => terminalPanelManager.authorizePtyHostInput(ptyId, data));
       await ptyHostSupervisor.start();
 
       ptyHostSupervisor.on('renderer-ack', (ptyId: string, bytes: number) => {
@@ -1589,6 +1590,8 @@ if (launchRemoteSetup) {
     // Terminals exiting because Pane is quitting are not owners releasing their
     // named locks; resumed agents still hold them after the restart.
     paneDaemonHost?.services.namedLockService?.suspendAutoRelease();
+
+    await agentChatManager.stopAll();
 
     // Phase 1: Send Ctrl+C to all terminals to gracefully exit Claude instances
     // Claude needs to exit cleanly so it releases the session ID lock, allowing

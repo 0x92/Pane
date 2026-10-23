@@ -38,6 +38,8 @@ export type SettingsSettingId =
   | 'terminal-reference-line-count'
   | 'terminal-shell'
   | 'default-pane-chat-agent'
+  | 'agent-chat-enabled'
+  | 'default-agent-interface'
   | 'mcp-registration'
   | 'mcp-toolsets'
   | 'agent-skill'

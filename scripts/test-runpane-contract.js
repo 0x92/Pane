@@ -2698,7 +2698,10 @@ async function checkFilePointerParity() {
   assert.strictEqual(adoptCall.request.panes[0].launch, true);
   assert.strictEqual(adoptCall.request.waitReady, true);
   const submitCalls = wireCalls.filter(call => call.channel === 'runpane:panels:submit');
-  assert.deepStrictEqual(submitCalls[0].request, { panelId: 'panel-1', input: 'Line one\nLine two', asFilePointer: true });
+  assert.match(submitCalls[0].request.operationId, /^[0-9a-f-]{36}$/);
+  assert.notStrictEqual(submitCalls[0].request.operationId, submitCalls[1].request.operationId);
+  const { operationId: _npmOperationId, ...npmSubmit } = submitCalls[0].request;
+  assert.deepStrictEqual(npmSubmit, { panelId: 'panel-1', input: 'Line one\nLine two', asFilePointer: true });
   assert.strictEqual(submitCalls[2].request.asFilePointer, undefined);
   const createCall = wireCalls.find(call => call.channel === 'runpane:panes:create');
   assert.deepStrictEqual(createCall.request.panes[0].tool, { agent: 'claude', initialInput: 'Line one\nLine two', initialInputAsFilePointer: true });
@@ -2748,7 +2751,9 @@ except ValueError as error:
 print(json.dumps({"calls": calls, "stdout": stdout.getvalue().splitlines(), "refused": refused}))
 `);
   const python = JSON.parse(pythonOutput);
-  assert.deepStrictEqual(python.calls[0].request, { panelId: 'panel-1', input: 'Line one\nLine two', asFilePointer: true });
+  assert.match(python.calls[0].request.operationId, /^[0-9a-f-]{36}$/);
+  const { operationId: _pythonOperationId, ...pythonSubmit } = python.calls[0].request;
+  assert.deepStrictEqual(pythonSubmit, { panelId: 'panel-1', input: 'Line one\nLine two', asFilePointer: true });
   assert.deepStrictEqual(python.calls[1].request.panes[0].tool, { agent: 'claude', initialInput: 'Line one\nLine two', initialInputAsFilePointer: true });
   assert.ok(python.stdout.includes(`Prompt file: ${promptFile}`), python.stdout.join('\n'));
   assert.ok(python.stdout.includes('Warning (leading-bang-runs-shell): The text starts with `!`.'), python.stdout.join('\n'));

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { stdin as input, stdout as output } from 'node:process';
@@ -779,7 +779,7 @@ interface PanelStateSummary {
 /** Where a prompt sent to a Claude or Codex composer went, and what Pane read to know. */
 interface Delivery {
   state: 'taken' | 'queued' | 'in-composer' | 'unknown';
-  evidence: 'transcript' | 'screen' | 'argv';
+  evidence: 'transcript' | 'screen' | 'argv' | 'acp-receipt';
   message?: string;
 }
 
@@ -833,8 +833,9 @@ interface PanelSubmitResult {
   panelId: string;
   paneId?: string;
   inputBytes: number;
-  enter: 'cr' | 'tab';
-  sequenceName: 'codex-ctrl-enter-cr' | 'enter-cr' | 'tab';
+  enter: 'cr' | 'tab' | 'none';
+  sequenceName: 'codex-ctrl-enter-cr' | 'enter-cr' | 'tab' | 'acp';
+  operationId?: string;
   verifiedSubmitted: boolean;
   verification?: 'observed' | 'unverifiable';
   delivery?: Delivery;
@@ -868,7 +869,7 @@ interface PanelWaitResult extends PanelReadiness {
   paneId?: string;
   stopped?: true;
   screen: {
-    source: PanelScreenResult['source'];
+    source: PanelScreenResult['source'] | 'acpTranscript';
     text: string;
     hasMore: boolean;
   };
@@ -1086,7 +1087,7 @@ const panelReadinessSchema: BoundarySchema<PanelReadiness> = boundary.object({
 const verificationSchema = boundary.optional(boundary.enumeration('observed', 'unverifiable'));
 const deliverySchema: BoundarySchema<Delivery | undefined> = boundary.optional(boundary.object({
   state: boundary.enumeration('taken', 'queued', 'in-composer', 'unknown'),
-  evidence: boundary.enumeration('transcript', 'screen', 'argv'),
+  evidence: boundary.enumeration('transcript', 'screen', 'argv', 'acp-receipt'),
   message: boundary.optional(boundary.string),
 }));
 const promptWarningsSchema = boundary.optional(boundary.array(boundary.object({
@@ -1737,12 +1738,13 @@ export const panelScreenResultSchema: BoundarySchema<PanelScreenResult> = bounda
   nextCommand: boundary.optional(boundary.string),
 });
 export const panelSubmitResultSchema: BoundarySchema<PanelSubmitResult> = boundary.object({
+  operationId: boundary.optional(boundary.string),
   ok: boundary.boolean,
   panelId: boundary.string,
   paneId: boundary.optional(boundary.string),
   inputBytes: boundary.number,
-  enter: boundary.enumeration('cr', 'tab'),
-  sequenceName: boundary.enumeration('codex-ctrl-enter-cr', 'enter-cr', 'tab'),
+  enter: boundary.enumeration('cr', 'tab', 'none'),
+  sequenceName: boundary.enumeration('codex-ctrl-enter-cr', 'enter-cr', 'tab', 'acp'),
   verifiedSubmitted: boundary.boolean,
   verification: verificationSchema,
   delivery: deliverySchema,
@@ -1785,7 +1787,7 @@ const panelWaitResultSchema: BoundarySchema<PanelWaitResult> = boundary.object({
   panelId: boundary.string,
   paneId: boundary.optional(boundary.string),
   screen: boundary.object({
-    source: boundary.enumeration('alternateScreen', 'scrollback', 'persistedOutput', 'empty'),
+    source: boundary.enumeration('alternateScreen', 'scrollback', 'persistedOutput', 'empty', 'acpTranscript'),
     text: boundary.string,
     hasMore: boundary.boolean,
   }),
@@ -3121,7 +3123,7 @@ function clip(text: string, tail = false): string {
 }
 
 export async function runPanelsSubmit(parsed: ParsedArgs): Promise<number> {
-  const request = buildPanelInputRequest(parsed, 'submit');
+  const request = { ...buildPanelInputRequest(parsed, 'submit'), operationId: randomUUID() };
   await confirmPanelInput(parsed, request, 'submit');
 
   const result = await invokeDaemon('runpane:panels:submit', [request], panelSubmitResultSchema, {

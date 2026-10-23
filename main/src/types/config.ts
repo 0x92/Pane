@@ -45,6 +45,8 @@ export interface AnalyticsIdentity {
 type HtmlFileOpenMode = 'preview' | 'source';
 
 export interface AppConfig {
+  agentChatEnabled?: boolean;
+  defaultAgentInterface?: 'terminal' | 'chat';
   verbose?: boolean;
   anthropicApiKey?: string;
   openaiApiKey?: string;

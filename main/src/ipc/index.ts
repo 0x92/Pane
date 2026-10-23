@@ -1,3 +1,4 @@
+import { registerAgentChatHandlers } from './agentChat';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 import type { PaneCommandValue } from '../daemon/commandRegistry';
 import { ipcMain, powerMonitor } from 'electron';
@@ -130,6 +131,7 @@ export function registerIpcHandlers(services: AppServices): PaneCommandRegistry 
   registerAgentUsageHandlers(ipcMain, services, commandRegistry);
   registerVoiceHandlers(ipcMain, services, commandRegistry);
   registerPaneChatHandlers(ipcMain, services, commandRegistry);
+  registerAgentChatHandlers(ipcMain, commandRegistry);
   registerSshHostHandlers(ipcMain, services, commandRegistry);
   registerOrchestrationSessionHandlers(ipcMain, services, commandRegistry);
   registerUsageHandlers(ipcMain, commandRegistry);

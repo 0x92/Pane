@@ -1,3 +1,4 @@
+import type { AgentChatPanelState } from './agentChat';
 import type { CustomCommandResume } from './customCommandResume';
 import type { DiffScope } from './gitDiff';
 import { boundary, decodeOptionalBoundary } from '../validation/boundaryDecoder';
@@ -57,6 +58,8 @@ export interface TerminalAgentReport {
 }
 
 export interface TerminalPanelState {
+  /** Host-owned chat runtime identity and handoff journal. Viewers cannot mutate it. */
+  agentChat?: AgentChatPanelState;
   // Basic state (implemented in Phase 1-2)
   isInitialized?: boolean;       // Whether PTY process has been started
   cwd?: string;                  // Current working directory

@@ -1,3 +1,5 @@
+import { agentChatManager } from '../services/agentChat/agentChatManager';
+import { assertRawTerminal, chatLastMessage, chatText, submitChat, waitForChat } from './runpaneChat';
 import { paneCommandSignal } from '../daemon/commandRegistry';
 import { MAX_WORKSPACE_WAIT_TIMEOUT_MS, WorkspaceWatchCancelledError, WorkspaceWatchLeases } from '../services/workspaceWatchLeases';
 import { failureDetails, FailureLimiter } from '../utils/failureTelemetry';
@@ -1204,6 +1206,11 @@ export function registerRunpaneHandlers(
       const normalized = parsePanelOutputRequest(request);
       const panel = resolvePanel(normalized.panelId);
       const limit = normalized.limit ?? DEFAULT_PANEL_OUTPUT_LIMIT;
+      if (agentChatManager.mode(panel.id) === 'chat') {
+        const full = chatText(agentChatManager.view(panel.id));
+        const text = full.slice(-Math.min(limit * 1000, 200_000));
+        return { ok: true, panelId: panel.id, paneId: panel.sessionId, limit, returnedCount: text ? 1 : 0, hasMore: text.length < full.length, outputs: text ? [{ type: 'acp-transcript', data: text, timestamp: new Date().toISOString() }] : [], text };
+      }
       const scrollbackResult = panel.type === 'terminal' ? await panelScrollbackOutput(panel, limit) : null;
 
       if (scrollbackResult) {
@@ -1252,6 +1259,7 @@ export function registerRunpaneHandlers(
     return withRunpaneAction(services, 'panels:input', {}, () => {
       const normalized = parsePanelInputRequest(request);
       const panel = resolvePanel(normalized.panelId);
+      assertRawTerminal(panel.id);
 
       if (panel.type !== 'terminal') {
         throw new Error(`Panel ${panel.id} is a ${panel.type} panel, not a terminal panel`);
@@ -1368,6 +1376,7 @@ export function registerRunpaneHandlers(
     return withRunpaneAction(services, 'panels:screen', {}, async () => {
       const normalized = parsePanelScreenRequest(request);
       const panel = resolveTerminalPanel(normalized.panelId);
+      assertRawTerminal(panel.id);
       return await buildPanelScreenResult(panel, normalized.limit ?? DEFAULT_PANEL_SCREEN_LIMIT);
     }, result => ({
       paneId: result.paneId,
@@ -1381,6 +1390,19 @@ export function registerRunpaneHandlers(
     return withRunpaneAction(services, 'panels:submit', {}, async () => {
       const normalized = parsePanelSubmitRequest(request);
       const panel = resolveTerminalPanel(normalized.panelId);
+      const mode = agentChatManager.mode(panel.id);
+      if (mode && mode !== 'terminal') {
+        if (normalized.source === 'user') getMobilePushSender(configManager).arm(panel.id);
+        const pointer = normalized.asFilePointer ? await writeAgentPromptFile(panel.sessionId, normalized.input, {
+          worktreePath: localWorktreePath(services, panel.sessionId, sessionWslContext(services, panel.sessionId)), attachments: normalized.attachments,
+        }) : undefined;
+        const expected = shouldExpectReport(normalized, true) ? services.expectedReportTracker?.arm(panel.id, new Date().toISOString(), true) : undefined;
+        try {
+          const result = await submitChat(panel, pointer ? pointerLine(pointer, sessionWslContext(services, panel.sessionId)) : normalized.input, normalized.interrupt ?? false, normalized.operationId);
+          if (expected) { services.expectedReportTracker?.delivered(panel.id); result.expectedReport = { since: expected.since }; }
+          return { ...result, ...pointerResultFields(pointer) };
+        } catch (error) { if (expected) services.expectedReportTracker?.cancelPending(panel.id, expected); throw error; }
+      }
       if (!terminalPanelManager.isTerminalInitialized(panel.id)) {
         throw new Error(`Terminal panel ${panel.id} is not initialized`);
       }
@@ -1573,6 +1595,7 @@ export function registerRunpaneHandlers(
     return withRunpaneAction(services, 'panels:submit-composer', {}, async () => {
       const normalized = parsePanelSubmitComposerRequest(request);
       const panel = resolveTerminalPanel(normalized.panelId);
+      assertRawTerminal(panel.id);
       if (!terminalPanelManager.isTerminalInitialized(panel.id)) {
         throw new Error(`Terminal panel ${panel.id} is not initialized`);
       }
@@ -2035,8 +2058,8 @@ function panelToSummary(panel: ToolPanel, dockPanelId?: string, launchExited = f
     type: panel.type,
     title: panel.title,
     active: Boolean(panel.state.isActive),
-    initialized: panel.type === 'terminal' ? terminalPanelManager.isTerminalInitialized(panel.id) : undefined,
-    running: panel.type === 'terminal' ? terminalPanelManager.isTerminalInitialized(panel.id) && !launchExited : undefined,
+    initialized: panel.type === 'terminal' ? terminalPanelManager.isAgentRuntimeInitialized(panel.id) : undefined,
+    running: panel.type === 'terminal' ? terminalPanelManager.isAgentRuntimeInitialized(panel.id) && !launchExited : undefined,
     agentType,
     agentDetection,
     launchCommand: optionalString(customState.launchCommand) ?? initialCommand,
@@ -2103,6 +2126,7 @@ async function readPanelLastMessage(
   cwd: string | undefined,
   limit: number,
 ): Promise<RunpanePanelLastMessageResult> {
+  if (agentChatManager.mode(panel.id) === 'chat') return chatLastMessage(panel, limit);
   const agentType = panelStateSummary(panel, terminalPanelManager.getTerminalSnapshot(panel.id)).agentType;
   const unavailable = (message: string): RunpanePanelLastMessageResult => ({
     ok: false,
@@ -2998,6 +3022,12 @@ async function resumeTerminalPanel(
       intervalMs: DEFAULT_PANEL_WAIT_INTERVAL_MS,
     }))
     : undefined;
+  const managed = agentChatManager.manages(panel.id) ? agentChatManager.view(panel.id).conversation : undefined;
+  if (managed) {
+    if (managed.active === 'stopped') await agentChatManager.recover(panel.id, managed.preferred, managed.generation);
+    const restored = panelManager.getPanel(panel.id) ?? panel;
+    return panelResumeResult(restored, managed.active === 'stopped' ? 'resumed' : 'already-running', 'The exact saved conversation is available in its selected interface.', await waitIfAsked(restored));
+  }
   if (terminalPanelManager.isTerminalInitialized(panel.id)) {
     // The agent exited back to Pane's shell: run its saved command there again, once for overlapping resumes.
     if (await terminalPanelManager.relaunchIfExited(panel.id)) {
@@ -3179,6 +3209,8 @@ function getTerminalCustomState(panel: ToolPanel): TerminalPanelState {
 }
 
 async function waitForPanel(panel: ToolPanel, request: RunpanePanelWaitRequest): Promise<RunpanePanelWaitResult> {
+  const mode = agentChatManager.mode(panel.id);
+  if (mode && mode !== 'terminal') return waitForChat(panel, request);
   const startedAt = Date.now();
   const timeoutMs = request.timeoutMs ?? DEFAULT_PANEL_WAIT_TIMEOUT_MS;
   const intervalMs = request.intervalMs ?? DEFAULT_PANEL_WAIT_INTERVAL_MS;
@@ -4856,6 +4888,7 @@ function parsePanelSubmitRequest(value: PaneCommandValue): RunpanePanelSubmitReq
   return {
     panelId,
     input,
+    operationId: optionalString(value.operationId),
     interrupt: optionalBoolean(value.interrupt),
     asFilePointer: optionalBoolean(value.asFilePointer),
     attachments: parseAttachments(value.attachments, optionalBoolean(value.asFilePointer), 'Panel submit request'),
