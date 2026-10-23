@@ -74,7 +74,8 @@ test('combines configuration on narrow screens and preserves host option values'
   await expect(trigger).toContainText('Sonnet 5.5 · High');
   await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toBeHidden();
   await trigger.click();
-  const menu = page.getByRole('menu');
+  await expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
+  const menu = page.getByRole('dialog', { name: 'Conversation configuration' });
   const model = menu.getByRole('combobox', { name: 'Model', exact: true });
   const effort = menu.getByRole('combobox', { name: 'Effort', exact: true });
   await expect(model).toBeFocused();

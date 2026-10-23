@@ -15,7 +15,7 @@ export function AgentChatConfiguration({ controls, disabled, configure }: { cont
   </label>);
   return <>
     <div className="chat-config-expanded">{selectors}</div>
-    <Dropdown className="chat-config-compact" position="top-left" width="md" items={[]} trigger={<button type="button" disabled={disabled} aria-label="Conversation configuration" title={summary} className="chat-button"><span>{summary}</span><ChevronDown className="h-3 w-3 shrink-0" /></button>} footer={<div className="agent-chat chat-config-options" onKeyDown={event => {
+    <Dropdown className="chat-config-compact" position="top-left" width="md" items={[]} formLabel="Conversation configuration" trigger={<button type="button" disabled={disabled} aria-label="Conversation configuration" title={summary} className="chat-button"><span>{summary}</span><ChevronDown className="h-3 w-3 shrink-0" /></button>} footer={<div className="agent-chat chat-config-options" onKeyDown={event => {
       if (event.key !== 'Tab') return;
       const controls = [...event.currentTarget.querySelectorAll('select:not(:disabled)')];
       const current = controls.findIndex(control => control === document.activeElement);
