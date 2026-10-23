@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { databaseService } from '../database';
 import { panelManager } from '../panelManager';
 import { AgentChatManager } from './agentChatManager';
@@ -129,21 +129,30 @@ process.stdin.on('data', chunk => { buffer += chunk; let end; while ((end=buffer
     ]);
     expect(() => manager.send(panel.id, { ...request, text: 'Changed retry' })).toThrow(/different content/i);
 
+    const { getPaneEventSink } = await import('../../core/runtime');
+    const statusSpy = vi.spyOn(getPaneEventSink(), 'send');
     manager.send(panel.id, { ...request, operationId: 'failed-turn', text: 'Fail this turn' });
     await expect.poll(() => manager.receipt(panel.id, 'failed-turn')?.state).toBe('failed');
     expect(manager.view(panel.id).error).toContain('Provider authentication expired');
     expect(manager.status(panel.id)).toBe('blocked');
     const { chatLastMessage, waitForChat } = await import('../../ipc/runpaneChat');
     const { agentChatManager } = await import('./agentChatManager');
-    const { vi } = await import('vitest');
     const viewSpy = vi.spyOn(agentChatManager, 'view').mockImplementation(() => manager.view(panel.id));
     try {
       expect(() => chatLastMessage(panel, 100)).toThrow(/authentication expired/);
       await expect(waitForChat(panel, { panelId: panel.id, condition: 'idle' })).rejects.toMatchObject({ code: 'CHAT_TURN_FAILED' });
     } finally { viewSpy.mockRestore(); }
+    expect(statusSpy.mock.calls.filter(([channel]) => channel === 'panel:agentStatus').map(([, payload]) => payload)).toEqual([
+      expect.objectContaining({ state: 'working' }), expect.objectContaining({ state: 'blocked' }),
+    ]);
+    statusSpy.mockClear();
     manager.send(panel.id, { ...request, operationId: 'after-failure', text: 'Continue successfully' });
     await expect.poll(() => manager.receipt(panel.id, 'after-failure')?.state).toBe('completed');
     expect(manager.view(panel.id).error).toBeUndefined();
+    expect(statusSpy.mock.calls.filter(([channel]) => channel === 'panel:agentStatus').map(([, payload]) => payload)).toEqual([
+      expect.objectContaining({ state: 'working' }), expect.objectContaining({ state: 'idle', workedVisibly: true }),
+    ]);
+    statusSpy.mockRestore();
 
     hook('Stop', { permission_mode: 'default', effort: { level: 'medium' }, background_tasks: [], session_crons: [] });
     await manager.configure(panel.id, 2, 'mode', 'plan');

@@ -218,8 +218,8 @@ export class AgentChatManager {
     const saved = this.record(panelId);
     if (!saved || saved.conversation.active === 'terminal') return;
     if (saved.conversation.active === 'stopped') return 'unknown';
-    const session = this.adapters.get(panelId)?.session;
-    return session?.permissions().length ? 'blocked' : session?.isRunning() ? 'working' : this.view(panelId, false).error ? 'blocked' : 'idle';
+    const view = this.view(panelId, false);
+    return view.permissions.length ? 'blocked' : view.running ? 'working' : view.error ? 'blocked' : 'idle';
   }
 
   private publish(panelId: string): void {
@@ -245,9 +245,13 @@ export class AgentChatManager {
       : 'Chat switching currently requires Claude Code 2.1.309 on a macOS Apple Silicon host, launched directly with Chat enabled. Custom wrappers and unsupported flags stay in Terminal.';
     const adapter = this.adapters.get(panelId)?.session;
     const lastReceipt = saved?.receipts?.at(-1);
+    // The protocol clears its running flag before its promise settles here.
+    // Keep the host turn working until finish() durably commits the outcome;
+    // otherwise a rejection briefly emits a false idle/completion notification.
+    const awaitingResult = saved?.conversation.active === 'chat' && lastReceipt?.generation === saved.conversation.generation && lastReceipt.state === 'accepted';
     return {
       panelId, conversation: saved?.conversation, available: !!saved, unavailableReason,
-      setupRequired: !!saved && !claudeAdapterEntry(), running: saved?.conversation.active === 'terminal' ? !this.journals.get(panelId)?.checkpoint().ready : adapter?.isRunning() ?? false, canAttachImages: adapter?.supportsImages() ?? false,
+      setupRequired: !!saved && !claudeAdapterEntry(), running: saved?.conversation.active === 'terminal' ? !this.journals.get(panelId)?.checkpoint().ready : awaitingResult || (adapter?.isRunning() ?? false), canAttachImages: adapter?.supportsImages() ?? false,
       controls: adapter?.controls(),
       permissions: adapter?.permissions().map(permission => ({ id: permission.id, generation: permission.generation,
         title: permission.request.toolCall.title ?? 'Permission requested',
@@ -470,7 +474,7 @@ export class AgentChatManager {
     const runtime = this.adapters.get(panelId)?.session;
     if (!runtime) throw new PaneError('CHAT_RECOVERY_REQUIRED', 'The Chat runtime is unavailable. No prompt was sent.', 'Recover the exact saved conversation.');
     if (request.images?.length && (!runtime.supportsImages() || request.images.some(image => !/^image\/(png|jpeg|webp|gif)$/.test(image.mimeType) || !/^[A-Za-z0-9+/]*={0,2}$/.test(image.data)))) throw new PaneError('CHAT_IMAGE_UNSUPPORTED', 'The adapter cannot accept these image attachments. Nothing was sent.', 'Use a supported PNG, JPEG, WebP or GIF image or send text.');
-    if (runtime.isRunning()) throw new PaneError('CHAT_TURN_RUNNING', 'The agent is already working. No prompt was sent.', 'Wait for its turn or cancel it.');
+    if (this.view(panelId, false).running) throw new PaneError('CHAT_TURN_RUNNING', 'The agent is already working. No prompt was sent.', 'Wait for its turn or cancel it.');
     const receipts = (saved.receipts ?? []).filter(entry => entry.generation === request.generation);
     if (receipts.length >= 1024) throw new PaneError('CHAT_RECEIPTS_FULL', 'This runtime has reached its durable receipt limit. No prompt was sent.', 'Switch to Terminal and back at a checkpoint to begin a new runtime generation.');
     const receipt: AgentChatReceipt = { operationId: request.operationId, generation: request.generation, fingerprint, state: 'accepted' };
