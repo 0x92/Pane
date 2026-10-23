@@ -555,7 +555,7 @@ export class AgentChatManager {
     finally { this.updateOperations.delete(panelId); }
   }
 
-  verifyNativeResume(panelId: string, nativeId: string): { pid: number } {
+  verifyNativeResume(panelId: string, nativeId: string) {
     const record = this.required(panelId).conversation;
     const pid = this.native?.pid(panelId);
     if (!pid || record.active !== 'terminal' || record.nativeSessionId !== nativeId || !this.journals.get(panelId)?.resumed()) throw new PaneError('CHAT_NATIVE_RESUME_UNCONFIRMED', 'The native runtime did not confirm the exact saved conversation.', 'Inspect this tab before resuming it again.');

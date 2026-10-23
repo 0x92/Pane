@@ -19,7 +19,8 @@ describe('agent chat host commands', () => {
   });
 });
 
-it('keeps a supported native conversation usable when its adapter setup is missing and persists the checkpoint identity', async () => {
+// These integration fixtures execute a POSIX fake CLI; Windows profiles remain unsupported.
+it.skipIf(process.platform === 'win32')('keeps a supported native conversation usable when its adapter setup is missing and persists the checkpoint identity', async () => {
   const { mkdtempSync, writeFileSync, rmSync } = await import('fs');
   const { tmpdir } = await import('os');
   const { join } = await import('path');
@@ -53,7 +54,7 @@ it('keeps a supported native conversation usable when its adapter setup is missi
   } finally { child.kill(); await exit; manager.detachObservers(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-it('switches one exact conversation through native, ACP and native while all viewers share the durable generation', async () => {
+it.skipIf(process.platform === 'win32')('switches one exact conversation through native, ACP and native while all viewers share the durable generation', async () => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('fs');
   const { tmpdir } = await import('os');
   const { join } = await import('path');
@@ -127,6 +128,8 @@ process.stdin.on('data', chunk => { buffer += chunk; let end; while ((end=buffer
     hook('Stop', { permission_mode: 'default', background_tasks: [], session_crons: [] });
     await manager.switchTo(panel.id, 'terminal', 2);
     expect(manager.view(panel.id).conversation).toMatchObject({ active: 'terminal', nativeSessionId: nativeId, generation: 3 });
+    expect(manager.verifyNativeResume(panel.id, nativeId)).toEqual({ pid: child.pid });
+    expect(() => manager.verifyNativeResume(panel.id, 'different-conversation')).toThrow(/exact saved conversation/);
     const fresh = await panelManager.createPanel({ sessionId: id, type: 'terminal', initialState: { agentType: 'claude', initialCommand: executable, initialInput: 'Fresh first turn' } });
     expect(await manager.prepareFreshChat(fresh, directory, process.env, 'bash', false, 'chat')).toBe(true);
     expect(manager.view(fresh.id).conversation).toMatchObject({ active: 'chat', nativeSessionId: 'fresh-native-a', generation: 1 });

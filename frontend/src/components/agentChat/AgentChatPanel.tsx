@@ -92,7 +92,7 @@ export default function AgentChatPanel({ panelId, client, connected = true }: { 
     adapters: view?.canAttachImages ? { attachments: images } : undefined,
     onNew: async message => {
       const parts = [...message.content, ...(message.attachments ?? []).flatMap(attachment => attachment.content)];
-      const text = parts.filter(part => part.type === 'text').map(part => part.text).join('\n');
+      const text = parts.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
       const imageParts = parts.flatMap(part => {
         if (part.type !== 'image') return [];
         const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/s.exec(part.image);
