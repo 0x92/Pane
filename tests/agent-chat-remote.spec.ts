@@ -145,3 +145,37 @@ test('keeps an uncertain draft visible and retries only its original delivery', 
   expect(deliveries).toHaveLength(2);
   expect(deliveries[1]).toEqual(deliveries[0]);
 });
+
+for (const theme of ['light', 'dark']) test(`keeps pending-switch and reconnect controls readable in a narrow header (${theme})`, async ({ page }, testInfo) => {
+  if (testInfo.project.name === 'phone') await page.setViewportSize({ width: 320, height: 844 });
+  await openConnectedRemotePwa(page, { sessionNames: ['Header fixture'], panelTitles: ['Claude'] });
+  const conversation = { panelId: 'anim-panel-0', workspaceId: 'anim-remote-0', provider: 'claude' as const, nativeSessionId: 'header-native-id', generation: 2, active: 'chat' as const, preferred: 'chat' as const, pendingSwitch: { target: 'terminal' as const, reason: 'Wait for the active turn' } };
+  const view: AgentChatView = { panelId: conversation.panelId, conversation, available: true, setupRequired: false, running: true, permissions: [], transcript: { panelId: conversation.panelId, generation: 2, revision: 0, messages: [] } };
+  const panel = { id: conversation.panelId, sessionId: conversation.workspaceId, type: 'terminal', title: 'Claude', state: { isActive: true, customState: { agentType: 'claude', agentChat: { conversation } } }, metadata: { createdAt: '', lastActiveAt: '', position: 0 } };
+  await page.route('http://anim-pane.test/**', async route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const body = decodeBoundary(JSON.parse(route.request().postData() ?? '{}'), boundary.object({ channel: boundary.string }));
+    const result = body.channel === 'panels:list' ? [panel] : body.channel === 'panels:getActive' ? panel : body.channel === 'agent-chat:get' ? view : undefined;
+    if (!result) return route.fallback();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, result }) });
+  });
+  await emitRemoteHostEvent(page, 'panel:updated', decodeBoundary(panel, boundary.json));
+  const header = page.locator('.chat-header');
+  await expect(header).toBeVisible();
+  await header.evaluate(element => { element.style.width = '320px'; });
+  await page.evaluate(value => document.documentElement.classList.toggle('dark', value === 'dark'), theme);
+  for (const disconnected of [false, true]) {
+    if (disconnected) await dropRemoteConnection(page);
+    const status = header.getByRole('status');
+    await expect(status).toHaveText(disconnected ? 'Reconnecting…' : 'Switch to Terminal after this turn');
+    await expect(status).toBeVisible();
+    const cancel = header.getByRole('button', { name: 'Cancel pending switch' });
+    await expect(cancel).toBeVisible();
+    const statusBox = (await status.boundingBox())!;
+    const cancelBox = (await cancel.boundingBox())!;
+    expect(statusBox.width).toBeGreaterThan(100);
+    expect(statusBox.y + statusBox.height <= cancelBox.y || statusBox.x + statusBox.width <= cancelBox.x).toBe(true);
+    expect(await header.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await header.screenshot({ path: testInfo.outputPath(`header-${disconnected ? 'reconnecting' : 'pending'}-${theme}.png`) });
+  }
+});

@@ -75,7 +75,8 @@ Chat uses assistant-ui’s default thread, message and composer styling. It rend
 Markdown, reasoning, tools and edit details. Resource links, embedded resources
 and unfamiliar message content have expandable, selectable details; provider protocol metadata is under
 Conversation options → Diagnostics on desktop/web. Model, mode and effort
-choices come from the host and sit beside Send (in a settings sheet on phones).
+choices come from the host and sit beside Send. Narrow web panels combine them
+in one menu trigger; the native app uses a settings sheet.
 Images and configuration controls appear only when advertised by the adapter.
 The browser never executes provider tools. Unsupported client filesystem,
 terminal and elicitation capabilities are not advertised.

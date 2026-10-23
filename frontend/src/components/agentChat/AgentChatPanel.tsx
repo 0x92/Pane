@@ -10,6 +10,7 @@ import { agentChatViewer } from '../../services/agentChatViewer';
 import { toAssistantMessage } from './convertMessage';
 import { AgentChatPermissions } from './AgentChatPermissions';
 import { AgentChatHeader } from './AgentChatHeader';
+import { AgentChatConfiguration } from './AgentChatConfiguration';
 import { MessageRow } from './AgentChatParts';
 import { ChatPermissionContext } from './chatPermissionContext';
 import { permissionToolId } from '../../../../shared/agentChatPresentation';
@@ -202,9 +203,9 @@ export default function AgentChatPanel({ panelId, client, connected = true }: { 
           <div className="chat-composer-actions">
             <div className="chat-configs">
               {view?.canAttachImages && <ComposerPrimitive.AddAttachment aria-label="Attach image" title="Attach image" className="chat-icon rounded-full"><Plus className="h-4 w-4" /></ComposerPrimitive.AddAttachment>}
-              {client.configure && view?.controls?.map(control => <select key={control.id} aria-label={control.name} title={control.name} value={control.currentValue} disabled={disabled || view.running || !!view.permissions.length} className="chat-config" onChange={event => {
-                void client.configure!(panelId, generation, control.id, event.target.value).then(() => viewer.refresh()).catch(error => viewer.setError(String(error)));
-              }}>{control.options.map(option => <option key={option.value} value={option.value}>{option.name}</option>)}</select>)}
+              {client.configure && !!view?.controls?.length && <AgentChatConfiguration controls={view.controls} disabled={disabled || view.running || !!view.permissions.length} configure={(id, value) => {
+                void client.configure!(panelId, generation, id, value).then(() => viewer.refresh()).catch(error => viewer.setError(String(error)));
+              }} />}
             </div>
             {view?.running ? <ComposerPrimitive.Cancel aria-label="Cancel agent turn" title="Stop generating" className="chat-send"><Square className="h-3.5 w-3.5 fill-current" /></ComposerPrimitive.Cancel> : <ComposerPrimitive.Send aria-label="Send message" title="Send message" className="chat-send"><ArrowUp className="h-4 w-4" /></ComposerPrimitive.Send>}
           </div>

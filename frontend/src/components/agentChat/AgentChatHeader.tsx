@@ -38,8 +38,10 @@ export function AgentChatHeader({ panelId, client, connected = true }: { panelId
         {mode === 'chat' ? <MessageSquare className="h-3.5 w-3.5" /> : <TerminalSquare className="h-3.5 w-3.5" />}{mode === 'chat' ? 'Chat' : 'Terminal'}
       </button>)}
     </div>
-    <span role="status" className="chat-status">{status}</span>
-    {conversation?.pendingSwitch && <button type="button" className="chat-button" disabled={busy || !connected} onClick={() => void change(conversation.active === 'chat' ? 'chat' : 'terminal')}>Cancel pending switch</button>}
+    {(status || conversation?.pendingSwitch) && <div className="chat-header-state">
+      <span role="status" className="chat-status">{status}</span>
+      {conversation?.pendingSwitch && <button type="button" className="chat-button" disabled={busy || !connected} onClick={() => void change(conversation.active === 'chat' ? 'chat' : 'terminal')}>Cancel pending switch</button>}
+    </div>}
     <details className="chat-menu">
       <summary className="chat-icon" aria-label="Conversation options" title="Conversation options"><MoreHorizontal className="h-4 w-4" /></summary>
       <div className="chat-menu-popover">

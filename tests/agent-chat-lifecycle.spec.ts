@@ -58,3 +58,29 @@ test('keeps resource and future content visible after transcript replay', async 
   }
   expect(errors).toEqual([]);
 });
+
+test('combines configuration on narrow screens and preserves host option values', async ({ page }, testInfo) => {
+  const fixture = path.resolve('tests/fixtures/agent-chat-lifecycle.tsx');
+  await page.route('**/agent-chat-configuration.html*', route => route.fulfill({ contentType: 'text/html', body: `<html><head><meta charset="UTF-8"></head><body><div id="root"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/@vite/client"></script><script type="module" src="/@fs/${fixture}"></script></body></html>` }));
+  await page.goto('/agent-chat-configuration.html?configuration');
+  if (testInfo.project.name === 'desktop') {
+    await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Conversation configuration', exact: true })).toBeHidden();
+  }
+  await page.setViewportSize({ width: 320, height: 844 });
+  const trigger = page.getByRole('button', { name: 'Conversation configuration', exact: true });
+  await expect(trigger).toBeVisible();
+  await expect(trigger).toContainText('Sonnet 5.5 · High');
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toBeHidden();
+  await trigger.click();
+  const menu = page.getByRole('menu');
+  await menu.getByRole('combobox', { name: 'Model', exact: true }).selectOption('opus');
+  await expect(trigger).toContainText('Opus 5.5 · High');
+  await expect.poll(() => page.evaluate(() => window.qaConfigurationCalls)).toEqual([{ id: 'model', value: 'opus' }]);
+  await page.screenshot({ path: testInfo.outputPath('combined-configuration-open.png') });
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(trigger).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('combined-configuration-closed.png') });
+});
