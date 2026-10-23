@@ -14,8 +14,8 @@ import { useTheme } from '@/theme';
 import { EmptyState, ErrorState, Icon, Text } from '@/ui';
 
 import { AgentConversationSurface } from '../agentChat/AgentConversationSurface';
-import { draftKey, readDraft, writeDraft } from '../composer/composerDrafts';
-import { insertAtSelection, type Selection } from '../composer/insertText';
+import { draftKey } from '../composer/composerDrafts';
+import { useComposerDraft } from '../composer/useComposerDraft';
 import { useAffordances } from '../hosts/hostSettings';
 import { clearPaneNotifications } from '../notifications/device';
 import { useMarkPaneSeen } from '../panes/hooks';
@@ -120,7 +120,7 @@ export function TerminalScreen({ paneId, session }: { paneId: string; session?: 
         onStop={terminalActive ? () => terminalActions.current?.stop() : undefined}
       />
       {panel ? (
-        <AgentConversationSurface key={panel.id} panel={panel} draft={draft} onChangeDraft={setDraft}>
+        <AgentConversationSurface key={panel.id} panel={panel} draft={draft} onChangeDraft={setDraft} confirmDraft={composer.confirmDelivery}>
         <TerminalPanel
           panel={panel}
           actions={terminalActions}
@@ -328,49 +328,6 @@ function TerminalPanel({ panel, actions, draft, onChangeDraft, composer, uploads
       <CopySheet visible={showCopy} onClose={() => setShowCopy(false)} panelId={panel.id} screenText={terminal.screenText} />
     </>
   );
-}
-
-function initialDraft(key: string | null): DraftState {
-  return { key, text: key ? readDraft(key) : '', cursor: null, moveTo: undefined };
-}
-
-interface DraftState {
-  /** Where the text is saved; null before a terminal tab is chosen. */
-  key: string | null;
-  text: string;
-  /** Last known cursor; null means the end. */
-  cursor: Selection | null;
-  /** A cursor move the input should apply once, after an insert. */
-  moveTo: Selection | undefined;
-}
-
-/**
- * The draft and its cursor, kept together so uploads, dictation, paste and
- * shortcuts land where the person was typing, even when two arrive at once.
- * Each terminal tab has its own draft, kept on the device under `key` until
- * sent, so it survives leaving the pane and restarting the app.
- */
-function useComposerDraft(key: string | null) {
-  const [state, setState] = useState<DraftState>(() => initialDraft(key));
-  // Switching tabs loads that tab's draft.
-  if (state.key !== key) setState(initialDraft(key));
-  useEffect(() => {
-    if (state.key) writeDraft(state.key, state.text);
-  }, [state.key, state.text]);
-  return {
-    draft: state.text,
-    selection: state.moveTo,
-    setDraft: (next: SetStateAction<string>) => setState(current => {
-      const text = typeof next === 'function' ? next(current.text) : next;
-      return { ...current, text, cursor: text === '' ? null : current.cursor, moveTo: undefined };
-    }),
-    onSelectionChange: (cursor: Selection) => setState(current => ({ ...current, cursor, moveTo: undefined })),
-    insert: (insert: string) => setState(current => {
-      const result = insertAtSelection(current.text, current.cursor, insert);
-      const cursor = { start: result.cursor, end: result.cursor };
-      return { ...current, text: result.text, cursor, moveTo: cursor };
-    }),
-  };
 }
 
 function useKeyboardVisible(): boolean {

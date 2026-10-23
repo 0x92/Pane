@@ -72,7 +72,8 @@ retry automatically; sends, answers and configuration changes cannot.
 ## Display and controls
 
 Chat uses assistant-ui’s default thread, message and composer styling. It renders
-Markdown, reasoning, tools and edit details; provider protocol metadata is under
+Markdown, reasoning, tools and edit details. Resource links, embedded resources
+and unfamiliar message content have expandable, selectable details; provider protocol metadata is under
 Conversation options → Diagnostics on desktop/web. Model, mode and effort
 choices come from the host and sit beside Send (in a settings sheet on phones).
 Images and configuration controls appear only when advertised by the adapter.
@@ -87,8 +88,11 @@ Draft text, pending delivery reconciliation and scroll position survive viewer
 remounts during the same application/browser session. The native app also saves
 draft text per host, pane and panel on the device. Native image attachments use
 ACP image content, with a 5 MiB limit; they do not paste a host filesystem path.
-The Chat composer clears after a confirmed host receipt and keeps uncertain
-deliveries available for reconciliation. Raw terminal input controls are mounted
+The native app keeps uncertain operations and attachments by saved host profile
+and panel through host switches and credential changes, rebinding to the current
+connection. The Chat composer clears only the original draft revision after a
+confirmed host receipt; edits made while waiting remain. Uncertain deliveries
+stay available for reconciliation. Raw terminal input controls are mounted
 only for Terminal ownership.
 
 ## Automation

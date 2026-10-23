@@ -15,7 +15,7 @@ interface ChatSnapshot {
   attachment?: NonNullable<AgentChatSend['images']>[number];
 }
 
-type Transport = Pick<AgentChatClient, 'get' | 'send' | 'receipt'>;
+export type ChatTransport = Pick<AgentChatClient, 'get' | 'send' | 'receipt'>;
 
 /** A phone's view of a host conversation. Leaving this view never stops its owner. */
 export class ChatSession {
@@ -25,9 +25,14 @@ export class ChatSession {
   private pendingEvents: AgentChatEvent[] = [];
   private stateRevision = 0;
   private detached = false;
+  private transportRevision = 0;
+  private confirmation?: () => void;
+  private deliveryConversation?: string;
   readingPosition = { offset: 0, atBottom: true };
 
-  constructor(readonly panelId: string, private readonly transport: Transport) {}
+  constructor(readonly panelId: string, private transport: ChatTransport) {}
+
+  rebind(transport: ChatTransport): void { this.transport = transport; this.transportRevision++; }
 
   snapshot = (): ChatSnapshot => this.state;
   subscribe = (listener: () => void): (() => void) => {
@@ -83,7 +88,9 @@ export class ChatSession {
     if (this.loading) return this.loading;
     let repair = false;
     const startingRevision = this.stateRevision;
+    const transportRevision = this.transportRevision;
     this.loading = this.transport.get(this.panelId).then(view => {
+      if (transportRevision !== this.transportRevision) { repair = true; return; }
       let transcript = view.transcript;
       let gap = false;
       for (const event of this.pendingEvents) {
@@ -104,29 +111,41 @@ export class ChatSession {
         // flight. Its response cannot supply the new owner's history.
         repair = repairAttempt < 1;
       }
-    }).catch(error => this.setError(error instanceof Error ? error.message : String(error))).finally(() => {
+    }).catch(error => {
+      if (transportRevision !== this.transportRevision) repair = true;
+      else this.setError(error instanceof Error ? error.message : String(error));
+    }).finally(() => {
       this.loading = undefined;
-      if (repair) return this.refresh(repairAttempt + 1);
+      if (repair && !this.detached) return this.refresh(repairAttempt + 1);
     });
     return this.loading;
   }
 
-  async send(request: AgentChatSend): Promise<AgentChatReceipt | undefined> {
-    if (this.state.pendingDelivery) return;
+  async send(request: AgentChatSend, confirmed?: () => void): Promise<AgentChatReceipt | undefined> {
+    if (this.state.pendingDelivery || this.state.delivering) return;
     const view = this.state.view;
     if (view?.conversation?.active !== 'chat' || view.conversation.transition || view.running || view.permissions.length || request.generation !== view.conversation.generation) {
       this.setError('This conversation cannot accept a message yet. Refresh and wait for the current turn or switch to finish.');
       return;
     }
+    this.confirmation = confirmed;
+    this.deliveryConversation = view.conversation.nativeSessionId;
     this.publish({ pendingDelivery: request, error: undefined });
     return this.deliver(request);
+  }
+
+  private confirm(receipt: AgentChatReceipt, request: AgentChatSend): void {
+    if (receipt.state !== 'failed') this.confirmation?.();
+    this.confirmation = undefined;
+    const attachment = receipt.state !== 'failed' && this.state.attachment === request.images?.[0] ? undefined : this.state.attachment;
+    this.publish({ pendingDelivery: undefined, attachment });
   }
 
   private async deliver(request: AgentChatSend): Promise<AgentChatReceipt | undefined> {
     this.publish({ delivering: true });
     try {
       const receipt = await this.transport.send(this.panelId, request);
-      this.publish({ pendingDelivery: undefined });
+      this.confirm(receipt, request);
       await this.refresh();
       this.setError(receipt.state === 'failed' ? receipt.error : undefined);
       return receipt;
@@ -138,17 +157,26 @@ export class ChatSession {
   async checkDelivery(retry: boolean): Promise<AgentChatReceipt | undefined> {
     const request = this.state.pendingDelivery;
     if (!request || this.state.delivering) return;
-    if (retry) return this.deliver(request);
+    if (retry) {
+      const conversation = this.state.view?.conversation;
+      if (!conversation || conversation.nativeSessionId !== this.deliveryConversation || conversation.generation !== request.generation) {
+        this.setError('This delivery belongs to an earlier conversation or runtime. Check its receipt on the original host before sending again.');
+        return;
+      }
+      return this.deliver(request);
+    }
+    this.publish({ delivering: true });
     try {
       const receipt = await this.transport.receipt(this.panelId, request.operationId);
       if (!receipt) {
         this.setError('The host has no receipt yet. Retry this same delivery explicitly when connected.');
         return;
       }
-      this.publish({ pendingDelivery: undefined });
+      this.confirm(receipt, request);
       await this.refresh();
       this.setError(receipt.state === 'failed' ? receipt.error : undefined);
       return receipt;
     } catch (error) { this.setError(error instanceof Error ? error.message : String(error)); }
+    finally { this.publish({ delivering: false }); }
   }
 }

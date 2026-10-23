@@ -57,7 +57,7 @@ function ChatSettings({ chat, visible, onClose }: { chat: Chat; visible: boolean
   </ComposerSheet>;
 }
 
-export function AgentChatPanel({ chat, draft, onChangeDraft }: { chat: Chat; draft: string; onChangeDraft: (text: string) => void }) {
+export function AgentChatPanel({ chat, draft, onChangeDraft, confirmDraft }: { chat: Chat; draft: string; onChangeDraft: (text: string) => void; confirmDraft: () => void }) {
   const theme = useTheme();
   const { view } = chat;
   const image = chat.attachment;
@@ -72,15 +72,13 @@ export function AgentChatPanel({ chat, draft, onChangeDraft }: { chat: Chat; dra
   const messages = (view?.transcript?.messages ?? []).filter(message => !message.id.startsWith('update:'));
   const send = async () => {
     if (sendDisabled || (!draft.trim() && !image)) return;
-    const receipt = await chat.send({ operationId: generateId(), generation: view?.conversation?.generation ?? 0, text: draft, images: image ? [image] : undefined });
-    if (receipt && receipt.state !== 'failed') { onChangeDraft(''); setImage(undefined); }
+    await chat.send({ operationId: generateId(), generation: view?.conversation?.generation ?? 0, text: draft, images: image ? [image] : undefined }, confirmDraft);
   };
   const runtime = useExternalStoreRuntime({ messages, convertMessage: toAssistantMessage, isRunning: view?.running ?? false, isLoading: !view, isSendDisabled: sendDisabled, unstable_persistsHistory: true, unstable_enableToolInvocations: false, onNew: send, onCancel: chat.cancel });
   const check = async (retry: boolean) => {
     setChecking(true);
     try {
-      const receipt = await chat.checkDelivery(retry);
-      if (receipt && receipt.state !== 'failed') { onChangeDraft(''); setImage(undefined); }
+      await chat.checkDelivery(retry);
     } finally { setChecking(false); }
   };
   const toolIds = new Set(messages.flatMap(message => message.parts.flatMap(part => part.type === 'tool' ? [part.id] : [])));

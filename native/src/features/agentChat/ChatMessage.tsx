@@ -1,15 +1,15 @@
 // Native adaptation of assistant-ui's MIT thread/tool-fallback registry.
 // Geometry follows its defaults; Pane supplies host permissions, diffs and theme.
-import { MessagePrimitive, useAuiState, type ReasoningMessagePartComponent, type TextMessagePartComponent, type ToolCallMessagePartProps } from '@assistant-ui/react-native';
+import { MessagePrimitive, useAuiState, type DataMessagePartComponent, type ReasoningMessagePartComponent, type TextMessagePartComponent, type ToolCallMessagePartProps } from '@assistant-ui/react-native';
 import * as Clipboard from 'expo-clipboard';
 import { createContext, useContext, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { LinearTransition, ReduceMotion } from 'react-native-reanimated';
 import { useMarkdown } from 'react-native-marked';
 
-import { permissionToolId } from '@shared/agentChatPresentation';
+import { describeChatContent, permissionToolId } from '@shared/agentChatPresentation';
 import type { AgentChatPermission } from '@shared/types/agentChat';
-import { boundary, decodeOptionalBoundary } from '@shared/validation/boundaryDecoder';
+import { boundary, decodeBoundary, decodeOptionalBoundary } from '@shared/validation/boundaryDecoder';
 
 import { monoFontFamily, useTheme } from '@/theme';
 import { Icon, Text } from '@/ui';
@@ -35,6 +35,20 @@ const ReasoningPart: ReasoningMessagePartComponent = ({ text }) => {
   const { chat } = useTheme();
   const [open, setOpen] = useState(false);
   return <View><Pressable testID="chat-reasoning" accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => setOpen(!open)} style={styles.trigger}><Text variant="subhead" style={{ color: chat.mutedForeground }}>Reasoning</Text></Pressable>{open && <Text selectable style={{ color: chat.mutedForeground }}>{text}</Text>}</View>;
+};
+
+const DataPart: DataMessagePartComponent = ({ data }) => {
+  const { chat } = useTheme();
+  const [open, setOpen] = useState(false);
+  const content = describeChatContent(decodeBoundary(data, boundary.json));
+  return <View>
+    <Pressable testID="chat-content-details" accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => setOpen(!open)} style={styles.trigger}><Text variant="subhead" style={{ color: chat.mutedForeground }}>{content.label}</Text></Pressable>
+    {open && <View style={styles.toolContent}>
+      {content.uri && <Text selectable style={{ color: chat.foreground }}>{content.uri}</Text>}
+      {content.text && <Text selectable style={{ color: chat.foreground }}>{content.text}</Text>}
+      <Text selectable accessibilityLabel="Content details" style={[styles.code, { color: chat.foreground, backgroundColor: chat.muted }]}>{content.details}</Text>
+    </View>}
+  </View>;
 };
 
 export function PermissionChoices({ permissions }: { permissions: AgentChatPermission[] }) {
@@ -83,7 +97,7 @@ export function ChatMessage() {
   const user = message.role === 'user';
   const text = message.parts.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
   return <MessagePrimitive.Root style={[styles.message, user ? [styles.user, { backgroundColor: chat.muted }] : styles.assistant]}>
-    <MessagePrimitive.Parts components={{ Text: user ? UserText : TextPart, Reasoning: ReasoningPart, tools: { Fallback: ToolPart }, data: { Fallback: () => null } }} />
+    <MessagePrimitive.Parts components={{ Text: user ? UserText : TextPart, Reasoning: ReasoningPart, tools: { Fallback: ToolPart }, data: { Fallback: DataPart } }} />
     {!user && endsTurn && !!text && <Pressable testID={`chat-copy-${message.id}`} accessibilityRole="button" accessibilityLabel={copied ? 'Copied message' : 'Copy message'} onPress={() => { void Clipboard.setStringAsync(text).then(() => setCopied(true)); }} style={styles.copy}><Icon ios={copied ? 'checkmark' : 'document.on.document'} android={copied ? 'check' : 'content_copy'} size={16} color={chat.mutedForeground} /></Pressable>}
   </MessagePrimitive.Root>;
 }

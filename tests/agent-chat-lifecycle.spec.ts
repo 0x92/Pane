@@ -31,3 +31,30 @@ for (const olderPage of [false,true]) test(`restores actual reading position aft
  await expect(page.getByRole('textbox',{name:'Message agent'})).toHaveValue('Retained QA draft');
  expect(errors).toEqual([]);expect(after.anchor).toBe(before.anchor);expect(Math.abs(after.top-before.top)).toBeLessThanOrEqual(2);expect(Math.abs((after.y??0)-(before.y??0))).toBeLessThanOrEqual(2);
 });
+
+
+test('keeps resource and future content visible after transcript replay', async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const fixture = path.resolve('tests/fixtures/agent-chat-lifecycle.tsx');
+  await page.route('**/agent-chat-content.html*', route => route.fulfill({ contentType: 'text/html', body: `<html><head><meta charset="UTF-8"></head><body><div id="root"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/@vite/client"></script><script type="module" src="/@fs/${fixture}"></script></body></html>` }));
+  await page.goto('/agent-chat-content.html?content');
+  for (const replay of [false, true]) {
+    if (replay) {
+      await page.getByRole('button', { name: 'Detach viewer', exact: true }).click();
+      await page.getByRole('button', { name: 'Restore viewer', exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.qaReadCount())).toBe(2);
+      await page.getByRole('button', { name: 'Release transcript', exact: true }).click();
+    }
+    for (const [label, value] of [['Resource: Report', 'file:///workspace/report.md'], ['Resource content', 'Embedded resource text'], ['Content: future-content', 'Future provider value']]) {
+      const details = page.locator('details').filter({ has: page.locator('summary', { hasText: label }) });
+      await expect(details.locator('summary')).toBeVisible();
+      await details.locator('summary').click();
+      await expect(details.locator('[aria-label="Content details"]')).toBeVisible();
+      await expect(details.locator('[aria-label="Content details"]')).toContainText(value);
+    }
+    expect(await page.evaluate(() => window.qaViewer.snapshot().view?.transcript?.messages.map(message => message.id))).toEqual(['resource-link', 'embedded-resource', 'future-content']);
+    await page.screenshot({ path: testInfo.outputPath(`content-replay-${replay}.png`) });
+  }
+  expect(errors).toEqual([]);
+});

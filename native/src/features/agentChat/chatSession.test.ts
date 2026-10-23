@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentChatEvent, AgentChatView } from '@shared/types/agentChat';
 
+import { DraftStore } from '../composer/draftStore';
+
 import { ChatSession } from './chatSession';
 
 function fixture() {
@@ -126,4 +128,29 @@ describe('native Chat viewer', () => {
     expect(session.snapshot().view?.conversation?.generation).toBe(2);
     expect(session.snapshot().view?.conversation?.active).toBe('chat');
   });
+});
+
+for (const reconciliation of ['send', 'receipt', 'retry']) for (const editOrigin of [false, true]) it(`confirms only the originating draft after navigation; reconciliation=${reconciliation}, editOrigin=${editOrigin}`, async () => {
+  const { session, transport } = fixture();
+  await session.refresh();
+  const persisted = new Map([['A', 'send A'], ['B', 'keep B']]);
+  const drafts = new DraftStore({ read: key => persisted.get(key) ?? '', write: (key, text) => { persisted.set(key, text); } });
+  const original = drafts.read('A');
+  let release: (() => void) | undefined;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  if (reconciliation !== 'send') transport.send.mockRejectedValueOnce(new Error('Lost receipt'));
+  else transport.send.mockImplementationOnce(async () => { await hold; return { operationId: 'send-a', generation: 2, fingerprint: 'same', state: 'accepted' }; });
+  const send = session.send({ operationId: 'send-a', generation: 2, text: original.text }, () => drafts.confirm(original));
+  if (reconciliation !== 'send') await send;
+  if (reconciliation === 'retry') transport.send.mockImplementationOnce(async () => { await hold; return { operationId: 'send-a', generation: 2, fingerprint: 'same', state: 'accepted' }; });
+  transport.receipt.mockImplementationOnce(async () => { await hold; return { operationId: 'send-a', generation: 2, fingerprint: 'same', state: 'completed' }; });
+  const completion = reconciliation === 'send' ? send : session.checkDelivery(reconciliation === 'retry');
+  drafts.update('B', 'edited B');
+  if (editOrigin) drafts.update('A', 'newer A draft');
+  // A second check cannot race the pending confirmation or create a new send.
+  await session.checkDelivery(true);
+  release?.();
+  await completion;
+  expect(persisted.get('A')).toBe(editOrigin ? 'newer A draft' : '');
+  expect(persisted.get('B')).toBe('edited B');
 });

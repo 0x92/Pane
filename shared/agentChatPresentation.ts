@@ -10,6 +10,18 @@ export type ChatDisplayPart =
 
 export interface ChatDisplayMessage { id: string; role: 'user' | 'assistant'; content: ChatDisplayPart[] }
 
+/** A selectable fallback for provider content without a dedicated renderer. */
+export function describeChatContent(data: JsonValue) {
+  const content = decodeOptionalBoundary(data, boundary.object({
+    type: boundary.optional(boundary.string), name: boundary.optional(boundary.string), title: boundary.optional(boundary.string), uri: boundary.optional(boundary.string),
+    resource: boundary.optional(boundary.object({ uri: boundary.optional(boundary.string), text: boundary.optional(boundary.string) })),
+  }));
+  const uri = content?.uri ?? content?.resource?.uri;
+  const name = content?.title ?? content?.name;
+  const resource = content?.type === 'resource' || content?.type === 'resource_link';
+  return { label: resource ? name ? `Resource: ${name}` : 'Resource content' : content?.type ? `Content: ${content.type}` : 'Agent content', uri, text: content?.resource?.text, details: JSON.stringify(data, null, 2) };
+}
+
 export function permissionToolId(permission: AgentChatPermission): string | undefined {
   return decodeOptionalBoundary(permission.toolCall, boundary.object({ toolCallId: boundary.string }))?.toolCallId;
 }

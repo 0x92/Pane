@@ -11,7 +11,7 @@ import { AgentModeBar } from './AgentModeBar';
 import { useAgentChat } from './useAgentChat';
 
 /** Mount exactly one input surface for the owner reported by the host. */
-export function AgentConversationSurface({ panel, draft, onChangeDraft, children }: { panel: ToolPanel; draft: string; onChangeDraft: (text: string) => void; children: ReactNode }) {
+export function AgentConversationSurface({ panel, draft, onChangeDraft, confirmDraft, children }: { panel: ToolPanel; draft: string; onChangeDraft: (text: string) => void; confirmDraft: () => void; children: ReactNode }) {
   const chat = useAgentChat(panel.id);
   const theme = useTheme();
   // The panel snapshot prevents a terminal attach while Chat history is loading.
@@ -21,7 +21,7 @@ export function AgentConversationSurface({ panel, draft, onChangeDraft, children
   const hasAgent = state?.agentType === 'claude' || state?.agentType === 'codex';
   return <View style={styles.fill}>
     {(conversation || chat.view?.available || hasAgent) && <AgentModeBar chat={chat} />}
-    {showChat ? <AgentChatPanel chat={chat} draft={draft} onChangeDraft={onChangeDraft} /> : <View style={styles.fill}>
+    {showChat ? <AgentChatPanel chat={chat} draft={draft} onChangeDraft={onChangeDraft} confirmDraft={confirmDraft} /> : <View style={styles.fill}>
       {children}
       {chat.error && <Text testID="chat-switch-error" variant="footnote" tone="danger" style={styles.error}>{chat.error}</Text>}
       {conversation?.transition && <View testID="chat-switching" style={[StyleSheet.absoluteFill, styles.transition, { backgroundColor: theme.colors.background }]}><ActivityIndicator color={theme.colors.textMuted} /><Text tone="secondary">Switching interface…</Text></View>}

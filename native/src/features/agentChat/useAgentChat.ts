@@ -6,31 +6,18 @@ import { decodeAgentChatEvent, decodeAgentChatView } from '@shared/types/agentCh
 
 import { invokeChannel, useDaemon, useDaemonEvent } from '@/daemon';
 
-import { ChatSession } from './chatSession';
+import { ChatSessionRegistry } from './chatSessionRegistry';
 
-// A client belongs to one authenticated host profile. Preserve uncertain send
-// IDs across navigation without allowing one host's panel IDs into another.
-const sessions = new WeakMap<RemoteDaemonClient, Map<string, ChatSession>>();
-
-function sessionFor(client: RemoteDaemonClient, panelId: string): ChatSession {
-  let panels = sessions.get(client);
-  if (!panels) { panels = new Map(); sessions.set(client, panels); }
-  let session = panels.get(panelId);
-  if (!session) {
-    session = new ChatSession(panelId, {
-      get: async id => decodeAgentChatView(await invokeChannel(client, 'agent-chat:get', [id])),
-      send: (id, request) => invokeChannel<AgentChatReceipt>(client, 'agent-chat:send', [id, request]),
-      receipt: (id, operationId) => invokeChannel<AgentChatReceipt | undefined>(client, 'agent-chat:receipt', [id, operationId]),
-    });
-    panels.set(panelId, session);
-  }
-  return session;
-}
+const sessions = new ChatSessionRegistry<RemoteDaemonClient>(client => ({
+  get: async id => decodeAgentChatView(await invokeChannel(client, 'agent-chat:get', [id])),
+  send: (id, request) => invokeChannel<AgentChatReceipt>(client, 'agent-chat:send', [id, request]),
+  receipt: (id, operationId) => invokeChannel<AgentChatReceipt | undefined>(client, 'agent-chat:receipt', [id, operationId]),
+}));
 
 /** Host-owned Chat commands and projection; no local model or transcript replay. */
 export function useAgentChat(panelId: string) {
-  const { client, connection } = useDaemon();
-  const session = sessionFor(client, panelId);
+  const { client, connection, profile } = useDaemon();
+  const session = sessions.forPanel(profile.id, panelId, client);
   const snapshot = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
 
   useDaemonEvent('agent-chat:event', event => {
@@ -43,7 +30,7 @@ export function useAgentChat(panelId: string) {
   });
   useEffect(() => {
     if (connection.status === 'connected') void session.refresh();
-  }, [session, connection.status]);
+  }, [session, client, connection.status]);
 
   const connected = connection.status === 'connected';
   const generation = snapshot.view?.conversation?.generation ?? 0;
@@ -64,9 +51,9 @@ export function useAgentChat(panelId: string) {
     readingPosition: session.readingPosition,
     saveReadingPosition: (offset: number, atBottom: boolean) => { session.readingPosition = { offset, atBottom }; },
     refresh: () => session.refresh(),
-    send: (request: AgentChatSend) => {
+    send: (request: AgentChatSend, confirmed?: () => void) => {
       if (!connected) { session.setError('The host is disconnected. Reconnect before sending.'); return Promise.resolve(undefined); }
-      return session.send(request);
+      return session.send(request, confirmed);
     },
     checkDelivery: (retry: boolean) => session.checkDelivery(retry),
     setError: (error?: string) => session.setError(error),

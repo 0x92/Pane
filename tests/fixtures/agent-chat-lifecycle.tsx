@@ -7,6 +7,11 @@ import '../../frontend/src/index.css';
 declare global { interface Window { qaViewer: AgentChatViewer; qaReadCount: () => number; qaRoot?: Root } }
 const view: AgentChatView = { panelId:'qa-dom', available:true, setupRequired:false, running:false, permissions:[], conversation:{panelId:'qa-dom',workspaceId:'qa-only',provider:'claude',nativeSessionId:'qa-dom-only',generation:1,active:'chat',preferred:'chat'},transcript:{panelId:'qa-dom',generation:1,revision:0,messages:Array.from({length:600},(_,i)=>({id:`m-${i}`,role:'assistant',parts:[{type:'text',text:`Historical reply ${i}`}]}))}};
 let reads=0;
+if (new URLSearchParams(location.search).has('content')) view.transcript!.messages = [
+  { id: 'resource-link', role: 'assistant', parts: [{ type: 'text', text: 'Here is the report.' }, { type: 'content', content: { type: 'resource_link', name: 'Report', uri: 'file:///workspace/report.md' } }] },
+  { id: 'embedded-resource', role: 'assistant', parts: [{ type: 'content', content: { type: 'resource', resource: { uri: 'file:///workspace/note.txt', text: 'Embedded resource text' } } }] },
+  { id: 'future-content', role: 'assistant', parts: [{ type: 'content', content: { type: 'future-content', payload: 'Future provider value' } }] },
+];
 let release: (()=>void)|undefined;
 const client: AgentChatClient = {
  get: async()=>{reads++;if(reads>1)await new Promise<void>(resolve=>{release=resolve});return structuredClone(view)},
