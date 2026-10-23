@@ -15,12 +15,14 @@ test('streams a bounded Chat thread through the remote client and reconnects wit
   const panel = { id: conversation.panelId, sessionId: conversation.workspaceId, type: 'terminal', title: 'Claude',
     state: { isActive: true, customState: { agentType: 'claude', agentChat: { conversation } } }, metadata: { createdAt: '', lastActiveAt: '', position: 0 } };
   const mutations: string[] = [];
+  const recoveries: unknown[][] = [];
   let reads = 0;
   await page.route('http://anim-pane.test/**', async route => {
     if (route.request().method() !== 'POST') return route.fallback();
     const body = decodeBoundary(JSON.parse(route.request().postData() ?? '{}'), boundary.object({ channel: boundary.string, args: boundary.array(boundary.json) }));
     if (body.channel === 'panels:list' || body.channel === 'panels:getActive') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, result: body.channel === 'panels:list' ? [panel] : panel }) });
     if (!body.channel.startsWith('agent-chat:')) return route.fallback();
+    if (body.channel === 'agent-chat:recover') recoveries.push(body.args);
     if (body.channel === 'agent-chat:get') reads++;
     else mutations.push(body.channel);
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, result: body.channel === 'agent-chat:get' ? view : null }) });
@@ -54,6 +56,20 @@ test('streams a bounded Chat thread through the remote client and reconnects wit
   await expect(composer).toHaveValue('Keep my draft');
   await page.getByRole('button', { name: 'Reject this edit' }).click();
   await expect.poll(() => mutations).toEqual(['agent-chat:permission']);
+  view.error = 'The agent could not complete this turn: Provider authentication expired. Check the provider connection.';
+  await emitRemoteHostEvent(page, 'agent-chat:state', decodeBoundary(view, boundary.json));
+  await expect(page.getByRole('alert')).toContainText('Provider authentication expired');
+  expect(mutations).toEqual(['agent-chat:permission']);
+  view.error = undefined;
+  view.conversation = { ...conversation, active: 'stopped', transition: { source: 'chat', target: 'terminal', phase: 'releasing' }, recovery: 'The previous handoff was interrupted.' };
+  view.permissions = [];
+  await emitRemoteHostEvent(page, 'agent-chat:state', decodeBoundary(view, boundary.json));
+  await expect(page.getByText('The previous handoff was interrupted.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'View Claude as', exact: true }).click();
+  await expect(page.getByRole('menuitemradio', { name: 'View as Terminal', exact: true })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Recover exact conversation', exact: true }).click();
+  await expect.poll(() => recoveries).toEqual([[conversation.panelId, 'terminal', conversation.generation]]);
   expect(errors).toEqual([]);
   await testInfo.attach('large-thread-metrics', { body: JSON.stringify({ historyMessages: 1500, maximumMountedMessages: 200, elapsedMs: Date.now() - started, snapshotBytes: JSON.stringify(view).length, reads }), contentType: 'application/json' });
   await page.screenshot({ path: testInfo.outputPath('chat-remote-reconnected.png') });

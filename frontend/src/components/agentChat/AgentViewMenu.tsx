@@ -9,6 +9,7 @@ export function AgentViewMenu({ panelId, title, client, className }: { panelId: 
   const [view, setView] = useState<AgentChatView>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const transitioning = !!view?.conversation?.transition && view.conversation.active !== 'stopped';
   useEffect(() => {
     if (!open) return;
     let disposed = false;
@@ -29,8 +30,8 @@ export function AgentViewMenu({ panelId, title, client, className }: { panelId: 
   return <Dropdown className={className} width="lg" closeOnSelect={false} onOpenChange={setOpen} selectedId={view?.conversation?.active}
     trigger={<button type="button" data-agent-view-menu aria-label={`View ${title} as`} className="flex h-6 w-6 items-center justify-center rounded text-text-secondary hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus-ring-subtle"><MoreHorizontal className="h-4 w-4" /></button>}
     items={[
-      { id: 'terminal', label: view?.running && view.conversation?.active === 'chat' ? 'Switch to Terminal after this turn' : 'View as Terminal', icon: TerminalSquare, disabled: busy || !view?.available || !!view.conversation?.transition, onClick: () => void change('terminal') },
-      { id: 'chat', label: view?.running && view.conversation?.active === 'terminal' ? 'Switch to Chat after this turn' : 'View as Chat', icon: MessageSquare, disabled: busy || !view?.available || view.setupRequired || !!view.conversation?.transition, onClick: () => void change('chat') },
+      { id: 'terminal', label: view?.running && view.conversation?.active === 'chat' ? 'Switch to Terminal after this turn' : 'View as Terminal', icon: TerminalSquare, disabled: busy || !view?.available || transitioning, onClick: () => void change('terminal') },
+      { id: 'chat', label: view?.running && view.conversation?.active === 'terminal' ? 'Switch to Chat after this turn' : 'View as Chat', icon: MessageSquare, disabled: busy || !view?.available || view.setupRequired || transitioning, onClick: () => void change('chat') },
     ]}
     footer={<div className="max-w-64 whitespace-normal px-3 py-2 text-xs text-text-secondary">
       {busy ? <p role="status">Updating this conversation…</p> : !view && !error ? <p>Checking host capabilities…</p> : null}

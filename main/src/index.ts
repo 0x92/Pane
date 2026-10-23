@@ -1,9 +1,9 @@
-import { agentChatManager } from './services/agentChat/agentChatManager';
-import { acknowledgeUpdateQuiescence } from './services/updateShutdown';
 // Answer --version before any import below logs or touches the database.
 import './versionQuery';
 // Load ReadableStream polyfill before any other imports
 import './polyfills/readablestream';
+import { agentChatManager } from './services/agentChat/agentChatManager';
+import { acknowledgeUpdateQuiescence } from './services/updateShutdown';
 
 import { hasHeadlessDaemonLaunchArg, hasRemoteSetupLaunchArg } from './utils/runtimeMode';
 import { getAppDirectory } from './utils/appDirectory';

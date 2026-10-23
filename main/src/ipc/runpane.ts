@@ -3024,7 +3024,7 @@ async function resumeTerminalPanel(
     : undefined;
   const managed = agentChatManager.manages(panel.id) ? agentChatManager.view(panel.id).conversation : undefined;
   if (managed) {
-    if (managed.active === 'stopped') await agentChatManager.recover(panel.id, managed.preferred, managed.generation);
+    if (managed.active === 'stopped') await agentChatManager.recover(panel.id, 'terminal', managed.generation);
     const restored = panelManager.getPanel(panel.id) ?? panel;
     return panelResumeResult(restored, managed.active === 'stopped' ? 'resumed' : 'already-running', 'The exact saved conversation is available in its selected interface.', await waitIfAsked(restored));
   }

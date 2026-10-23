@@ -219,7 +219,7 @@ export class AgentChatManager {
     if (!saved || saved.conversation.active === 'terminal') return;
     if (saved.conversation.active === 'stopped') return 'unknown';
     const session = this.adapters.get(panelId)?.session;
-    return session?.permissions().length ? 'blocked' : session?.isRunning() ? 'working' : 'idle';
+    return session?.permissions().length ? 'blocked' : session?.isRunning() ? 'working' : this.view(panelId, false).error ? 'blocked' : 'idle';
   }
 
   private publish(panelId: string): void {
@@ -229,7 +229,7 @@ export class AgentChatManager {
     if (!state || this.publishedStates.get(panelId) === state) return;
     const previous = this.publishedStates.get(panelId);
     this.publishedStates.set(panelId, state);
-    const payload: PanelAgentStatusEvent = { panelId, sessionId: this.required(panelId).conversation.workspaceId, agentType: this.required(panelId).conversation.provider, state, reason: state === 'blocked' ? 'ACP permission requested' : view.conversation?.recovery ?? null, workedVisibly: state === 'idle' ? previous === 'working' : undefined };
+    const payload: PanelAgentStatusEvent = { panelId, sessionId: this.required(panelId).conversation.workspaceId, agentType: this.required(panelId).conversation.provider, state, reason: state === 'blocked' ? view.error ?? 'ACP permission requested' : view.conversation?.recovery ?? null, workedVisibly: state === 'idle' ? previous === 'working' : undefined };
     getPaneEventSink().send('panel:agentStatus', payload);
     this.native?.publishStatus?.(payload);
   }
@@ -244,6 +244,7 @@ export class AgentChatManager {
       ? 'Shared-daemon Codex tabs cannot confirm per-conversation release. Keep using Terminal; a dedicated profile also needs a verified background-work checkpoint.'
       : 'Chat switching currently requires Claude Code 2.1.309 on a macOS Apple Silicon host, launched directly with Chat enabled. Custom wrappers and unsupported flags stay in Terminal.';
     const adapter = this.adapters.get(panelId)?.session;
+    const lastReceipt = saved?.receipts?.at(-1);
     return {
       panelId, conversation: saved?.conversation, available: !!saved, unavailableReason,
       setupRequired: !!saved && !claudeAdapterEntry(), running: saved?.conversation.active === 'terminal' ? !this.journals.get(panelId)?.checkpoint().ready : adapter?.isRunning() ?? false, canAttachImages: adapter?.supportsImages() ?? false,
@@ -252,7 +253,8 @@ export class AgentChatManager {
         title: permission.request.toolCall.title ?? 'Permission requested',
         toolCall: decodeBoundary(permission.request.toolCall, boundary.json), options: permission.request.options })) ?? [],
       transcript: includeTranscript ? this.transcripts.get(panelId)?.snapshot() : undefined,
-      error: this.transcripts.get(panelId)?.error(),
+      error: this.transcripts.get(panelId)?.error() ?? (lastReceipt?.generation === saved?.conversation.generation && lastReceipt?.state === 'failed'
+        ? `The agent could not complete this turn: ${lastReceipt.error ?? 'The provider rejected the request'}. Check the provider connection and settings, then send a new turn when ready.` : undefined),
       configuration: adapter?.config() ? decodeBoundary(adapter.config(), boundary.json) : undefined,
     };
   }
@@ -291,11 +293,7 @@ export class AgentChatManager {
           const executable = await this.native.executable(record.panelId);
           if (!executable || realpathSync(executable) !== realpathSync(this.required(record.panelId).launch.executable)) return { ready: false, reason: 'The native foreground executable does not match the validated CLI. Keep this tab in Terminal.' };
         }
-        if (checkpoint.ready) {
-          const saved = this.required(record.panelId);
-          const config = this.journals.get(record.panelId)?.config();
-          if (config) panelManager.commitAgentChat(record.panelId, { ...saved, launch: { ...saved.launch, permissionMode: config.permissionMode ?? saved.launch.permissionMode, effort: config.effort ?? saved.launch.effort } });
-        }
+        if (checkpoint.ready) this.captureConfiguration(record.panelId);
         return checkpoint;
       },
       release: (record, mode) => this.release(record.panelId, mode),
@@ -429,13 +427,27 @@ export class AgentChatManager {
     return { nativeSessionId: record.nativeSessionId, historyVerified: true };
   }
 
-  async switchTo(panelId: string, target: AgentInterface, generation: number): Promise<ConversationRecord> {
-    this.required(panelId);
-    const config = this.journals.get(panelId)?.config();
-    if (config) {
-      const saved = this.required(panelId);
-      panelManager.commitAgentChat(panelId, { ...saved, launch: { ...saved.launch, permissionMode: config.permissionMode ?? saved.launch.permissionMode, effort: config.effort ?? saved.launch.effort } });
+  private captureConfiguration(panelId: string): void {
+    const saved = this.required(panelId);
+    const launch = { ...saved.launch };
+    if (saved.conversation.active === 'terminal') {
+      const config = this.journals.get(panelId)?.config();
+      launch.permissionMode = config?.permissionMode ?? launch.permissionMode;
+      launch.effort = config?.effort ?? launch.effort;
+    } else if (saved.conversation.active === 'chat') {
+      // ACP controls reflect idle configuration changes; a previous Stop hook
+      // still describes the last turn and must not overwrite those choices.
+      for (const option of this.adapters.get(panelId)?.session.controls() ?? []) {
+        if (option.id === 'mode') launch.permissionMode = option.currentValue;
+        if (option.id === 'model') launch.model = option.currentValue === 'default' ? undefined : option.currentValue;
+        if (option.id === 'effort') launch.effort = option.currentValue === 'default' ? undefined : option.currentValue;
+      }
     }
+    panelManager.commitAgentChat(panelId, { ...saved, launch });
+  }
+
+  async switchTo(panelId: string, target: AgentInterface, generation: number): Promise<ConversationRecord> {
+    this.captureConfiguration(panelId);
     return this.controller(panelId).switchTo(target, generation);
   }
 
@@ -478,6 +490,7 @@ export class AgentChatManager {
       if (!current) return;
       panelManager.commitAgentChat(panelId, { ...current, receipts: current.receipts?.map(entry => entry.operationId === receipt.operationId ? { ...entry, state, error } : entry) });
       this.transcripts.get(panelId)?.endTurn();
+      this.publish(panelId);
     };
     void runtime.prompt(userContent).then(() => finish('completed'), error => finish('failed', reasonOf(error)));
     return structuredClone(receipt);

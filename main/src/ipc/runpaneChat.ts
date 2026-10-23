@@ -42,6 +42,7 @@ export async function submitChat(panel: ToolPanel, text: string, interrupt: bool
 
 export function chatLastMessage(panel: ToolPanel, limit: number): RunpanePanelLastMessageResult {
   const view = agentChatManager.view(panel.id);
+  if (view.error) throw new PaneError('CHAT_TURN_FAILED', view.error, 'Inspect the conversation error and correct the provider setup before submitting a new turn.');
   const message = view.transcript?.messages.slice().reverse().find(entry => entry.role === 'assistant' && entry.parts.some(part => part.type === 'text'));
   if (!message || !view.conversation) return { ok: false, panelId: panel.id, paneId: panel.sessionId, reason: 'transcript-unavailable', message: 'No assistant reply is loaded. Recover the exact conversation or wait for its first reply.' };
   const text = message.parts.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
@@ -53,6 +54,7 @@ export async function waitForChat(panel: ToolPanel, request: RunpanePanelWaitReq
   const condition = request.condition ?? 'idle';
   while (true) {
     const view = agentChatManager.view(panel.id);
+    if (view.error) throw new PaneError('CHAT_TURN_FAILED', view.error, 'Inspect the conversation error and correct the provider setup before submitting a new turn.');
     const state = chatState(view), text = chatText(view);
     const blocked = view.permissions.length ? { kind: 'agent-prompt' as const, message: view.permissions.map(permission => permission.title).join('; ') + '. Answer the exact request in Chat.' } : undefined;
     const matched = condition === 'text' ? text.includes(request.contains ?? '') : condition === 'initialized' ? state.initialized : state.running && !view.running && !blocked && !view.conversation?.transition;

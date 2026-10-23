@@ -68,11 +68,15 @@ it.skipIf(process.platform === 'win32')('switches one exact conversation through
   writeFileSync(join(adapter, 'package.json'), JSON.stringify({ version: CLAUDE_ADAPTER_VERSION }));
   writeFileSync(join(adapter, 'dist', 'index.js'), `let buffer='';
 const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
+let mode='default', effort='medium';
+const config = () => [{id:'mode',name:'Mode',type:'select',currentValue:mode,options:[{value:'default',name:'Default'},{value:'plan',name:'Plan'}]},{id:'effort',name:'Effort',type:'select',currentValue:effort,options:[{value:'medium',name:'Medium'},{value:'high',name:'High'}]}];
 process.stdin.on('data', chunk => { buffer += chunk; let end; while ((end=buffer.indexOf('\\n'))>=0) {
  const m=JSON.parse(buffer.slice(0,end)); buffer=buffer.slice(end+1); if (m.id===undefined) continue;
  let result={}; if(m.method==='initialize') result={protocolVersion:1,agentCapabilities:{loadSession:true,sessionCapabilities:{close:{}}}};
- if(m.method==='session/load') { send({jsonrpc:'2.0',method:'session/update',params:{sessionId:m.params.sessionId,update:{sessionUpdate:'user_message_chunk',messageId:'history-a',content:{type:'text',text:'Preserved native history'}}}}); result={modes:{currentModeId:'default',availableModes:[{id:'default',name:'Default'}]}}; }
+ if(m.method==='session/load') { send({jsonrpc:'2.0',method:'session/update',params:{sessionId:m.params.sessionId,update:{sessionUpdate:'user_message_chunk',messageId:'history-a',content:{type:'text',text:'Preserved native history'}}}}); result={modes:{currentModeId:'default',availableModes:[{id:'default',name:'Default'}]},configOptions:config()}; }
  if(m.method==='session/new') result={sessionId:'fresh-native-a',modes:{currentModeId:'default',availableModes:[{id:'default',name:'Default'}]}};
+ if(m.method==='session/prompt' && m.params.prompt[0]?.text==='Fail this turn') { send({jsonrpc:'2.0',id:m.id,error:{code:-32000,message:'Provider authentication expired'}}); continue; }
+ if(m.method==='session/set_config_option') { if(m.params.configId==='mode')mode=m.params.value;if(m.params.configId==='effort')effort=m.params.value;result={configOptions:config()}; }
  if(m.method==='session/prompt') { send({jsonrpc:'2.0',method:'session/update',params:{sessionId:m.params.sessionId,update:{sessionUpdate:'agent_message_chunk',messageId:'new-answer',content:{type:'text',text:'Only one new answer'}}}}); result={stopReason:'end_turn'}; }
  send({jsonrpc:'2.0',id:m.id,result});
 }}); process.stdin.on('end',()=>process.exit(0));`);
@@ -125,8 +129,27 @@ process.stdin.on('data', chunk => { buffer += chunk; let end; while ((end=buffer
     ]);
     expect(() => manager.send(panel.id, { ...request, text: 'Changed retry' })).toThrow(/different content/i);
 
-    hook('Stop', { permission_mode: 'default', background_tasks: [], session_crons: [] });
+    manager.send(panel.id, { ...request, operationId: 'failed-turn', text: 'Fail this turn' });
+    await expect.poll(() => manager.receipt(panel.id, 'failed-turn')?.state).toBe('failed');
+    expect(manager.view(panel.id).error).toContain('Provider authentication expired');
+    expect(manager.status(panel.id)).toBe('blocked');
+    const { chatLastMessage, waitForChat } = await import('../../ipc/runpaneChat');
+    const { agentChatManager } = await import('./agentChatManager');
+    const { vi } = await import('vitest');
+    const viewSpy = vi.spyOn(agentChatManager, 'view').mockImplementation(() => manager.view(panel.id));
+    try {
+      expect(() => chatLastMessage(panel, 100)).toThrow(/authentication expired/);
+      await expect(waitForChat(panel, { panelId: panel.id, condition: 'idle' })).rejects.toMatchObject({ code: 'CHAT_TURN_FAILED' });
+    } finally { viewSpy.mockRestore(); }
+    manager.send(panel.id, { ...request, operationId: 'after-failure', text: 'Continue successfully' });
+    await expect.poll(() => manager.receipt(panel.id, 'after-failure')?.state).toBe('completed');
+    expect(manager.view(panel.id).error).toBeUndefined();
+
+    hook('Stop', { permission_mode: 'default', effort: { level: 'medium' }, background_tasks: [], session_crons: [] });
+    await manager.configure(panel.id, 2, 'mode', 'plan');
+    await manager.configure(panel.id, 2, 'effort', 'high');
     await manager.switchTo(panel.id, 'terminal', 2);
+    expect(state().launch).toMatchObject({ permissionMode: 'plan', effort: 'high' });
     expect(manager.view(panel.id).conversation).toMatchObject({ active: 'terminal', nativeSessionId: nativeId, generation: 3 });
     expect(manager.verifyNativeResume(panel.id, nativeId)).toEqual({ pid: child.pid });
     expect(() => manager.verifyNativeResume(panel.id, 'different-conversation')).toThrow(/exact saved conversation/);

@@ -133,7 +133,7 @@ export default function AgentChatPanel({ panelId, client, connected = true }: { 
   };
   const recover = async () => {
     setRecovering(true);
-    try { await client.recover(panelId, view?.conversation?.preferred ?? 'chat', generation); await viewer.refresh(); }
+    try { await client.recover(panelId, 'terminal', generation); await viewer.refresh(); }
     catch (error) { viewer.setError(error instanceof Error ? error.message : String(error)); }
     finally { setRecovering(false); }
   };
@@ -141,15 +141,16 @@ export default function AgentChatPanel({ panelId, client, connected = true }: { 
   return <AssistantRuntimeProvider runtime={runtime}>
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col bg-bg-primary text-text-primary">
       <div className="flex shrink-0 items-center justify-between border-b border-border-primary px-4 py-2 text-xs text-text-secondary">
-        <span>{view?.conversation?.transition ? 'Switching interface…' : !connected ? 'Reconnecting…' : view?.conversation?.pendingSwitch ? 'Switch to Terminal after this turn' : view?.running ? 'Agent is working' : 'Chat'}</span>
+        <span>{view?.conversation?.active === 'stopped' ? 'Conversation stopped' : view?.conversation?.transition ? 'Switching interface…' : !connected ? 'Reconnecting…' : view?.conversation?.pendingSwitch ? 'Switch to Terminal after this turn' : view?.running ? 'Agent is working' : 'Chat'}</span>
         {view?.conversation?.pendingSwitch && <button type="button" onClick={() => { void client.switch(panelId, 'chat', generation).then(() => viewer.refresh()).catch(error => viewer.setError(String(error))); }} className="rounded px-2 py-1 hover:bg-surface-hover">Cancel pending switch</button>}
         <button type="button" onClick={() => void viewer.refresh()} className="rounded px-2 py-1 hover:bg-surface-hover">Refresh</button>
       </div>
       {(snapshot.error || view?.error) && <div role="alert" className="px-4 py-2 text-sm text-status-error">{snapshot.error ?? view?.error}</div>}
       {pendingDelivery && snapshot.error && <div className="flex gap-2 px-4 py-2 text-xs"><button type="button" onClick={() => void checkDelivery(false)} className="rounded border border-border-primary px-2 py-1">Check delivery</button><button type="button" onClick={() => void checkDelivery(true)} className="rounded border border-border-primary px-2 py-1">Retry same delivery</button></div>}
-      {view?.conversation?.active === 'stopped' && !view.conversation.transition && <div className="m-4 rounded border border-border-primary p-4 text-sm">
+      {view?.conversation?.active === 'stopped' && <div className="m-4 rounded border border-border-primary p-4 text-sm">
         <p>{view.conversation.recovery ?? 'This conversation is stopped.'}</p>
         <p className="mt-1 break-all text-xs text-text-secondary">Conversation {view.conversation.nativeSessionId}</p>
+        <p className="mt-2 text-text-secondary">Recovery opens Terminal to restore this conversation’s launch environment.</p>
         <button type="button" disabled={recovering || !connected} onClick={() => void recover()} className="mt-3 rounded border border-border-primary px-3 py-1.5 disabled:opacity-50">{recovering ? 'Recovering…' : 'Recover exact conversation'}</button>
       </div>}
       <ChatViewport viewer={viewer} loading={!view} />
