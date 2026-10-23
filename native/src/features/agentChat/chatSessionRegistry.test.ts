@@ -65,8 +65,11 @@ it('repairs an old-client snapshot after rebinding and refuses retry against a d
   const replacement = client();
   replacement.host.conversation!.nativeSessionId = 'different-native';
   registry.forPanel('host', 'panel', replacement);
+  const earlyRetry = session.checkDelivery(true);
+  expect(replacement.send).not.toHaveBeenCalled();
+  expect(session.snapshot().pendingDelivery?.operationId).toBe('op');
   release?.(first.host);
-  await refresh;
+  await Promise.all([refresh, earlyRetry]);
   expect(session.snapshot().view?.conversation?.nativeSessionId).toBe('different-native');
   await session.checkDelivery(true);
   expect(replacement.send).not.toHaveBeenCalled();

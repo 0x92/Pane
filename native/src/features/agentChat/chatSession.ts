@@ -26,6 +26,7 @@ export class ChatSession {
   private stateRevision = 0;
   private detached = false;
   private transportRevision = 0;
+  private loadedTransportRevision = -1;
   private confirmation?: () => void;
   private deliveryConversation?: string;
   readingPosition = { offset: 0, atBottom: true };
@@ -102,6 +103,7 @@ export class ChatSession {
       this.pendingEvents = [];
       repair = gap && repairAttempt < 1;
       if ((view.conversation?.generation ?? 0) >= (this.state.view?.conversation?.generation ?? 0)) {
+        this.loadedTransportRevision = transportRevision;
         const current = this.state.view;
         if (current?.transcript && transcript && current.transcript.generation === transcript.generation && current.transcript.revision > transcript.revision) transcript = current.transcript;
         const state = current && this.stateRevision > startingRevision && current.conversation?.generation === view.conversation?.generation ? current : view;
@@ -124,7 +126,7 @@ export class ChatSession {
   async send(request: AgentChatSend, confirmed?: () => void): Promise<AgentChatReceipt | undefined> {
     if (this.state.pendingDelivery || this.state.delivering) return;
     const view = this.state.view;
-    if (view?.conversation?.active !== 'chat' || view.conversation.transition || view.running || view.permissions.length || request.generation !== view.conversation.generation) {
+    if (this.loadedTransportRevision !== this.transportRevision || view?.conversation?.active !== 'chat' || view.conversation.transition || view.running || view.permissions.length || request.generation !== view.conversation.generation) {
       this.setError('This conversation cannot accept a message yet. Refresh and wait for the current turn or switch to finish.');
       return;
     }
@@ -158,6 +160,10 @@ export class ChatSession {
     const request = this.state.pendingDelivery;
     if (!request || this.state.delivering) return;
     if (retry) {
+      if (this.loadedTransportRevision !== this.transportRevision) {
+        this.setError('The host connection changed. Refresh the conversation before retrying this delivery.');
+        return;
+      }
       const conversation = this.state.view?.conversation;
       if (!conversation || conversation.nativeSessionId !== this.deliveryConversation || conversation.generation !== request.generation) {
         this.setError('This delivery belongs to an earlier conversation or runtime. Check its receipt on the original host before sending again.');
