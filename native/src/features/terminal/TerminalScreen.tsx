@@ -6,13 +6,14 @@ import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { OrchestrationSessionView } from '@shared/types/orchestrationSession';
-import type { ToolPanel } from '@shared/types/panels';
+import type { TerminalPanelState, ToolPanel } from '@shared/types/panels';
 import type { RemotePwaAffordances } from '@shared/types/remoteDaemon';
 
 import { useDaemon, useInvokeMutation, useInvokeQuery } from '@/daemon';
 import { useTheme } from '@/theme';
 import { EmptyState, ErrorState, Icon, Text } from '@/ui';
 
+import { AgentConversationSurface } from '../agentChat/AgentConversationSurface';
 import { draftKey, readDraft, writeDraft } from '../composer/composerDrafts';
 import { insertAtSelection, type Selection } from '../composer/insertText';
 import { useAffordances } from '../hosts/hostSettings';
@@ -87,6 +88,8 @@ export function TerminalScreen({ paneId, session }: { paneId: string; session?: 
   const panes = terminalPanels(panelList.data ?? []);
   const panels = session ? sessionWorkspacePanels(session, panes) : panes;
   const panel = pickPanel(panels, panelId ?? null, hostActive.data?.id);
+  const conversation = (panel?.state.customState as TerminalPanelState | undefined)?.agentChat?.conversation;
+  const terminalActive = !!panel && (!conversation || (conversation.active === 'terminal' && !conversation.transition));
   const title = session ? session.session.name || 'Untitled' : pane.data?.name ?? '';
 
   const composer = useComposerDraft(panel ? draftKey(profile.id, paneId, panel.id) : null);
@@ -108,17 +111,17 @@ export function TerminalScreen({ paneId, session }: { paneId: string; session?: 
       behavior="padding"
       style={[styles.fill, { backgroundColor: theme.colors.surface }]}
     >
-      <TerminalTopBar paneName={title} onClearScrollback={panel ? () => terminalActions.current?.clearScrollback() : undefined} />
+      <TerminalTopBar paneName={title} onClearScrollback={terminalActive ? () => terminalActions.current?.clearScrollback() : undefined} />
       <PanelTabs
         panels={panels}
         selectedId={panel?.id ?? null}
         onSelect={selectPanel}
         onAdd={() => router.push({ pathname: '/pane/[paneId]/new-panel', params: session ? { paneId, sessionId: session.session.id } : { paneId } })}
-        onStop={panel ? () => terminalActions.current?.stop() : undefined}
+        onStop={terminalActive ? () => terminalActions.current?.stop() : undefined}
       />
       {panel ? (
+        <AgentConversationSurface key={panel.id} panel={panel} draft={draft} onChangeDraft={setDraft}>
         <TerminalPanel
-          key={panel.id}
           panel={panel}
           actions={terminalActions}
           draft={draft}
@@ -131,6 +134,7 @@ export function TerminalScreen({ paneId, session }: { paneId: string; session?: 
           // Older hosts send no change events, so read the list fresh each time.
           onOpenShortcuts={() => void affordances.refetch()}
         />
+        </AgentConversationSurface>
       ) : (
         <View style={[styles.fill, { backgroundColor: theme.terminal.background }]}>
           {panelList.isPending ? (

@@ -375,6 +375,16 @@ Version: 1.6.3
 Author: Lukas Bach <npm@lukasbach.com>
 Repository: git@github.com:lukasbach/headless-tree.git
 
+Package: @jsamr/counter-style
+Version: 2.0.2
+Author: Jules Sam. Randolph <jules.sam.randolph@gmail.com> (https://github.com/jsamr)
+Homepage: https://github.com/jsamr/react-native-li/tree/master/packages/react-native-li#readme
+
+Package: @jsamr/react-native-li
+Version: 2.3.1
+Author: Jules Sam. Randolph <jules.sam.randolph@gmail.com> (https://github.com/jsamr)
+Homepage: https://github.com/jsamr/react-native-li/tree/master/packages/react-native-li#readme
+
 Package: @msgpackr-extract/msgpackr-extract-darwin-arm64
 Version: 3.0.3
 Author: Kris Zyp
@@ -1112,6 +1122,11 @@ Version: 0.4.1
 Author: Evert Pot <me@evertpot.com>
 Homepage: https://github.com/evert/structured-header#readme
 
+Package: svg-parser
+Version: 2.1.0
+Author: Rich Harris
+Homepage: https://github.com/Rich-Harris/svg-parser#README
+
 Package: temp-file
 Version: 3.4.0
 Author: Vladimir Krivosheev
@@ -1183,6 +1198,11 @@ Homepage: https://www.assistant-ui.com/
 
 Package: @assistant-ui/react
 Version: 0.15.31
+Author: AgentbaseAI Inc.
+Homepage: https://www.assistant-ui.com/
+
+Package: @assistant-ui/react-native
+Version: 0.1.50
 Author: AgentbaseAI Inc.
 Homepage: https://www.assistant-ui.com/
 
@@ -12746,6 +12766,33 @@ SOFTWARE.
 
 --------------------------------------------------------------------------------
 
+Package: html-entities
+Version: 2.6.0
+Author: Marat Dulin
+Repository: https://github.com/mdevils/html-entities.git
+
+Copyright (c) 2021 Dulin Marat
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+
 Package: html-escaper
 Version: 2.0.2
 Author: Andrea Giammarchi
@@ -14645,6 +14692,11 @@ Homepage: https://marked.js.org
 
 Package: marked
 Version: 16.4.2
+Author: Christopher Jeffrey
+Homepage: https://marked.js.org
+
+Package: marked
+Version: 18.0.14
 Author: Christopher Jeffrey
 Homepage: https://marked.js.org
 
@@ -17666,6 +17718,63 @@ Homepage: https://github.com/zoontek/react-native-edge-to-edge
 MIT License
 
 Copyright (c) 2024 Mathieu Acthernoene
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Package: react-native-marked
+Version: 8.3.2
+Author: Gowtham G <webappsbygowtham@gmail.com> (https://github.com/gmsgowtham)
+Homepage: https://github.com/gmsgowtham/react-native-marked#readme
+
+MIT License
+
+Copyright (c) 2022 Gowtham G
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Package: react-native-reanimated-table
+Version: 0.0.2
+Author: Caspian <caspian.zhao@outlook.com> (https://github.com/dohooo)
+Homepage: https://github.com/dohooo/react-native-reanimated-table#readme
+
+MIT License
+
+Copyright (c) 2023 Caspian
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -24290,6 +24399,19 @@ Homepage: https://github.com/stefanpenner/get-caller-file#readme
 
 ISC License (ISC)
 Copyright 2018 Stefan Penner
+
+Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Package: github-slugger
+Version: 2.0.0
+Author: Dan Flettre <flettre@gmail.com>
+Homepage: https://github.com/Flet/github-slugger
+
+Copyright (c) 2015, Dan Flettre <fletd01@yahoo.com>
 
 Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
 

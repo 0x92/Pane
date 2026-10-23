@@ -2,6 +2,8 @@
 
 Agent tabs can use Chat or the agent's native Terminal interface. The tab's
 ellipsis menu and context menu offer **View as Chat** and **View as Terminal**.
+Compatible conversations also have a Chat/Terminal switch above the content,
+including in the React Native companion.
 Both interfaces continue the same saved provider conversation. Switching waits
 for an idle checkpoint; it does not transfer a running tool or cancel a turn.
 
@@ -16,7 +18,9 @@ to Terminal.
 The initial implementation enables Claude Code **2.1.309** with
 `@agentclientprotocol/claude-agent-acp` **0.94.0** on **macOS Apple Silicon**.
 Pane uses ACP SDK **2.0.1** and assistant-ui **0.15.31** as a display/composer
-binding. The adapter uses the verified native Claude executable on the workspace
+binding; the React Native companion uses the matching **0.1.50** distribution.
+Both share core **0.3.31**, store **0.3.22** and tap **0.9.24**; their exact
+release-age exceptions keep this tested runtime family together. The adapter uses the verified native Claude executable on the workspace
 host. Chat uses the existing provider login; there is no additional chat cloud
 service or second conversation store.
 
@@ -67,16 +71,25 @@ retry automatically; sends, answers and configuration changes cannot.
 
 ## Display and controls
 
-Chat renders Markdown, reasoning, tools, edit details and provider metadata.
+Chat uses assistant-ui’s default thread, message and composer styling. It renders
+Markdown, reasoning, tools and edit details; provider protocol metadata is under
+Conversation options → Diagnostics on desktop/web. Model, mode and effort
+choices come from the host and sit beside Send (in a settings sheet on phones).
 Images and configuration controls appear only when advertised by the adapter.
 The browser never executes provider tools. Unsupported client filesystem,
 terminal and elicitation capabilities are not advertised.
 
 The display cache is limited to 4,000 messages and 16 MiB; larger imports remain
 in Terminal with an explanation. The provider retains the complete conversation.
-The viewer renders pages of 200 messages and opens heavy tool details on demand.
+The desktop/web viewer renders pages of 200 messages; the React Native viewer
+uses Legend List virtualization. Both open heavy tool details on demand.
 Draft text, pending delivery reconciliation and scroll position survive viewer
-remounts during the same application/browser session.
+remounts during the same application/browser session. The native app also saves
+draft text per host, pane and panel on the device. Native image attachments use
+ACP image content, with a 5 MiB limit; they do not paste a host filesystem path.
+The Chat composer clears after a confirmed host receipt and keeps uncertain
+deliveries available for reconciliation. Raw terminal input controls are mounted
+only for Terminal ownership.
 
 ## Automation
 
@@ -94,3 +107,13 @@ runpane clients together with Pane to recognize the added response variants.
 Commands and ordered generation/revision events use Pane's existing authenticated
 daemon transport. Reconnect repairs gaps from a host snapshot. An older host
 without these commands remains usable in Terminal and reports Chat unavailable.
+
+## Renderer regression tests
+
+Run `pnpm exec playwright test -c playwright.agent-chat.config.ts` for desktop and
+phone viewport checks of bounded history, follow/pause, asynchronous scroll
+restoration, permissions, recovery and uncertain delivery reconciliation. These
+tests use a local Vite server and fixture host; they do not launch Electron or a
+provider. Native viewer state and image validation are covered by
+`pnpm --filter native test`. Device interaction and real native/ACP handoffs
+require a separate isolated host and configured device or simulator.

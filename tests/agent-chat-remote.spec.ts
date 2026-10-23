@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { emitRemoteHostEvent, openConnectedRemotePwa, dropRemoteConnection, restoreRemoteConnection } from './remotePwaMock';
-import type { AgentChatView, AgentChatEvent } from '../shared/types/agentChat';
+import type { AgentChatView, AgentChatEvent, AgentChatReceipt } from '../shared/types/agentChat';
 import { boundary, decodeBoundary } from '../shared/validation/boundaryDecoder';
 
 test('streams a bounded Chat thread through the remote client and reconnects without stopping its host', async ({ page }, testInfo) => {
@@ -76,7 +76,9 @@ test('streams a bounded Chat thread through the remote client and reconnects wit
   await page.getByRole('button', { name: 'Reject this edit' }).click();
   await expect.poll(() => mutations).toEqual(['agent-chat:permission']);
   view.error = 'The agent could not complete this turn: Provider authentication expired. Check the provider connection.';
+  await page.getByLabel('Conversation options', { exact: true }).click();
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.getByLabel('Conversation options', { exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Provider authentication expired');
   expect(mutations).toEqual(['agent-chat:permission']);
   view.error = undefined;
@@ -92,4 +94,54 @@ test('streams a bounded Chat thread through the remote client and reconnects wit
   expect(errors).toEqual([]);
   await testInfo.attach('large-thread-metrics', { body: JSON.stringify({ historyMessages: 1500, maximumMountedMessages: 200, elapsedMs: Date.now() - started, snapshotBytes: JSON.stringify(view).length, reads }), contentType: 'application/json' });
   await page.screenshot({ path: testInfo.outputPath('chat-remote-reconnected.png') });
+});
+
+
+test('keeps an uncertain draft visible and retries only its original delivery', async ({ page }) => {
+  await openConnectedRemotePwa(page, { sessionNames: ['Delivery fixture'], panelTitles: ['Claude'] });
+  const conversation = { panelId: 'anim-panel-0', workspaceId: 'anim-remote-0', provider: 'claude' as const, nativeSessionId: 'delivery-native-id', generation: 2, active: 'chat' as const, preferred: 'chat' as const };
+  const view: AgentChatView = { panelId: conversation.panelId, conversation, available: true, setupRequired: false, running: false, permissions: [], transcript: { panelId: conversation.panelId, generation: 2, revision: 0, messages: [] } };
+  const panel = { id: conversation.panelId, sessionId: conversation.workspaceId, type: 'terminal', title: 'Claude', state: { isActive: true, customState: { agentType: 'claude', agentChat: { conversation } } }, metadata: { createdAt: '', lastActiveAt: '', position: 0 } };
+  const deliveries: unknown[] = [];
+  let release: () => void = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('http://anim-pane.test/**', async route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const body = decodeBoundary(JSON.parse(route.request().postData() ?? '{}'), boundary.object({ channel: boundary.string, args: boundary.array(boundary.json) }));
+    let result: AgentChatView | AgentChatReceipt | typeof panel | Array<typeof panel> | null;
+    if (body.channel === 'panels:list') result = [panel];
+    else if (body.channel === 'panels:getActive') result = panel;
+    else if (body.channel === 'agent-chat:get') result = view;
+    else if (body.channel === 'agent-chat:send') {
+      deliveries.push(body.args[1]);
+      if (deliveries.length === 1) {
+        await held;
+        return route.abort('failed');
+      }
+      const request = decodeBoundary(body.args[1], boundary.object({ operationId: boundary.string }));
+      result = { operationId: request.operationId, fingerprint: 'fixture', state: 'accepted', generation: 2 };
+    } else if (body.channel === 'agent-chat:receipt') result = null;
+    else return route.fallback();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, result }) });
+  });
+  await emitRemoteHostEvent(page, 'panel:updated', decodeBoundary(panel, boundary.json));
+  const composer = page.getByRole('textbox', { name: 'Message agent' });
+  await composer.fill('Keep this until the host confirms it');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(() => deliveries.length).toBe(1);
+  await expect(composer).toHaveValue('Keep this until the host confirms it');
+  await expect(composer).toHaveAttribute('readonly', '');
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeDisabled();
+  release();
+  await expect(page.getByRole('alert')).toContainText('Check delivery before sending again');
+  await restoreRemoteConnection(page);
+  await expect(page.getByRole('button', { name: 'Check delivery', exact: true })).toBeEnabled();
+  await expect(composer).toHaveValue('Keep this until the host confirms it');
+  await page.getByRole('button', { name: 'Check delivery', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('The host has no receipt yet');
+  expect(deliveries).toHaveLength(1);
+  await page.getByRole('button', { name: 'Retry same delivery', exact: true }).click();
+  await expect(composer).toHaveValue('');
+  expect(deliveries).toHaveLength(2);
+  expect(deliveries[1]).toEqual(deliveries[0]);
 });
