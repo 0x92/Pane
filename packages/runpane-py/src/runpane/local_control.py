@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from .daemon_actions import confirm_mutation
 from .daemon_client import PaneDaemonClientError, invoke_daemon
 from .generated_contract import RUNPANE_CONTRACT
 
@@ -281,6 +282,194 @@ def format_lock_line(lock: Dict[str, Any]) -> str:
         f"{lock.get('name')} [{scope}] held by {format_lock_owner(lock.get('owner') or {})} "
         f"until {lock.get('expiresAt')}{note}"
     )
+
+
+LOOP_AGENTS = ("claude", "codex", "cursor")
+
+
+def _invoke_loops(parsed: Any, channel: str, args: List[Any]) -> Any:
+    """The loops channels answer {success, data?, error?}, like the app's other handlers."""
+    response = invoke_daemon(channel, args, pane_dir=parsed.pane_dir) or {}
+    if not response.get("success"):
+        raise PaneDaemonClientError(
+            response.get("error") or f"Pane could not run {channel}. Nothing was changed.",
+            "ERR_RUNPANE_LOOPS",
+            "See loops and their ids with `runpane loops list`.",
+        )
+    return response.get("data")
+
+
+def run_loops_list(parsed: Any) -> int:
+    loops = _invoke_loops(parsed, "loops:list", []) or []
+    if parsed.json:
+        print_json({"ok": True, "loops": loops})
+        return 0
+    if not loops:
+        print("No loops. Create one with `runpane loops create`.")
+        return 0
+    repos = invoke_daemon("runpane:repos:list", [], pane_dir=parsed.pane_dir).get("repos") or []
+    repo_names = {repo.get("id"): repo.get("name") for repo in repos}
+    for loop in loops:
+        repo = repo_names.get(loop.get("projectId")) or f"repo {loop.get('projectId')}"
+        runs = loop.get("runs") or []
+        last = f" · last {runs[0].get('status')} {format_loop_time(runs[0].get('slotAtMs'))}" if runs else ""
+        print(f"{loop.get('name')} ({loop.get('id')}) · {repo} · {loop.get('scheduleText')} · {describe_next_run(loop)}{last}")
+    return 0
+
+
+def run_loops_save(parsed: Any) -> int:
+    loop_input = merge_loop_update(parsed) if parsed.command == "loops update" else build_loop_create(parsed)
+    if parsed.dry_run:
+        preview = _invoke_loops(parsed, "loops:preview", [loop_input["cron"]]) or {}
+        if not preview.get("ok"):
+            raise PaneDaemonClientError(
+                f"{preview.get('error')} Nothing was saved.",
+                "ERR_RUNPANE_LOOP_CRON",
+                'Pass a five-field cron such as "0 3 * * *" with --cron.',
+            )
+        result = {"ok": True, "dryRun": True, "input": loop_input, "scheduleText": preview.get("scheduleText"), "nextRunAtMs": preview.get("nextRunAtMs")}
+        if parsed.json:
+            print_json(result)
+        else:
+            paused = "" if loop_input["enabled"] else " (paused)"
+            print(f"Would save loop {loop_input['name']}: {preview.get('scheduleText')}, next run {format_loop_time(preview.get('nextRunAtMs'))}{paused}.")
+        return 0
+    confirm_mutation(parsed)
+    loop = _invoke_loops(parsed, "loops:save", [loop_input]) or {}
+    if parsed.json:
+        print_json({"ok": True, "loop": loop})
+    else:
+        print(f"Saved loop {loop.get('name')} ({loop.get('id')}): {loop.get('scheduleText')}, {describe_next_run(loop)}.")
+    return 0
+
+
+def run_loops_run(parsed: Any) -> int:
+    loop_id = _require_loop_id(parsed)
+    confirm_mutation(parsed)
+    loop = _invoke_loops(parsed, "loops:run-now", [loop_id]) or {}
+    runs = loop.get("runs") or []
+    run = runs[0] if runs else {}
+    failed = run.get("status") == "failed"
+    if parsed.json:
+        print_json({"ok": True, "loop": loop})
+    elif failed:
+        print(f"Run of {loop.get('name')} failed: {run.get('error') or 'unknown error'}")
+    else:
+        where = f" in Pane {run.get('sessionId')}" if run.get("sessionId") else ""
+        print(f"Started a run of {loop.get('name')}{where}.")
+    return 1 if failed else 0
+
+
+def run_loops_set_enabled(parsed: Any, enabled: bool) -> int:
+    loop_id = _require_loop_id(parsed)
+    confirm_mutation(parsed)
+    loop = _invoke_loops(parsed, "loops:set-enabled", [loop_id, enabled]) or {}
+    if parsed.json:
+        print_json({"ok": True, "loop": loop})
+    elif enabled:
+        print(f"Resumed loop {loop.get('name')}: {describe_next_run(loop)}.")
+    else:
+        print(f"Paused loop {loop.get('name')}.")
+    return 0
+
+
+def run_loops_delete(parsed: Any) -> int:
+    loop_id = _require_loop_id(parsed)
+    confirm_mutation(parsed)
+    _invoke_loops(parsed, "loops:delete", [loop_id])
+    if parsed.json:
+        print_json({"ok": True, "deleted": loop_id})
+    else:
+        print(f"Deleted loop {loop_id}.")
+    return 0
+
+
+def _require_loop_id(parsed: Any) -> str:
+    loop_id = (parsed.loop_id or "").strip()
+    if not loop_id:
+        raise ValueError(f"runpane {parsed.command} requires --loop <id>. See ids with `runpane loops list`.")
+    return loop_id
+
+
+def _loop_agent(parsed: Any) -> Optional[str]:
+    if parsed.agent is None or parsed.agent in LOOP_AGENTS:
+        return parsed.agent
+    raise ValueError(f"Loops run {', '.join(LOOP_AGENTS)}, or any command with --tool-command; got --agent {parsed.agent}.")
+
+
+def _resolve_loop_project_id(parsed: Any, repo: str) -> int:
+    """The project id --repo names, resolved by the daemon exactly as `panes list --repo` resolves it."""
+    result = invoke_daemon("runpane:panes:list", [{"repo": repo}], pane_dir=parsed.pane_dir)
+    if not result.get("repo"):
+        raise ValueError(f"No Pane repo matches --repo {repo}. See saved repos with `runpane repos list`.")
+    return result["repo"]["id"]
+
+
+def build_loop_create(parsed: Any) -> Dict[str, Any]:
+    name = (parsed.name or "").strip()
+    if not parsed.repo or not name or not parsed.cron:
+        raise ValueError("runpane loops create requires --repo <selector>, --name <name>, and --cron <expr>.")
+    agent = _loop_agent(parsed)
+    if bool(agent) == bool(parsed.tool_command):
+        raise ValueError("runpane loops create requires either --agent or --tool-command.")
+    return _without_empty_loop_fields({
+        "name": name,
+        "projectId": _resolve_loop_project_id(parsed, parsed.repo),
+        "cron": parsed.cron,
+        "agent": agent,
+        "toolCommand": parsed.tool_command,
+        "initialInput": resolve_initial_input(parsed),
+        "worktreeTemplate": parsed.worktree_name,
+        "enabled": not parsed.paused,
+    })
+
+
+def merge_loop_update(parsed: Any) -> Dict[str, Any]:
+    """Reads the loop and replaces the fields the flags name; --agent and --tool-command replace each other."""
+    loop_id = _require_loop_id(parsed)
+    if parsed.paused:
+        raise ValueError("runpane loops update does not take --paused. Use `runpane loops pause --loop <id>`.")
+    agent = _loop_agent(parsed)
+    if agent and parsed.tool_command:
+        raise ValueError("Pass either --agent or --tool-command, not both.")
+    loops = _invoke_loops(parsed, "loops:list", []) or []
+    loop = next((candidate for candidate in loops if candidate.get("id") == loop_id), None)
+    if loop is None:
+        raise PaneDaemonClientError(
+            f"No loop found with id {loop_id}. Nothing was changed.",
+            "ERR_RUNPANE_LOOP_NOT_FOUND",
+            "See loop ids with `runpane loops list`.",
+        )
+    replaces_tool = bool(agent or parsed.tool_command)
+    initial_input = resolve_initial_input(parsed)
+    return _without_empty_loop_fields({
+        "id": loop_id,
+        "name": (parsed.name or "").strip() or loop.get("name"),
+        "projectId": _resolve_loop_project_id(parsed, parsed.repo) if parsed.repo else loop.get("projectId"),
+        "cron": parsed.cron if parsed.cron is not None else loop.get("cron"),
+        "agent": agent if replaces_tool else loop.get("agent"),
+        "toolCommand": parsed.tool_command if replaces_tool else loop.get("toolCommand"),
+        "initialInput": initial_input if initial_input is not None else loop.get("initialInput"),
+        "worktreeTemplate": parsed.worktree_name if parsed.worktree_name is not None else loop.get("worktreeTemplate"),
+        "enabled": loop.get("enabled"),
+    })
+
+
+def _without_empty_loop_fields(loop_input: Dict[str, Any]) -> Dict[str, Any]:
+    optional = ("agent", "toolCommand", "initialInput", "worktreeTemplate")
+    return {key: value for key, value in loop_input.items() if key not in optional or (value and str(value).strip())}
+
+
+def describe_next_run(loop: Dict[str, Any]) -> str:
+    if not loop.get("enabled"):
+        return "paused"
+    next_run = loop.get("nextRunAtMs")
+    return "no next run" if next_run is None else f"next run {format_loop_time(next_run)}"
+
+
+def format_loop_time(ms: Any) -> str:
+    """Local time as YYYY-MM-DD HH:MM, matching the loop's local-time cron."""
+    return datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
 
 
 def _session_selector(parsed: Any) -> Dict[str, str]:

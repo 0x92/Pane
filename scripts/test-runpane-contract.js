@@ -1190,7 +1190,7 @@ const PARSER_DEFAULT_DIFFERENCES = {
   watchKinds: [], watchPaneIds: [], watchExcludePaneIds: [], attachments: [],
   asFilePointer: false, interrupt: false, noAssociate: false, removeWorktree: false, merged: false,
   quiet: false, readOnly: false, launch: false,
-  all: false, inboxIds: [], waitForResult: false,
+  all: false, inboxIds: [], waitForResult: false, paused: false,
 };
 
 function normalizeParsedArgs(value) {
@@ -3649,6 +3649,122 @@ print(json.dumps({"calls": calls, "codes": codes, "errors": errors}))
   assert.deepStrictEqual(python.errors, [true, true, true]);
 }
 
+/** Both wrappers send the same loops requests: --repo resolves through the daemon, update merges onto the saved loop. */
+async function checkLoopsParity() {
+  const daemonClient = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'daemonClient.js'));
+  const { parseRunpaneArgs } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'commands.js'));
+  const localControl = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'localControl.js'));
+  const loop = {
+    id: 'loop-1', name: 'nightly', projectId: 7, cron: '0 3 * * *', agent: 'claude', initialInput: 'Sweep',
+    enabled: true, createdAtMs: 1, nextRunAtMs: 2, scheduleText: 'Every day at 03:00', runs: [],
+  };
+  const failedRun = { id: 'run-1', loopId: 'loop-1', slotAtMs: 3, trigger: 'manual', status: 'failed', error: 'boom', sessionId: null };
+  const repoList = { ok: true, repo: { id: 7, name: 'Pane', path: '/repo', active: true, sessionCount: 0 }, panes: [] };
+  const scripted = [
+    repoList, { success: true, data: loop },
+    { success: true, data: [loop] }, { success: true, data: { ...loop, cron: '0 4 * * *' } },
+    repoList, { success: true, data: { ok: true, scheduleText: 'Every day at 03:00', nextRunAtMs: 2 } },
+    { success: true, data: { ...loop, runs: [failedRun] } },
+    { success: true, data: { ...loop, enabled: false, nextRunAtMs: null } },
+    { success: true, data: loop },
+    { success: true },
+    { success: false, error: 'No loop with id loop-9.' },
+  ];
+  const argvs = [
+    ['loops', 'create', '--repo', 'active', '--name', 'nightly', '--cron', '0 3 * * *', '--agent', 'claude', '--prompt', 'Sweep', '--yes', '--json'],
+    ['loops', 'update', '--loop', 'loop-1', '--cron', '0 4 * * *', '--tool-command', 'agent-farm run sweep', '--yes', '--json'],
+    ['loops', 'create', '--repo', 'active', '--name', 'nightly', '--cron', '0 3 * * *', '--agent', 'codex', '--paused', '--dry-run', '--json'],
+    ['loops', 'run', '--loop', 'loop-1', '--yes', '--json'],
+    ['loops', 'pause', '--loop', 'loop-1', '--yes', '--json'],
+    ['loops', 'resume', '--loop', 'loop-1', '--yes', '--json'],
+    ['loops', 'delete', '--loop', 'loop-1', '--yes', '--json'],
+  ];
+  const handlers = {
+    'loops create': localControl.runLoopsSave,
+    'loops update': localControl.runLoopsSave,
+    'loops run': localControl.runLoopsRun,
+    'loops pause': (parsed) => localControl.runLoopsSetEnabled(parsed, false),
+    'loops resume': (parsed) => localControl.runLoopsSetEnabled(parsed, true),
+    'loops delete': localControl.runLoopsDelete,
+  };
+  const originalInvokeDaemon = daemonClient.invokeDaemon;
+  const originalConsoleLog = console.log;
+  const calls = [];
+  const codes = [];
+  daemonClient.invokeDaemon = async (channel, args) => {
+    calls.push({ channel, args });
+    return scripted[calls.length - 1];
+  };
+  console.log = () => {};
+  try {
+    for (const argv of argvs) {
+      const parsed = parseRunpaneArgs(argv);
+      codes.push(await handlers[parsed.command](parsed));
+    }
+    await assert.rejects(localControl.runLoopsRun(parseRunpaneArgs(['loops', 'run', '--loop', 'loop-9', '--yes'])), /No loop with id loop-9/);
+    await assert.rejects(localControl.runLoopsSave(parseRunpaneArgs(['loops', 'create', '--repo', 'active', '--name', 'x', '--cron', '0 3 * * *', '--agent', 'claude', '--tool-command', 'x'])), /either --agent or --tool-command/);
+    await assert.rejects(localControl.runLoopsSave(parseRunpaneArgs(['loops', 'create', '--repo', 'active', '--name', 'x', '--cron', '0 3 * * *', '--agent', 'opencode'])), /Loops run claude, codex, cursor/);
+  } finally {
+    daemonClient.invokeDaemon = originalInvokeDaemon;
+    console.log = originalConsoleLog;
+  }
+
+  assert.deepStrictEqual(codes, [0, 0, 0, 1, 0, 0, 0]);
+  assert.deepStrictEqual(calls, [
+    { channel: 'runpane:panes:list', args: [{ repo: 'active' }] },
+    { channel: 'loops:save', args: [{ name: 'nightly', projectId: 7, cron: '0 3 * * *', agent: 'claude', initialInput: 'Sweep', enabled: true }] },
+    { channel: 'loops:list', args: [] },
+    { channel: 'loops:save', args: [{ id: 'loop-1', name: 'nightly', projectId: 7, cron: '0 4 * * *', toolCommand: 'agent-farm run sweep', initialInput: 'Sweep', enabled: true }] },
+    { channel: 'runpane:panes:list', args: [{ repo: 'active' }] },
+    { channel: 'loops:preview', args: ['0 3 * * *'] },
+    { channel: 'loops:run-now', args: ['loop-1'] },
+    { channel: 'loops:set-enabled', args: ['loop-1', false] },
+    { channel: 'loops:set-enabled', args: ['loop-1', true] },
+    { channel: 'loops:delete', args: ['loop-1'] },
+    { channel: 'loops:run-now', args: ['loop-9'] },
+  ]);
+
+  const python = JSON.parse(runPythonSnippet(`
+import contextlib
+import io
+import json
+import sys
+import runpane.local_control as local_control
+from runpane.cli import COMMAND_HANDLERS, parse_args
+
+data = json.loads(sys.stdin.read())
+scripted = data["scripted"]
+calls = []
+def fake_invoke(channel, args=None, **kwargs):
+    calls.append({"channel": channel, "args": args or []})
+    return scripted[len(calls) - 1]
+
+local_control.invoke_daemon = fake_invoke
+codes = []
+errors = []
+with contextlib.redirect_stdout(io.StringIO()):
+    for argv in data["argvs"]:
+        parsed = parse_args(argv)
+        codes.append(COMMAND_HANDLERS[parsed.command](parsed, {}))
+    for argv in (
+        ["loops", "run", "--loop", "loop-9", "--yes"],
+        ["loops", "create", "--repo", "active", "--name", "x", "--cron", "0 3 * * *", "--agent", "claude", "--tool-command", "x"],
+        ["loops", "create", "--repo", "active", "--name", "x", "--cron", "0 3 * * *", "--agent", "opencode"],
+    ):
+        try:
+            parsed = parse_args(argv)
+            COMMAND_HANDLERS[parsed.command](parsed, {})
+        except Exception as error:
+            errors.append(str(error))
+print(json.dumps({"calls": calls, "codes": codes, "errors": errors}))
+`, JSON.stringify({ scripted, argvs })));
+  assert.deepStrictEqual(python.calls, calls);
+  assert.deepStrictEqual(python.codes, codes);
+  assert.match(python.errors[0], /No loop with id loop-9/);
+  assert.match(python.errors[1], /either --agent or --tool-command/);
+  assert.match(python.errors[2], /Loops run claude, codex, cursor/);
+}
+
 /** `sessions overview` carries both a Pane's worker report (#839) and the Session's named locks (#834). */
 async function checkOverviewReportsAndLocks() {
   const daemonClient = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'daemonClient.js'));
@@ -4835,6 +4951,7 @@ async function runChecks() {
   await checkPanesCostParity();
   await checkPaneRenameParity();
   await checkLockParity();
+  await checkLoopsParity();
   await checkOverviewReportsAndLocks();
   await checkSessionRuntime();
   checkBoundaryDecoderCollectsEveryIssue();
