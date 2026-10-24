@@ -80,12 +80,13 @@ export async function startLoopRun(
 ): Promise<{ sessionId: string; warning?: string }> {
   const slot = new Date(slotAtMs);
   const stamp = `${slot.getFullYear()}${pad(slot.getMonth() + 1)}${pad(slot.getDate())}-${pad(slot.getHours())}${pad(slot.getMinutes())}`;
-  const label = slot.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const label = `${slot.toLocaleString('en-US', { month: 'short' })} ${slot.getDate()} ${pad(slot.getHours())}:${pad(slot.getMinutes())}`;
+  const name = `${slug(loop.name)} · ${label}`;
   const request: RunpanePaneCreateRequest = {
     repo: { id: loop.projectId },
     noFocus: true,
     panes: [{
-      name: `${slug(loop.name)} · ${label}`,
+      name,
       worktreeName: `${slug(loop.worktreeTemplate ?? `loop-${loop.name}`)}-${stamp}`,
       pinned: false,
       tool: loop.toolCommand
@@ -96,6 +97,9 @@ export async function startLoopRun(
   const result = decodeBoundary(await commandRegistry.invoke('runpane:panes:create', [request]), paneCreateResultSchema);
   const item = result.items[0];
   if (!item?.sessionId) throw new Error(item?.error?.message ?? 'Pane creation returned no Pane.');
+  // `panes create` names a Pane after its worktree when given one; label the run by loop and slot.
+  // A failed rename leaves the worktree's name; the run itself started.
+  await commandRegistry.invoke('runpane:panes:rename', [{ paneId: item.sessionId, name }]).catch(() => undefined);
   return item.ok || !item.error ? { sessionId: item.sessionId } : { sessionId: item.sessionId, warning: item.error.message };
 }
 
