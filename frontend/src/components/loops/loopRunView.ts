@@ -31,8 +31,8 @@ function isRunning(session: Session, agentState: AgentState): boolean {
 function viewRun(run: LoopRun, session: Session | undefined, agentState: AgentState, nowMs: number): LoopRunView {
   if (run.status !== 'started') return { run, outcome: run.status, session: undefined, durationMs: null, branch: null };
   const running = session ? isRunning(session, agentState) : false;
-  const endMs = running ? nowMs : session?.lastActivity ? Date.parse(session.lastActivity) : NaN;
-  const durationMs = Number.isFinite(endMs) && endMs > run.slotAtMs ? endMs - run.slotAtMs : null;
+  // Only a working run has a trustworthy end (now): a session's lastActivity is not when its agent finished.
+  const durationMs = running && nowMs > run.slotAtMs ? nowMs - run.slotAtMs : null;
   const branch = session?.worktreePath ? session.worktreePath.split(/[\\/]/).filter(Boolean).pop() ?? null : null;
   return { run, outcome: running ? 'running' : 'ok', session, durationMs, branch };
 }

@@ -15,7 +15,7 @@ export function LoopRunHeader({ runRef }: { runRef: LoopRunRef }) {
   const runNow = useLoopsStore(state => state.runNow);
   const setEnabled = useLoopsStore(state => state.setEnabled);
   const openDrawer = useLoopsStore(state => state.openDrawer);
-  const next = loop.nextRunAtMs === null ? 'paused' : `next run ${formatNextRun(loop.nextRunAtMs).toLowerCase()}`;
+  const next = loop.nextRunAtMs === null ? 'paused' : `next run ${formatNextRun(loop.nextRunAtMs).replace(/^(Today|Tomorrow)/, word => word.toLowerCase())}`;
 
   return (
     <div className="flex flex-shrink-0 flex-col gap-1.5 border-b border-border-primary bg-surface-primary px-3 py-2" data-testid="loop-run-header">
