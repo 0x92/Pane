@@ -57,7 +57,8 @@ function toLoop(row: LoopRow): StoredLoop {
     createdAtMs: row.created_at_ms,
   };
   // SAFETY: Loop writes persist only LoopAgent values.
-  if (row.agent !== null) loop.agent = row.agent as LoopAgent;
+  const agent = row.agent as LoopAgent | null;
+  if (agent !== null) loop.agent = agent;
   if (row.tool_command !== null) loop.toolCommand = row.tool_command;
   if (row.initial_input !== null) loop.initialInput = row.initial_input;
   if (row.worktree_template !== null) loop.worktreeTemplate = row.worktree_template;
@@ -69,8 +70,9 @@ function toRun(row: LoopRunRow): LoopRun {
     id: row.id,
     loopId: row.loop_id,
     slotAtMs: row.slot_at_ms,
-    // SAFETY: Run writes persist only LoopRunTrigger and LoopRunStatus values.
+    // SAFETY: Run writes persist only LoopRunTrigger values.
     trigger: row.trigger as LoopRunTrigger,
+    // SAFETY: Run writes persist only LoopRunStatus values.
     status: row.status as LoopRunStatus,
     error: row.error,
     sessionId: row.session_id,

@@ -5,7 +5,7 @@ import type { StoredLoop } from '../services/loops/loopRepository';
 import { previewLoopSchedule } from '../services/loops/loopSchedule';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 import { loopInputSchema } from '../../../shared/types/loop';
-import type { RunpanePaneArchiveResult, RunpanePaneCreateRequest, RunpanePaneCreateResult } from '../../../shared/types/runpaneOrchestration';
+import type { RunpanePaneCreateRequest } from '../../../shared/types/runpaneOrchestration';
 
 const LOOP_CHANNELS = [
   'loops:list',
@@ -15,6 +15,17 @@ const LOOP_CHANNELS = [
   'loops:run-now',
   'loops:preview',
 ] as const;
+
+/** The parts of `runpane panes create` and `panes archive` results a run reads. */
+const failureSchema = boundary.optional(boundary.object({ message: boundary.string }));
+const paneCreateResultSchema = boundary.object({
+  items: boundary.array(boundary.object({
+    ok: boundary.boolean,
+    sessionId: boundary.optional(boundary.string),
+    error: failureSchema,
+  })),
+});
+const paneArchiveResultSchema = boundary.object({ ok: boundary.boolean, blocked: failureSchema });
 
 type LoopResponse<T> = { success: true; data?: T } | { success: false; error: string };
 
@@ -82,20 +93,14 @@ export async function startLoopRun(
         : { agent: loop.agent ?? 'claude', initialInput: loop.initialInput },
     }],
   };
-  // SAFETY: runpane:panes:create resolves to RunpanePaneCreateResult.
-  const result = await commandRegistry.invoke('runpane:panes:create', [request as unknown as PaneCommandValue]) as unknown as RunpanePaneCreateResult;
+  const result = decodeBoundary(await commandRegistry.invoke('runpane:panes:create', [request]), paneCreateResultSchema);
   const item = result.items[0];
-  if (!item?.sessionId) {
-    throw new Error(item && 'error' in item && item.error ? item.error.message : 'Pane creation returned no Pane.');
-  }
-  if (!item.ok && 'error' in item && item.error) return { sessionId: item.sessionId, warning: item.error.message };
-  return { sessionId: item.sessionId };
+  if (!item?.sessionId) throw new Error(item?.error?.message ?? 'Pane creation returned no Pane.');
+  return item.ok || !item.error ? { sessionId: item.sessionId } : { sessionId: item.sessionId, warning: item.error.message };
 }
 
 /** Archive an old run Pane the way `runpane panes archive` does; unsaved work blocks it. */
 export async function archiveLoopRun(commandRegistry: PaneCommandRegistry, sessionId: string): Promise<void> {
-  const result = await commandRegistry.invoke('runpane:panes:archive', [{ paneId: sessionId, source: 'agent' }]);
-  // SAFETY: runpane:panes:archive resolves to RunpanePaneArchiveResult.
-  const archive = result as unknown as RunpanePaneArchiveResult;
-  if (!archive.ok) throw new Error('blocked' in archive && archive.blocked ? archive.blocked.message : 'archive was refused');
+  const result = decodeBoundary(await commandRegistry.invoke('runpane:panes:archive', [{ paneId: sessionId, source: 'agent' }]), paneArchiveResultSchema);
+  if (!result.ok) throw new Error(result.blocked?.message ?? 'archive was refused');
 }
