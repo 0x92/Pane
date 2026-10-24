@@ -4,7 +4,7 @@ import type { Project } from '../types/project';
 import type { UpdateConfigRequest } from '../types/config';
 import type { SessionCreationPreferences } from '../stores/sessionPreferencesStore';
 import type { PaneChatAgent, PaneChatState } from '../../../shared/types/paneChat';
-import type { ScheduledRunInput } from '../../../shared/types/schedule';
+import type { LoopInput } from '../../../shared/types/loop';
 import { startOwnPaneCreation } from './ownPaneCreations';
 import type { MissionControlSnapshotRequest } from '../../../shared/types/missionControl';
 import type {
@@ -179,28 +179,33 @@ export class API {
     },
   };
 
-  // Recurring agent runs
-  static schedules = {
-    async list(projectId?: number) {
+  // Loops (scheduled tasks)
+  static loops = {
+    async list() {
       if (!isElectron()) throw new Error('Electron API not available');
-      return window.electronAPI.schedules.list(projectId);
+      return window.electronAPI.loops.list();
     },
-    async save(input: ScheduledRunInput) {
+    async save(input: LoopInput) {
       if (!isElectron()) throw new Error('Electron API not available');
-      return window.electronAPI.schedules.save(input);
+      return window.electronAPI.loops.save(input);
     },
     async remove(id: string) {
       if (!isElectron()) throw new Error('Electron API not available');
-      return window.electronAPI.schedules.delete(id);
+      return window.electronAPI.loops.delete(id);
     },
     async setEnabled(id: string, enabled: boolean) {
       if (!isElectron()) throw new Error('Electron API not available');
-      return window.electronAPI.schedules.setEnabled(id, enabled);
+      return window.electronAPI.loops.setEnabled(id, enabled);
     },
-    /** Start one now without moving its cadence. */
+    /** Start one run now; the schedule is unchanged. */
     async runNow(id: string) {
       if (!isElectron()) throw new Error('Electron API not available');
-      return window.electronAPI.schedules.runNow(id);
+      return window.electronAPI.loops.runNow(id);
+    },
+    /** The cron as a sentence and its next run, or why it is rejected. */
+    async preview(cron: string) {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.loops.preview(cron);
     },
   };
   // Mission Control

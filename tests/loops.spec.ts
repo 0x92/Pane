@@ -1,0 +1,225 @@
+import { expect, test, type Page } from '@playwright/test';
+import type { Loop } from '../shared/types/loop';
+import { installElectronApiMock, type ElectronApiMockOptions } from './electronApiMock';
+
+const projects = [
+  { id: 1, name: 'Pane', path: '/tmp/pane', active: true, created_at: '2026-10-01T00:00:00.000Z', updated_at: '2026-10-01T00:00:00.000Z' },
+  { id: 2, name: 'bloom-mono', path: '/tmp/bloom-mono', active: false, created_at: '2026-10-01T00:00:00.000Z', updated_at: '2026-10-01T00:00:00.000Z' },
+];
+
+/** Set to a folder to save a screenshot of each screen there. */
+const screenshotDir = process.env.LOOPS_SCREENSHOT_DIR;
+async function shoot(page: Page, name: string) {
+  if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/${name}.png` });
+}
+
+async function open(page: Page, options: ElectronApiMockOptions = {}) {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await installElectronApiMock(page, {
+    initialProjects: projects,
+    initialSessions: [],
+    initialConfig: { theme: 'light-rounded', appearanceMode: 'fixed' },
+    ...options,
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+}
+
+test('creates, runs, pauses, edits and deletes a loop', async ({ page }) => {
+  await open(page, { initialUiState: { expandedProjects: [1], repositoriesSectionExpanded: true } });
+
+  await page.getByTestId('loops-nav').click();
+  await expect(page.getByText('No loops yet')).toBeVisible();
+  await page.getByRole('button', { name: 'New loop' }).first().click();
+
+  const drawer = page.getByRole('dialog');
+  await drawer.getByLabel('Name').fill('Nightly bug sweep');
+  await drawer.getByRole('radio', { name: 'Command' }).click();
+  await drawer.getByLabel('Command').fill('agent-farm run greenfield/bug-sweep --since 24h');
+  await drawer.getByLabel('Schedule (cron)').fill('*/15 * * * *');
+  await expect(drawer.getByText('Loops run at most once an hour')).toBeVisible();
+  await expect(drawer.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await drawer.getByRole('button', { name: 'daily' }).click();
+  await expect(drawer.getByLabel('Schedule (cron)')).toHaveValue('0 3 * * *');
+  await expect(drawer.getByText('Every day at 03:00')).toBeVisible();
+  await drawer.getByRole('button', { name: 'Save' }).click();
+  await expect(drawer).toBeHidden();
+
+  const detail = page.getByTestId('loop-detail');
+  await expect(page.getByTestId('loop-list-item')).toContainText('Every day at 03:00 · no runs yet');
+  await expect(detail.getByRole('heading', { name: 'Nightly bug sweep' })).toBeVisible();
+  await expect(detail.getByText('agent-farm run greenfield/bug-sweep --since 24h')).toBeVisible();
+  await expect(page.getByTestId('loops-nav')).toContainText('1');
+
+  await detail.getByRole('button', { name: 'Run now' }).click();
+  await expect(detail.getByRole('row')).toHaveCount(1);
+  await expect(detail.getByRole('row')).toContainText('running');
+  // The run is a normal Pane under its project, marked as a loop run.
+  await expect(page.getByRole('button', { name: /^nightly-bug-sweep · / })).toBeVisible();
+
+  await detail.getByRole('button', { name: /^Open run / }).click();
+  const header = page.getByTestId('loop-run-header');
+  await expect(header.getByRole('navigation', { name: 'Breadcrumb' })).toContainText(/Loops.*Nightly bug sweep.*Run /);
+  await expect(header).toContainText('permission prompts skipped');
+  await expect(page.getByTestId('loop-runs-rail').getByRole('button')).toHaveCount(1);
+
+  await header.getByRole('button', { name: 'Pause' }).click();
+  await expect(header).toContainText('paused');
+  await header.getByRole('button', { name: 'Loops' }).click();
+  await expect(detail.getByText('paused', { exact: true })).toBeVisible();
+  await expect(detail.getByRole('button', { name: 'Resume' })).toBeVisible();
+
+  await detail.getByRole('button', { name: 'Edit' }).click();
+  await expect(drawer.getByLabel('Name')).toHaveValue('Nightly bug sweep');
+  await drawer.getByLabel('Name').fill('Morning bug sweep');
+  await drawer.getByRole('button', { name: 'Save' }).click();
+  await expect(detail.getByRole('heading', { name: 'Morning bug sweep' })).toBeVisible();
+
+  await detail.getByRole('button', { name: 'Edit' }).click();
+  await drawer.getByRole('button', { name: 'Delete loop' }).click();
+  await drawer.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(page.getByText('No loops yet')).toBeVisible();
+});
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+const today3am = new Date();
+today3am.setHours(3, 0, 0, 0);
+
+function runSession(id: string, slotAtMs: number, minutes: number, status: string) {
+  return {
+    id,
+    name: `nightly-bug-sweep · ${new Date(slotAtMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${new Date(slotAtMs).toTimeString().slice(0, 5)}`,
+    projectId: 1,
+    worktreePath: `/tmp/worktrees/loop-nightly-bug-sweep-${id.slice(-2)}`,
+    prompt: '',
+    status,
+    createdAt: new Date(slotAtMs).toISOString(),
+    lastActivity: new Date(slotAtMs + minutes * 60_000).toISOString(),
+    output: [],
+    jsonMessages: [],
+    permissionMode: 'ignore',
+    toolType: 'none',
+    archived: false,
+    isHidden: false,
+    isFavorite: false,
+  };
+}
+
+const sweepSlots = [0, 1, 2, 3, 4, 5].map(days => today3am.getTime() - days * DAY);
+// The newest run was started by hand twelve minutes ago and is still working.
+const manualRunAtMs = Date.now() - 12 * 60_000;
+const seededSessions = [
+  runSession('sweep-run-24', manualRunAtMs, 12, 'running'),
+  runSession('sweep-run-22', sweepSlots[2], 41, 'stopped'),
+  runSession('sweep-run-21', sweepSlots[3], 38, 'stopped'),
+  runSession('sweep-run-20', sweepSlots[4], 35, 'stopped'),
+];
+
+const seededLoops: Loop[] = [
+  {
+    id: 'loop-sweep',
+    name: 'Nightly bug sweep',
+    projectId: 1,
+    cron: '0 3 * * *',
+    toolCommand: 'agent-farm run greenfield/bug-sweep --since 24h',
+    enabled: true,
+    createdAtMs: sweepSlots[5],
+    nextRunAtMs: today3am.getTime() + DAY,
+    scheduleText: 'Every day at 03:00',
+    runs: [
+      { id: 'r24', loopId: 'loop-sweep', slotAtMs: manualRunAtMs, trigger: 'manual', status: 'started', error: null, sessionId: 'sweep-run-24' },
+      { id: 'r23', loopId: 'loop-sweep', slotAtMs: sweepSlots[1], trigger: 'schedule', status: 'failed', error: 'git worktree add failed: branch already exists', sessionId: null },
+      { id: 'r22', loopId: 'loop-sweep', slotAtMs: sweepSlots[2], trigger: 'schedule', status: 'started', error: null, sessionId: 'sweep-run-22' },
+      { id: 'r21', loopId: 'loop-sweep', slotAtMs: sweepSlots[3], trigger: 'schedule', status: 'started', error: null, sessionId: 'sweep-run-21' },
+      { id: 'r20', loopId: 'loop-sweep', slotAtMs: sweepSlots[4], trigger: 'schedule', status: 'started', error: null, sessionId: 'sweep-run-20' },
+      { id: 'r19', loopId: 'loop-sweep', slotAtMs: sweepSlots[5], trigger: 'schedule', status: 'skipped', error: 'Pane was not running when this run came due.', sessionId: null },
+    ],
+  },
+  {
+    id: 'loop-deps',
+    name: 'Dependency check',
+    projectId: 2,
+    cron: '0 9 * * 1',
+    agent: 'claude',
+    initialInput: 'Check for outdated and vulnerable dependencies and open one PR per fix.',
+    enabled: true,
+    createdAtMs: sweepSlots[5],
+    nextRunAtMs: today3am.getTime() + 3 * DAY + 6 * HOUR,
+    scheduleText: 'Mondays at 09:00',
+    runs: [],
+  },
+  {
+    id: 'loop-docs',
+    name: 'Weekly docs audit',
+    projectId: 1,
+    cron: '0 16 * * 5',
+    agent: 'codex',
+    initialInput: 'Audit docs/ against the current CLI.',
+    enabled: false,
+    createdAtMs: sweepSlots[5],
+    nextRunAtMs: null,
+    scheduleText: 'Fridays at 16:00',
+    runs: [],
+  },
+];
+
+for (const theme of ['light-rounded', 'dark'] as const) {
+  test(`shows loops, their runs and a run Pane (${theme})`, async ({ page }) => {
+    await open(page, {
+      initialSessions: seededSessions,
+      initialLoops: seededLoops,
+      initialConfig: { theme, appearanceMode: 'fixed' },
+      initialUiState: { expandedProjects: [1], repositoriesSectionExpanded: true },
+    });
+    const prefix = theme === 'dark' ? 'dark-' : '';
+
+    await page.getByTestId('loops-nav').click();
+    const detail = page.getByTestId('loop-detail');
+    await expect(detail.getByRole('heading', { name: 'Nightly bug sweep' })).toBeVisible();
+    await expect(detail).toContainText('3 ok · 1 failed');
+    await expect(page.getByTestId('loops-nav')).toContainText('3');
+    await shoot(page, `${prefix}01-loops-page`);
+
+    // Oldest first: skipped, then three ok runs; the newest ok one is the fourth square.
+    await detail.getByRole('group', { name: 'Last 10 runs' }).getByRole('button').nth(3).hover();
+    await expect(page.getByText('Finished after 41m · loop-nightly-bug-sweep-22')).toBeVisible();
+    await shoot(page, `${prefix}02-run-tooltip`);
+
+    await page.getByTestId('loop-list-item').filter({ hasText: 'Weekly docs audit' }).click();
+    await expect(detail.getByRole('button', { name: 'Resume' })).toBeVisible();
+    await shoot(page, `${prefix}03-paused-loop`);
+
+    await page.getByRole('button', { name: 'New loop' }).click();
+    const drawer = page.getByRole('dialog');
+    await drawer.getByLabel('Name').fill('Nightly bug sweep');
+    await expect(drawer.getByText('Every day at 03:00')).toBeVisible();
+    await shoot(page, `${prefix}04-drawer-new`);
+    await drawer.getByRole('radio', { name: 'Command' }).click();
+    await drawer.getByLabel('Command').fill('agent-farm run greenfield/bug-sweep --since 24h');
+    await drawer.getByLabel('Schedule (cron)').fill('*/15 * * * *');
+    await expect(drawer.getByText('Loops run at most once an hour')).toBeVisible();
+    await shoot(page, `${prefix}05-drawer-cron-error`);
+    await drawer.getByRole('button', { name: 'Cancel' }).click();
+
+    await page.getByTestId('loop-list-item').filter({ hasText: 'Nightly bug sweep' }).click();
+    await detail.getByRole('button', { name: 'Edit' }).click();
+    await expect(drawer.getByLabel('Command')).toHaveValue('agent-farm run greenfield/bug-sweep --since 24h');
+    await expect(drawer.getByText('Every day at 03:00')).toBeVisible();
+    await drawer.getByRole('button', { name: 'Delete loop' }).click();
+    await expect(drawer.getByText('Delete this loop? Its run Panes stay.')).toBeVisible();
+    await shoot(page, `${prefix}06-drawer-edit-delete-confirm`);
+    await drawer.getByRole('button', { name: 'Keep' }).click();
+    await drawer.getByRole('button', { name: 'Cancel' }).click();
+
+    await detail.getByRole('button', { name: /^Open run / }).first().click();
+    const header = page.getByTestId('loop-run-header');
+    await expect(header).toContainText('running');
+    await expect(page.getByTestId('loop-runs-rail').getByRole('button')).toHaveCount(6);
+    await shoot(page, `${prefix}07-run-pane`);
+
+    // The rail switches between runs without leaving the run Pane.
+    await page.getByTestId('loop-runs-rail').getByRole('button').nth(2).click();
+    await expect(header.getByRole('navigation', { name: 'Breadcrumb' })).toContainText(new Date(sweepSlots[2]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+    await expect(header).toContainText('ok · 41m');
+  });
+}

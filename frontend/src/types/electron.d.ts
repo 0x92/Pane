@@ -54,7 +54,7 @@ import type {
 } from '../../../shared/types/orchestrationSession';
 import type { UsageIndexStatus, UsageReport, UsageReportRequest } from '../../../shared/types/usage';
 import type { LeaderboardResponse, LeaderboardStatus, LeaderboardSubmitResult } from '../../../shared/types/leaderboard';
-import type { ScheduledRun, ScheduledRunInput } from '../../../shared/types/schedule';
+import type { Loop, LoopInput, LoopSchedulePreview } from '../../../shared/types/loop';
 import type { MissionControlAgentPanel, MissionControlSnapshotRequest, MissionControlSnapshotResult } from '../../../shared/types/missionControl';
 import type { CreateSessionRequest } from './session';
 import type { DetectedProjectConfig } from '../../../shared/types/projectConfig';
@@ -202,13 +202,14 @@ interface ElectronAPI {
     shareImage: (data: string, filename: string) => Promise<IPCResponse<{ method: 'share' | 'clipboard' }>>;
   };
 
-  // Recurring agent runs
-  schedules: {
-    list: (projectId?: number) => Promise<IPCResponse<ScheduledRun[]>>;
-    save: (input: ScheduledRunInput) => Promise<IPCResponse<ScheduledRun>>;
+  // Loops (scheduled tasks)
+  loops: {
+    list: () => Promise<IPCResponse<Loop[]>>;
+    save: (input: LoopInput) => Promise<IPCResponse<Loop>>;
     delete: (id: string) => Promise<IPCResponse<void>>;
-    setEnabled: (id: string, enabled: boolean) => Promise<IPCResponse<ScheduledRun>>;
-    runNow: (id: string) => Promise<IPCResponse<ScheduledRun>>;
+    setEnabled: (id: string, enabled: boolean) => Promise<IPCResponse<Loop>>;
+    runNow: (id: string) => Promise<IPCResponse<Loop>>;
+    preview: (cron: string) => Promise<IPCResponse<LoopSchedulePreview>>;
   };
   // Mission Control — every agent pane across all sessions
   missionControl: {
@@ -462,6 +463,8 @@ interface ElectronAPI {
     onSessionCreationFailed: (callback: (failure: { name: string; error: string }) => void) => () => void;
     onSessionCreated: (callback: (session: Session) => void) => () => void;
     onSessionUpdated: (callback: (session: Session) => void) => () => void;
+    /** Loops or their runs changed; read them again with `loops.list`. */
+    onLoopsChanged: (callback: () => void) => () => void;
     onPaneFocusRequested: (callback: (data: RunpanePaneFocusRequestedEvent) => void) => () => void;
     onArchiveProgress: (callback: (progress: ArchiveProgressSnapshot) => void) => () => void;
     onListeningPortsChanged: (callback: (snapshot: ListeningPortsSnapshot) => void) => () => void;
