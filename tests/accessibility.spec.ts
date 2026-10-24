@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { expectNoAxeViolations } from './axeTest';
 import { installElectronApiMock } from './electronApiMock';
 import type { JsonValue } from '../shared/validation/boundaryDecoder';
@@ -239,7 +239,6 @@ async function openConnectedRemote(page: Page): Promise<void> {
   });
 
   await page.goto('/remote.html', { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Remote accessibility pane' })).toBeVisible({ timeout: 10_000 });
 }
 
@@ -248,7 +247,7 @@ test('Home and About are axe-clean and the modal contains and restores focus', a
   await expectNoAxeViolations(page);
 
   // About lives in the sidebar's Home footer menu; the menu trigger is what focus returns to.
-  const menuButton = page.getByRole('button', { name: 'Home menu' });
+  const menuButton = page.getByRole('button', { name: 'More', exact: true });
   await menuButton.focus();
   await menuButton.click();
   const aboutItem = page.getByRole('menuitem', { name: /About Pane/i });
@@ -306,7 +305,7 @@ test('seeded Create Pane dialog is keyboard reachable and axe-clean', async ({ p
   await expect(dialog).toBeVisible();
   // The dialog moves focus to the name input 100 ms after opening; let that
   // land before taking focus elsewhere, or it steals it back mid-test.
-  await expect(page.getByRole('textbox', { name: 'Enter a name for your pane' })).toBeFocused();
+  await expect(dialog.getByRole('textbox', { name: 'Pane Name', exact: true })).toBeFocused();
   const branchCombobox = page.getByRole('combobox', { name: /Base Branch/i });
   await expect(branchCombobox).toBeVisible();
   await branchCombobox.click();
@@ -352,6 +351,19 @@ test('seeded pane exposes separate compound actions and arrow-keyed panel tabs',
   await expect(archiveButton).toBeAttached();
   await expect(pinButton).toBeAttached();
   await expect(paneButton.locator('button, a, [role="button"]')).toHaveCount(0);
+  await page.mouse.move(800, 500);
+  await paneButton.focus();
+  await page.keyboard.press('Tab');
+  await expect(archiveButton).toBeFocused();
+  await expect(archiveButton.locator('..')).toHaveCSS('opacity', '1');
+  await expect(archiveButton).toHaveCSS('outline-style', 'solid');
+  await expect(archiveButton).toHaveCSS('outline-width', '2px');
+  await page.keyboard.press('Tab');
+  await expect(pinButton).toBeFocused();
+  await expect(pinButton.locator('..')).toHaveCSS('opacity', '1');
+  await expect(pinButton).toHaveCSS('outline-style', 'solid');
+  await expect(pinButton).toHaveCSS('outline-width', '2px');
+  await page.screenshot({ path: 'tmp/verify/sidebar-row-action-overlay/keyboard-focus.png' });
   await archiveButton.click();
   // SAFETY: installElectronApiMock defines this test-only bridge before the page loads.
   await expect.poll(() => page.evaluate(() => (

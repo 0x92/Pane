@@ -1,5 +1,8 @@
+import type { AgentChatPanelState } from './agentChat';
 import type { CustomCommandResume } from './customCommandResume';
 import type { DiffScope } from './gitDiff';
+import { boundary, decodeOptionalBoundary } from '../validation/boundaryDecoder';
+import type { BoundaryCursor, BoundarySchema } from '../validation/boundaryDecoder';
 
 /**
  * Panel and session types for Pane.
@@ -17,7 +20,7 @@ export interface ToolPanel {
   metadata: ToolPanelMetadata;   // Creation time, position, etc.
 }
 
-export type ToolPanelType = 'terminal' | 'diff' | 'explorer' | 'editor' | 'logs' | 'dashboard' | 'setup-tasks' | 'browser';
+export type ToolPanelType = 'terminal' | 'diff' | 'explorer' | 'editor' | 'logs' | 'dashboard' | 'setup-tasks' | 'browser' | 'notes';
 
 export interface ToolPanelState {
   isActive: boolean;
@@ -30,6 +33,12 @@ export type TerminalAgentDetection = 'declared' | 'command' | 'process' | 'scree
 
 /** What a worker says about its task when it runs `runpane report`. */
 export type TerminalAgentReportState = 'ready' | 'blocked' | 'failed' | 'done';
+
+/** A report the sender of a panel's work is waiting for (`--expect-report`); kept in `expected-reports.json`. */
+export interface TerminalExpectedReport {
+  /** When the work was sent; a report at or after this time fulfils it. */
+  since: string;
+}
 
 /** The latest `runpane report` from an agent panel, kept in its custom state so it survives restarts. */
 export interface TerminalAgentReport {
@@ -49,6 +58,8 @@ export interface TerminalAgentReport {
 }
 
 export interface TerminalPanelState {
+  /** Host-owned chat runtime identity and handoff journal. Viewers cannot mutate it. */
+  agentChat?: AgentChatPanelState;
   // Basic state (implemented in Phase 1-2)
   isInitialized?: boolean;       // Whether PTY process has been started
   cwd?: string;                  // Current working directory
@@ -69,6 +80,15 @@ export interface TerminalPanelState {
   alternateScreenBuffer?: string;         // Recent TUI/alternate-screen output, kept separate from shell scrollback
   isAlternateScreen?: boolean;            // Whether the live terminal is currently in alternate-screen/TUI mode
   serializedBuffer?: string;             // xterm.js serialized terminal state (includes full visual buffer)
+  /**
+   * The emulator's plain-text view of the screen at the last save.
+   *
+   * `alternateScreenBuffer` is the raw PTY byte stream, and a full-screen TUI
+   * paints it with absolute cursor positioning, so stripping its escapes
+   * concatenates every glyph. Anything that wants to *read* a stopped panel
+   * (Mission Control tiles, `runpane panels screen`) wants this instead.
+   */
+  screenText?: string;
   environmentVars?: Record<string, string>; // Modified env vars
   dimensions?: { cols: number; rows: number }; // Terminal size
   cursorPosition?: { x: number; y: number }; // Cursor location
@@ -81,8 +101,10 @@ export interface TerminalPanelState {
 
   // Auto-resume state (for graceful shutdown/restart)
   wasInterrupted?: boolean;          // Whether this terminal was active when app shutdown occurred
+  updateResumeHold?: string;         // Operation owning the stopped panel; explicit resume releases it.
+  updateResumeId?: string;           // Exact identity required by automatic update restoration.
   hasClaudeSessionId?: boolean;      // Whether --session-id was already passed to Claude (use --resume next time)
-  agentType?: 'claude' | 'codex' | 'cursor'; // CLI agent type for panel-local resume behavior
+  agentType?: 'claude' | 'codex' | 'cursor' | 'opencode'; // CLI agent type for panel-local resume behavior
   /** How Pane learned `agentType`: declared with the launch, from the launch command, the foreground process, or the screen. */
   agentDetection?: TerminalAgentDetection;
   /** The command the panel was launched (or staged) with, as the user gave it. */
@@ -99,12 +121,22 @@ export interface TerminalPanelState {
   orchestrationSessionId?: string;
   /** Session-owned working directory, also used by legacy shared terminal owners. */
   orchestrationWorkspace?: string;
+  /**
+   * The folder a resumed Codex conversation is pinned to with `--cd`, because the
+   * conversation was recorded in another checkout or machine. Quoted for the
+   * terminal's own shell at launch.
+   */
+  resumeDirectory?: string;
   /** Applied when the terminal next starts, not while its agent is running. */
   orchestrationProfile?: string;
+  /** Folder of the Session this worker's Pane belongs to, as the agent sees it; exported as PANE_SESSION_DIR. */
+  sessionFolder?: string;
   /** Wrapper/custom commands own their flags and resume behavior. */
   preserveLaunchCommand?: boolean;
   customResume?: CustomCommandResume | null;
   customResumeStarted?: boolean;
+  /** The SSH config alias this terminal connects to, for tabs opened from the SSH view. */
+  sshHost?: string;
 
   // CLI tool init state
   isCliPanel?: boolean;              // True if this terminal runs a CLI tool (claude/codex)
@@ -253,7 +285,21 @@ export interface ToolPanelMetadata {
    * 'split' opens it beside the primary group (reusing an existing side group
    * as tabs). Ignored once the panel is in the stored layout.
    */
-  openPlacement?: 'split' | 'tab';
+  openPlacement?: PanelOpenPlacement;
+}
+
+export type PanelOpenPlacement = 'split' | 'tab';
+
+/**
+ * Payload of `panel:activeChanged`: the host or an agent asks clients to bring
+ * a tab forward. Only clients already showing `sessionId` follow it; a client's
+ * own tab click never produces one. `placement` is set when `runpane panels
+ * open` opens or reopens the tab.
+ */
+export interface PanelActivationRequest {
+  sessionId: string;
+  panelId: string;
+  placement?: PanelOpenPlacement;
 }
 
 export interface CreatePanelRequest {
@@ -264,6 +310,7 @@ export interface CreatePanelRequest {
   initialState?: TerminalPanelState | DiffPanelState | ExplorerPanelState | EditorPanelState | LogsPanelState | DashboardPanelState | SetupTasksPanelState | BrowserPanelState | { customState?: unknown };
   metadata?: Partial<ToolPanelMetadata>; // Optional metadata overrides
   activate?: boolean;            // Defaults to true; false creates the panel in the background.
+  announceActivation?: boolean;  // Host-initiated: also ask clients on this Pane to show it (panel:activeChanged).
 }
 
 export interface UpdatePanelRequest {
@@ -353,10 +400,12 @@ interface PanelCapabilityRegistry {
   dashboard: PanelCapabilities;
   'setup-tasks': PanelCapabilities;
   browser: PanelCapabilities;
+  notes: PanelCapabilities;
 }
 
 // Panel Registry - Currently only terminal is implemented
 export const PANEL_CAPABILITIES: PanelCapabilityRegistry = {
+  notes: { canEmit: [], canConsume: [], singleton: true, canAppearInProjects: true, canAppearInWorktrees: true },
   terminal: {
     canEmit: ['terminal:command_executed', 'terminal:exit', 'files:changed'],
     canConsume: [], // Terminal doesn't consume events in Phase 1-2
@@ -464,4 +513,45 @@ export interface SessionPanelLayout {
   focusedGroupId?: string;
   /** Id of the group that is zoomed (fills the stage); null/undefined when not zoomed. */
   zoomedGroupId?: string | null;
+}
+
+const panelGroupSchema: BoundarySchema<PanelGroupNode> = boundary.object({
+  type: boundary.literal('group'),
+  id: boundary.string,
+  panelIds: boundary.array(boundary.string),
+  activePanelId: boundary.nullable(boundary.string),
+});
+
+// The tree is recursive, so the node schema is a thunk: `decodePanelLayoutNode`
+// is hoisted and only called once both schemas below it have initialized.
+const panelLayoutNodeSchema: BoundarySchema<PanelLayoutNode> = {
+  decode(current: BoundaryCursor): PanelLayoutNode {
+    return decodePanelLayoutNode(current);
+  },
+};
+
+const panelSplitSchema: BoundarySchema<PanelSplitNode> = boundary.object({
+  type: boundary.literal('split'),
+  id: boundary.string,
+  direction: boundary.enumeration('row', 'column'),
+  children: boundary.array(panelLayoutNodeSchema),
+  sizes: boundary.array(boundary.number),
+});
+
+const panelLayoutNodeUnion = boundary.union(panelGroupSchema, panelSplitSchema);
+
+function decodePanelLayoutNode(current: BoundaryCursor): PanelLayoutNode {
+  return panelLayoutNodeUnion.decode(current);
+}
+
+const sessionPanelLayoutSchema: BoundarySchema<SessionPanelLayout> = boundary.object({
+  version: boundary.literal(1),
+  root: panelLayoutNodeSchema,
+  focusedGroupId: boundary.optional(boundary.string),
+  zoomedGroupId: boundary.optional(boundary.nullable(boundary.string)),
+});
+
+/** Returns null for anything that is not a version 1 layout tree. */
+export function decodeSessionPanelLayout<Value>(value: Value): SessionPanelLayout | null {
+  return decodeOptionalBoundary(value, sessionPanelLayoutSchema) ?? null;
 }

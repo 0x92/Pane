@@ -2,7 +2,7 @@ import { validateCustomCommandResume, customResumeAgentType, type CustomCommandR
 import { validateWSLAvailable } from '../utils/wslUtils';
 import { sessionRuntimePath } from './sessionRuntime';
 import { findClaudeSessionTranscript } from './claudeSessionTranscript';
-import { resolveAgentTypeFromCommand } from './agents/agentIdentity';
+import { CLI_AGENT_TYPES, resolveAgentTypeFromCommand } from './agents/agentIdentity';
 import { prepareSessionWorkspace, sessionWorkspacePath, discardSessionScaffold, isPristineSessionWorkspace } from './sessionWorkspace';
 import { DEFAULT_SESSION_PROFILE } from '../../../shared/types/sessionProfile';
 import { EventEmitter } from 'events';
@@ -22,16 +22,15 @@ import type { TerminalAgentReport, ToolPanel, TerminalPanelState } from '../../.
 import type { AgentState } from '../../../shared/types/agentStatus';
 import {
   LEGACY_ORCHESTRATION_SESSION_ID,
-  MAX_ORCHESTRATION_ACTIVITY,
-  MAX_ORCHESTRATION_ITEMS,
-  MAX_ORCHESTRATION_TEXT_LENGTH,
   ORCHESTRATION_SESSION_INTERNAL_ID_PREFIX,
+  resolveSessionRetention,
   type OrchestrationActivity,
   type OrchestrationAssociation,
   type OrchestrationAssociationInput,
   type OrchestrationLink,
   type OrchestrationPaneOverview,
   type OrchestrationPanelOverview,
+  type OrchestrationPanelReport,
   type OrchestrationReport,
   type OrchestrationSessionCreateInput,
   type OrchestrationSessionListResult,
@@ -56,7 +55,12 @@ import { isAgentSupportedOnPlatform } from '../../../shared/constants/agentLaunc
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
 import { OrchestrationSessionStore } from './orchestrationSessionStore';
 import type { WorkspaceSessionMembership } from './workspaceJournal';
-import { readPanelAgentReport } from './agentReport';
+import { agentReportData, readPanelAgentReport } from './agentReport';
+import { paneChatFirstPrompt } from './paneChatMigrateOffer';
+import { applyTerminalInput, sessionNameFromMessage } from './sessionAutoName';
+import { PaneError } from '../../../shared/paneError';
+import { moveWithinOwnPlaces } from '../../../shared/utils/sessionOrder';
+import type { MobileAlertSubject } from '../daemon/mobilePushSender';
 
 const ORCHESTRATION_SESSION_PANEL_PREFIX = '__orchestration_panel_';
 const LEGACY_AGENT_SESSION_ID_PREFIX = `${LEGACY_ORCHESTRATION_SESSION_ID}-`;
@@ -69,8 +73,15 @@ function getOrchestrationPanelId(sessionId: string, agent: PaneChatAgent): strin
   return `${ORCHESTRATION_SESSION_PANEL_PREFIX}${sessionId}_${agent}`;
 }
 
+function isPaneChatAgent(agent: string | undefined): agent is PaneChatAgent {
+  return agent === 'claude' || agent === 'codex' || agent === 'cursor';
+}
+
 export class OrchestrationSessionManager extends EventEmitter {
   private initialized = false;
+  /** The line a person is typing into each Session agent panel, until its first message names the Session. */
+  private readonly firstMessageDrafts = new Map<string, string | null>();
+  private readonly namedPanelIds = new Set<string>();
 
   constructor(
     private readonly configManager: ConfigManager,
@@ -95,9 +106,27 @@ export class OrchestrationSessionManager extends EventEmitter {
       await this.ensureInitializedUnlocked();
       const data = this.store.read();
       return {
-        sessions: data.sessions.sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map(clone),
+        sessions: orderedSessions(data).map(clone),
         selectedSessionId: data.selectedSessionId,
       };
+    });
+  }
+
+  /**
+   * Saves the order a person arranged Sessions in. The listed Sessions trade places among the
+   * positions they already hold, so Sessions left out of the request (archived ones, ones in
+   * another list, ones created during a drag) keep theirs. Unknown ids are ignored. The Sessions
+   * themselves are untouched: no revision, timestamp or activity changes.
+   */
+  async reorder(sessionIds: string[]): Promise<OrchestrationSessionListResult> {
+    return withLock('orchestration-sessions', async () => {
+      await this.ensureInitializedUnlocked();
+      const data = this.store.read();
+      const order = moveWithinOwnPlaces(orderedSessions(data).map(session => session.id), sessionIds, id => id);
+      const nextData: OrchestrationSessionStoreData = { ...data, order };
+      this.store.write(nextData);
+      this.emit('changed', { sessionId: sessionIds.find(id => order.includes(id)) ?? '', kind: 'reordered' });
+      return { sessions: orderedSessions(nextData).map(clone), selectedSessionId: nextData.selectedSessionId };
     });
   }
 
@@ -113,7 +142,7 @@ export class OrchestrationSessionManager extends EventEmitter {
       this.store.write(next);
       this.emit('changed', { sessionId: session.id, kind: 'selected' });
       return {
-        sessions: next.sessions.sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map(clone),
+        sessions: orderedSessions(next).map(clone),
         selectedSessionId: next.selectedSessionId,
       };
     });
@@ -137,7 +166,8 @@ export class OrchestrationSessionManager extends EventEmitter {
       const panel = await this.ensurePanelForAgent(record);
       const internalSession = this.sessionManager.getSession(record.internalSessionId);
       if (!internalSession) throw new Error(`Session ${record.id} internal terminal session is missing`);
-      await panelManager.setActivePanel(internalSession.id, panel.id);
+      // A client opening its view: last used only, so other clients on this Session stay put.
+      await panelManager.rememberActivePanel(internalSession.id, panel.id);
       return {
         session: clone(record),
         internalSession,
@@ -160,7 +190,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         const runtimeError = await validateWSLAvailable(input.wslDistribution);
         if (runtimeError) throw new Error(runtimeError);
         if (sourcePanelId) throw new Error('Moving a chat cannot change its runtime');
-      } else if (input.wslDistribution) throw new Error('Windows Session cannot specify a WSL distribution');
+      } else if (input.wslDistribution) throw new Error('A native Session cannot specify a WSL distribution');
       const data = this.store.read();
       const name = input.name.trim();
       if (data.sessions.some(session => normalizeSessionName(session.name) === normalizeSessionName(name))) {
@@ -203,21 +233,26 @@ export class OrchestrationSessionManager extends EventEmitter {
         : input.launchCommand ?? (fits(defaultCommand) ? defaultCommand : '');
       const customResume = sourcePanel ? sourceState?.customResume
         : input.customResume !== undefined ? input.customResume
+          // A resumed native conversation is the agent's own; no custom resume command applies.
+          : input.resume ? null
           : fits('', config.defaultSessionResume) ? config.defaultSessionResume : null;
       const agent = resolveSessionAgent(explicitAgent, launchCommand, customResume)
         ?? normalizePaneChatAgent(config.defaultOrchestratorAgent);
       this.assertAgentSupported(agent, input.runtime);
       const record: OrchestrationSessionRecord = {
-        runtime: input.runtime ?? 'windows',
+        // Omitted runtime is the native host; 'windows' is a legacy name for it.
+        runtime: input.runtime === 'wsl' ? 'wsl' : undefined,
         wslDistribution: input.wslDistribution,
         id,
         name,
+        nameIsDefault: !sourcePanel && input.nameFromFirstMessage ? true : undefined,
         promotedFrom: sourcePanel && sourcePane ? { paneId: sourcePane.id, panelId: sourcePanel.id } : undefined,
         archived: false,
-        isPinned: false,
+        isPinned: input.isPinned ?? false,
         agent,
         launchCommand,
         customResume,
+        resume: input.resume,
         profile: input.profile ?? this.configManager.getConfig().defaultSessionProfile ?? DEFAULT_SESSION_PROFILE,
         internalSessionId,
         panelIds: {
@@ -239,7 +274,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         updatedAt: now,
       };
       const next: OrchestrationSessionStoreData = {
-        version: data.version,
+        ...data,
         selectedSessionId: record.id,
         sessions: [...data.sessions, record],
       };
@@ -299,6 +334,8 @@ export class OrchestrationSessionManager extends EventEmitter {
       const agentChanging = input.agent !== undefined && input.agent !== current.agent;
       const launchCommand = input.launchCommand ?? (agentChanging ? '' : current.launchCommand);
       const customResume = input.customResume !== undefined ? input.customResume : agentChanging ? undefined : current.customResume;
+      // The resumed conversation belongs to the previous agent.
+      const resume = agentChanging ? undefined : current.resume;
       const agent = resolveSessionAgent(input.agent, launchCommand ?? '', customResume) ?? current.agent;
       const nextRecord: OrchestrationSessionRecord = {
         ...current,
@@ -308,6 +345,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         agent,
         launchCommand,
         customResume,
+        resume,
         profile: input.profile ?? current.profile,
         goal: input.goal?.trim() ?? current.goal,
         context: input.context?.trim() ?? current.context,
@@ -321,6 +359,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         updatedAt: new Date().toISOString(),
         activity: [...current.activity],
       };
+      if (input.name !== undefined) delete nextRecord.nameIsDefault;
       if (input.name !== undefined && data.sessions.some(session => session.id !== current.id && normalizeSessionName(session.name) === normalizeSessionName(nextRecord.name))) {
         throw new Error(`A Session named ${nextRecord.name} already exists`);
       }
@@ -328,7 +367,9 @@ export class OrchestrationSessionManager extends EventEmitter {
       if (nextRecord.archived === true && nextRecord.agent !== current.agent) {
         throw new Error(`Session ${current.name} is archived; restore it before changing its agent`);
       }
-      const updateActivity = this.activity(input.report ? 'report' : 'updated', input.report ? `Reported: ${input.report.summary}` : 'Updated Session context.', input.source ?? 'user');
+      const renamed = input.name !== undefined && nextRecord.name !== current.name;
+      const updateMessage = input.report ? `Reported: ${input.report.summary}` : renamed ? `Renamed to “${nextRecord.name}”.` : 'Updated Session context.';
+      const updateActivity = this.activity(input.report ? 'report' : 'updated', updateMessage, input.source ?? 'user');
       nextRecord.activity.push(updateActivity);
       if (input.report) {
         nextRecord.reportActivityId = updateActivity.id;
@@ -337,12 +378,12 @@ export class OrchestrationSessionManager extends EventEmitter {
         nextRecord.reportActivityId = undefined;
         nextRecord.reportAcceptedAt = undefined;
       }
-      trimActivity(nextRecord);
+      this.trimActivity(nextRecord);
       if (nextRecord.archived !== true) await this.ensurePanelForAgent(nextRecord);
       const replaced = replaceSession(data, nextRecord);
       const isArchiving = current.archived !== true && nextRecord.archived === true;
       const selectedSessionId = isArchiving && data.selectedSessionId === current.id
-        ? replaced.sessions.find(session => session.id !== current.id && session.archived !== true)?.id
+        ? orderedSessions(replaced).find(session => session.id !== current.id && session.archived !== true)?.id
         : data.selectedSessionId;
       const nextData: OrchestrationSessionStoreData = {
         ...replaced,
@@ -383,7 +424,11 @@ export class OrchestrationSessionManager extends EventEmitter {
       for (const other of data.sessions) {
         if (other.id === current.id) continue;
         if (other.associations.some(association => association.paneId === input.paneId)) {
-          throw new Error(`Pane ${pane.name} is already associated with Session ${other.name}`);
+          throw new PaneError(
+            'ERR_PANE_ALREADY_ASSOCIATED',
+            `Pane ${pane.name} is already associated with Session ${other.name}`,
+            `It stays with ${other.name}. To move it, detach it there first with \`runpane sessions detach --session ${other.id} --pane ${pane.id}\`, then associate it.`,
+          );
         }
       }
       const joined = !current.associations.some(item => item.paneId === input.paneId);
@@ -399,7 +444,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         updatedAt: new Date().toISOString(),
         activity: [...current.activity, this.activity('associated', `Associated Pane “${pane.name}”.`, 'user', input.paneId)],
       };
-      trimActivity(nextRecord);
+      this.trimActivity(nextRecord);
       this.store.write(replaceSession(data, nextRecord));
       if (!current.associations.some(item => item.paneId === input.paneId) && pane.isFavorite) {
         try {
@@ -425,14 +470,16 @@ export class OrchestrationSessionManager extends EventEmitter {
       const current = this.findSession(data, selector);
       const removed = paneId ? current.associations.filter(item => item.paneId === paneId) : current.associations;
       if (paneId && removed.length === 0) throw new Error(`Session ${current.name} is not associated with Pane ${paneId}`);
+      const paneName = paneId ? this.sessionManager.getSession(paneId)?.name : undefined;
+      const message = !paneId ? 'Detached all Panes.' : paneName ? `Detached Pane “${paneName}”.` : `Detached Pane ${paneId}.`;
       const nextRecord = {
         ...current,
         associations: paneId ? current.associations.filter(item => item.paneId !== paneId) : [],
         revision: current.revision + 1,
         updatedAt: new Date().toISOString(),
-        activity: [...current.activity, this.activity('detached', paneId ? `Detached Pane ${paneId}.` : 'Detached all Panes.', 'user', paneId)],
+        activity: [...current.activity, this.activity('detached', message, 'user', paneId)],
       };
-      trimActivity(nextRecord);
+      this.trimActivity(nextRecord);
       this.store.write(replaceSession(data, nextRecord));
       this.emitChanged(nextRecord, 'detached', false, removed.map(item => item.paneId));
       return clone(nextRecord);
@@ -453,11 +500,56 @@ export class OrchestrationSessionManager extends EventEmitter {
         session: clone(record),
         status,
         panes,
-        activity: [...record.activity].sort((left, right) => right.at.localeCompare(left.at)),
+        // Stable sort keeps later-recorded activity first when timestamps tie.
+        activity: [...record.activity].reverse().sort((left, right) => right.at.localeCompare(left.at)),
         report,
         refreshedAt: new Date().toISOString(),
       };
     });
+  }
+
+  /** Terminal input a person typed. The first message to a Session agent renames a Session that still has its default name. */
+  observeInput(panelId: string, data: string): void {
+    if (!panelId.startsWith(ORCHESTRATION_SESSION_PANEL_PREFIX) || this.namedPanelIds.has(panelId)) return;
+    const previous = this.firstMessageDrafts.get(panelId);
+    const { draft, submitted } = applyTerminalInput(previous === undefined ? '' : previous, data);
+    const name = submitted.map(sessionNameFromMessage).find(Boolean);
+    if (!name) {
+      this.firstMessageDrafts.set(panelId, draft);
+      return;
+    }
+    this.firstMessageDrafts.delete(panelId);
+    this.namedPanelIds.add(panelId);
+    void this.nameFromFirstMessage(panelId, name).catch(error => {
+      this.namedPanelIds.delete(panelId);
+      console.warn('[OrchestrationSessionManager] Could not name the Session from its first message:', error);
+    });
+  }
+
+  private async nameFromFirstMessage(panelId: string, name: string): Promise<void> {
+    const { sessions } = await this.list();
+    const record = sessions.find(session => session.panelIds[session.agent] === panelId);
+    if (!record?.nameIsDefault) return;
+    const taken = new Set(sessions.filter(session => session.id !== record.id).map(session => normalizeSessionName(session.name)));
+    let uniqueName = name;
+    for (let suffix = 2; taken.has(normalizeSessionName(uniqueName)); suffix += 1) uniqueName = `${name} ${suffix}`;
+    await this.update({ sessionId: record.id }, { name: uniqueName, expectedRevision: record.revision, source: 'system' });
+  }
+
+  /**
+   * What a phone alert about a Pane is titled and grouped under: a Session's own pane is the
+   * Session, a worker is "Session › Pane", and any other Pane stands alone. `groupPaneId` is the
+   * Session's workspace pane, which the phone opens a Session by. Reads the in-memory store, like
+   * `workspaceMembership`.
+   */
+  alertSubject(paneId: string): MobileAlertSubject {
+    const sessions = this.store.read().sessions;
+    const own = sessions.find(session => session.internalSessionId === paneId);
+    if (own) return { title: own.name, groupPaneId: paneId };
+    const paneName = this.sessionManager.getSession(paneId)?.name ?? '';
+    const parent = sessions.find(session => session.associations.some(association => association.paneId === paneId));
+    if (!parent) return { title: paneName, groupPaneId: paneId };
+    return { title: paneName ? `${parent.name} › ${paneName}` : parent.name, groupPaneId: parent.internalSessionId };
   }
 
   /**
@@ -475,6 +567,18 @@ export class OrchestrationSessionManager extends EventEmitter {
       ownPaneIds: new Set([record.internalSessionId]),
       ownPanelIds: new Set(Object.values(record.panelIds)),
     };
+  }
+
+  /**
+   * The Sessions a panel works for: those associated with its Pane, for every panel or this one.
+   * A Session's own orchestrator Pane never counts. Reads the in-memory store without the lock.
+   */
+  memberSessionIds(paneId: string, panelId: string): string[] {
+    return this.store.read().sessions
+      .filter(record => record.internalSessionId !== paneId && !Object.values(record.panelIds).includes(panelId))
+      .filter(record => record.associations.some(association => association.paneId === paneId
+        && (association.panelIds.length === 0 || association.panelIds.includes(panelId))))
+      .map(record => record.id);
   }
 
   /**
@@ -530,7 +634,7 @@ export class OrchestrationSessionManager extends EventEmitter {
           updatedAt: new Date().toISOString(),
           activity: [...current.activity, this.activity(state, `Agent state changed to ${state}.`, 'agent', association?.paneId, panelId)],
         };
-        trimActivity(nextRecord);
+        this.trimActivity(nextRecord);
         nextData = replaceSession(nextData, nextRecord);
         changed.push(nextRecord);
         refreshed.push({ panelId, sessionId: current.id, state });
@@ -565,7 +669,7 @@ export class OrchestrationSessionManager extends EventEmitter {
           updatedAt: new Date().toISOString(),
           activity: [...current.activity, this.activity('report', agentReportMessage(report), 'agent', parentPaneId, panelId)],
         };
-        trimActivity(nextRecord);
+        this.trimActivity(nextRecord);
         nextData = replaceSession(nextData, nextRecord);
         changed.push(nextRecord);
       }
@@ -617,7 +721,7 @@ export class OrchestrationSessionManager extends EventEmitter {
         console.error(`[OrchestrationSessionManager] ${record.name} (${record.id}): ${message}`);
         if (record.activity.at(-1)?.message === message) continue;
         const failed = { ...record, revision: record.revision + 1, activity: [...record.activity, this.activity('updated', message, 'system')] };
-        trimActivity(failed);
+        this.trimActivity(failed);
         withFailures = replaceSession(withFailures, failed);
       }
     }
@@ -856,6 +960,11 @@ export class OrchestrationSessionManager extends EventEmitter {
           isCliPanel: true,
         }
       : { ...current, ...desired };
+    // A conversation the tab already has (it may have moved on since) wins over the record's resume.
+    if (!isInitialized && current?.agentSessionId && desired.agentSessionId) {
+      nextCustomState.agentSessionId = current.agentSessionId;
+      nextCustomState.hasClaudeSessionId = current.hasClaudeSessionId;
+    }
     if ((current?.agentType && current.agentType !== desired.agentType) || current?.customResume?.mode !== desired.customResume?.mode) {
       nextCustomState.customResumeStarted = undefined;
       nextCustomState.agentSessionId = undefined;
@@ -874,7 +983,8 @@ export class OrchestrationSessionManager extends EventEmitter {
       || current?.preserveLaunchCommand !== nextCustomState.preserveLaunchCommand
       || current?.agentType !== nextCustomState.agentType
       || current?.orchestrationSessionId !== nextCustomState.orchestrationSessionId
-      || current?.isCliPanel !== nextCustomState.isCliPanel;
+      || current?.isCliPanel !== nextCustomState.isCliPanel
+      || current?.agentSessionId !== nextCustomState.agentSessionId;
     if (!stateNeedsRefresh && panel.title === nextTitle) return;
     await panelManager.updatePanel(panel.id, {
       title: nextTitle,
@@ -885,14 +995,20 @@ export class OrchestrationSessionManager extends EventEmitter {
   private buildTerminalState(record: OrchestrationSessionRecord): TerminalPanelState {
     const command = record.launchCommand?.trim() || RUNPANE_CONTRACT.agentTemplates[record.agent].command;
     const nativeCommand = /^(?:claude|codex|cursor-agent)(?:\s|$)/.test(command) && !/[;&|\n]/.test(command);
+    const resolvedAgent = launchAgent(command, record.customResume);
+    // A resumed conversation is created with its id, so even a tab repaired at startup resumes it.
+    const resumed: TerminalPanelState = {};
+    if (record.resume) resumed.agentSessionId = record.resume;
+    if (record.resume && record.agent === 'claude') resumed.hasClaudeSessionId = true;
     return {
+      ...resumed,
       initialCommand: record.launchCommand?.trim() || (record.runtime === 'wsl' ? command : this.skillCacheManager?.launchCommand(record.agent)) || command,
       customResume: record.customResume,
-      initialInput: undefined,
+      initialInput: record.resume ? undefined : this.firstPrompt(record),
       initialInputMode: 'argument',
       initialInputSubmitStrategy: 'enter',
       initialInputDeliveryVersion: ORCHESTRATION_BOOTSTRAP_VERSION,
-      agentType: record.customResume ? customResumeAgentType(record.customResume) : resolveAgentTypeFromCommand(command) ?? record.agent,
+      agentType: resolvedAgent ?? record.agent,
       orchestrationSessionId: record.id,
       orchestrationWorkspace: sessionRuntimePath(sessionWorkspacePath(record.id), record),
       orchestrationProfile: record.profile,
@@ -900,6 +1016,14 @@ export class OrchestrationSessionManager extends EventEmitter {
       isCliPanel: true,
       isCliReady: false,
     };
+  }
+
+  /** Only the built-in Pane Chat ever speaks first; see paneChatMigrateOffer. */
+  private firstPrompt(record: OrchestrationSessionRecord): string | undefined {
+    if (record.id !== LEGACY_ORCHESTRATION_SESSION_ID || record.customResume) return undefined;
+    // SAFETY: Session-owned terminal panels persist TerminalPanelState as their custom state.
+    const current = panelManager.getPanel(record.panelIds[record.agent])?.state.customState as TerminalPanelState | undefined;
+    return paneChatFirstPrompt(record.agent, current, this.skillCacheManager?.paneChatSkillsRoot);
   }
 
   private async ensureGuidePath(): Promise<string> {
@@ -937,19 +1061,23 @@ export class OrchestrationSessionManager extends EventEmitter {
       : association.panelIds.map(panelId => panelManager.getPanel(panelId)).filter((panel): panel is ToolPanel => panel !== undefined);
     const panels: OrchestrationPanelOverview[] = allPanels.map(panel => {
       const customState = decodeBoundary(panel.state.customState ?? {}, boundary.object({
-        agentType: boundary.optional(boundary.enumeration('claude', 'codex', 'cursor')),
+        agentType: boundary.optional(boundary.enumeration(...CLI_AGENT_TYPES)),
         isInitialized: boundary.optional(boundary.boolean),
       }));
       const snapshot = panel.type === 'terminal' ? terminalPanelManager.getTerminalSnapshot(panel.id) : null;
       const initialized = panel.type === 'terminal' && terminalPanelManager.isTerminalInitialized(panel.id);
-      return {
+      const panelAgent = snapshot?.agentType ?? customState.agentType;
+      const overview: OrchestrationPanelOverview = {
         panelId: panel.id,
         title: panel.title,
-        agentType: snapshot?.agentType ?? customState.agentType,
+        agentType: isPaneChatAgent(panelAgent) ? panelAgent : undefined,
         state: terminalPanelManager.getAgentStatus(panel.id) ?? 'unknown',
         initialized: initialized || customState.isInitialized === true,
         lastActivityAt: snapshot?.lastActivityTime,
       };
+      const report = panelOverviewReport(panel);
+      if (report) overview.report = report;
+      return overview;
     });
     const panelIds = new Set(allPanels.map(panel => panel.id));
     for (const panelId of association.panelIds) {
@@ -1007,8 +1135,8 @@ export class OrchestrationSessionManager extends EventEmitter {
       matches = data.sessions.filter(session => session.name === selector.sessionId);
     }
     const selectorLabel = selector.name ?? selector.sessionId;
-    if (matches.length === 0) throw new Error(`Session ${selectorLabel} not found`);
-    if (matches.length > 1) throw new Error(`Session selector ${selectorLabel} is ambiguous`);
+    if (matches.length === 0) throw new PaneError('ERR_SESSION_NOT_FOUND', `Session ${selectorLabel} not found`, 'Pick a Session from `runpane sessions list --json`.');
+    if (matches.length > 1) throw new PaneError('ERR_SESSION_AMBIGUOUS', `Session selector ${selectorLabel} is ambiguous`, 'Use the Session id from `runpane sessions list --json`.');
     return matches[0];
   }
 
@@ -1019,7 +1147,11 @@ export class OrchestrationSessionManager extends EventEmitter {
   }
 
   private activity(kind: OrchestrationActivity['kind'], message: string, source: OrchestrationActivity['source'], paneId?: string, panelId?: string): OrchestrationActivity {
-    return { id: randomUUID(), kind, message: message.slice(0, MAX_ORCHESTRATION_TEXT_LENGTH), at: new Date().toISOString(), source, paneId, panelId };
+    return { id: randomUUID(), kind, message, at: new Date().toISOString(), source, paneId, panelId };
+  }
+
+  private trimActivity(record: OrchestrationSessionRecord): void {
+    record.activity = record.activity.slice(-resolveSessionRetention(this.configManager.getConfig().retention).sessionActivity);
   }
 
   /** `paneIds` names the Panes an associate or detach added or removed; the workspace journal records them. */
@@ -1035,7 +1167,12 @@ export class OrchestrationSessionManager extends EventEmitter {
 }
 
 function launchAgent(command: string, resume?: CustomCommandResume | null): PaneChatAgent | undefined {
-  return customResumeAgentType(resume) ?? resolveAgentTypeFromCommand(command);
+  const commandAgent = resolveAgentTypeFromCommand(command);
+  if (commandAgent === 'opencode') {
+    throw new Error('OpenCode is a terminal-only agent and cannot be used in named Sessions');
+  }
+  const agent = customResumeAgentType(resume) ?? commandAgent;
+  return isPaneChatAgent(agent) ? agent : undefined;
 }
 
 /** An explicit agent wins; a launch command for a different agent is rejected. */
@@ -1049,36 +1186,23 @@ function resolveSessionAgent(explicit: PaneChatAgent | undefined, command: strin
 
 function validateCreateInput(input: OrchestrationSessionCreateInput): void {
   if (!input.name || input.name.trim().length === 0) throw new Error('Session name is required');
-  if (input.name.length > MAX_ORCHESTRATION_TEXT_LENGTH) throw new Error('Session name is too long');
   if (input.customResume) validateCustomCommandResume(input.customResume);
-  validateOptionalText(input.launchCommand, 'launch command');
-  validateOptionalText(input.profile, 'profile');
-  validateOptionalText(input.goal, 'goal');
-  validateOptionalText(input.context, 'context');
-  validateOptionalText(input.nextAction, 'next action');
-  validateTextArray(input.decisions, 'decisions');
-  validateTextArray(input.blockers, 'blockers');
+  if (input.resume !== undefined) {
+    if (!/^[A-Za-z0-9._:-]{1,200}$/.test(input.resume)) throw new Error('Session resume must be a native session id');
+    if (input.customResume) throw new Error('A Session resumes either a native session id or a custom resume command, not both');
+  }
   validateLinks(input.evidence, 'evidence');
   validateLinks(input.outputs, 'outputs');
 }
 
 function validateUpdateInput(input: OrchestrationSessionUpdateInput): void {
-  validateOptionalText(input.name, 'name');
   if (input.name !== undefined && input.name.trim().length === 0) throw new Error('Session name is required');
   if (input.archived !== undefined) decodeBoundary(input.archived, boundary.boolean);
   if (input.isPinned !== undefined) decodeBoundary(input.isPinned, boundary.boolean);
   if (input.customResume) validateCustomCommandResume(input.customResume);
-  validateOptionalText(input.launchCommand, 'launch command');
-  validateOptionalText(input.profile, 'profile');
-  validateOptionalText(input.goal, 'goal');
-  validateOptionalText(input.context, 'context');
-  validateOptionalText(input.nextAction, 'next action');
-  validateTextArray(input.decisions, 'decisions');
-  validateTextArray(input.blockers, 'blockers');
   validateLinks(input.evidence, 'evidence');
   validateLinks(input.outputs, 'outputs');
   if (input.report) {
-    validateOptionalText(input.report.summary, 'report summary');
     validateLinks(input.report.evidence, 'report evidence');
     if (input.report.evidence.length === 0) throw new Error('Report evidence is required');
   }
@@ -1125,27 +1249,24 @@ function canReuniteLegacySession(
 
 function validateAssociationInput(input: OrchestrationAssociationInput): void {
   if (!input.paneId || input.paneId.trim().length === 0) throw new Error('Pane id is required');
-  if ((input.panelIds?.length ?? 0) > MAX_ORCHESTRATION_ITEMS) throw new Error('Too many associated panels');
-}
-
-function validateOptionalText(value: string | undefined, label: string): void {
-  if (value !== undefined && value.length > MAX_ORCHESTRATION_TEXT_LENGTH) throw new Error(`${label} is too long`);
-}
-
-function validateTextArray(values: string[] | undefined, label: string): void {
-  if (!values) return;
-  if (values.length > MAX_ORCHESTRATION_ITEMS) throw new Error(`${label} contains too many entries`);
-  values.forEach(value => validateOptionalText(value, label));
 }
 
 function validateLinks(links: OrchestrationLink[] | undefined, label: string): void {
   if (!links) return;
-  if (links.length > MAX_ORCHESTRATION_ITEMS) throw new Error(`${label} contains too many links`);
   for (const link of links) {
-    validateOptionalText(link.label, `${label} label`);
-    validateOptionalText(link.url, `${label} URL`);
     if (!/^(?:https?:\/\/|file:\/\/|grain:\/\/)/i.test(link.url)) throw new Error(`${label} URL must use https, file, or grain scheme`);
   }
+}
+
+/** Sessions in their saved order; any the order does not name follow, oldest first. */
+function orderedSessions(data: OrchestrationSessionStoreData): OrchestrationSessionRecord[] {
+  const position = new Map((data.order ?? []).map((id, index) => [id, index]));
+  return [...data.sessions].sort((left, right) => {
+    const leftPosition = position.get(left.id) ?? Infinity;
+    const rightPosition = position.get(right.id) ?? Infinity;
+    if (leftPosition !== rightPosition) return leftPosition - rightPosition;
+    return left.createdAt.localeCompare(right.createdAt);
+  });
 }
 
 function replaceSession(data: OrchestrationSessionStoreData, record: OrchestrationSessionRecord): OrchestrationSessionStoreData {
@@ -1175,6 +1296,14 @@ function agentReportMessage(report: TerminalAgentReport): string {
   return `Worker reported ${report.state}${details ? `: ${details}` : ''}.${question}`;
 }
 
+/** A panel's latest report, with its JSON object summary as `data` (derived on read, so older reports get it too). */
+function panelOverviewReport(panel: ToolPanel): OrchestrationPanelReport | undefined {
+  const report = readPanelAgentReport(panel);
+  if (!report) return undefined;
+  const data = agentReportData(report);
+  return data ? { ...report, data } : report;
+}
+
 /** The most recent report among a Pane's panels, tagged with the panel that sent it. */
 function newestAgentReport(panels: readonly ToolPanel[]): (TerminalAgentReport & { panelId: string }) | undefined {
   let newest: (TerminalAgentReport & { panelId: string }) | undefined;
@@ -1183,10 +1312,6 @@ function newestAgentReport(panels: readonly ToolPanel[]): (TerminalAgentReport &
     if (report && (!newest || report.reportedAt > newest.reportedAt)) newest = { ...report, panelId: panel.id };
   }
   return newest;
-}
-
-function trimActivity(record: OrchestrationSessionRecord): void {
-  record.activity = record.activity.slice(-MAX_ORCHESTRATION_ACTIVITY);
 }
 
 function missingPanel(panelId: string): OrchestrationPanelOverview {

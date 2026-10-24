@@ -5,6 +5,7 @@ import { RUNPANE_CONTRACT } from './generated/contract';
 import { buildMcpTools, buildToolArgv, CONFIRM_FLAG, type McpTool } from './mcpTools';
 import { ProtocolError, ProtocolErrorCode, Server, serveStdio } from './mcpSdk';
 import { getWrapperVersion } from './version';
+import type { RunpaneFailure } from './errors';
 
 // A type alias, unlike an interface, is assignable to the SDK's open result type.
 type ToolResult = {
@@ -20,7 +21,8 @@ const INSTRUCTIONS = [
   RUNPANE_CONTRACT.agentContext.brief.summary,
   'Each tool runs the matching `runpane` command against the running Pane app and returns the same JSON as `runpane <command> --json`.',
   'How the tools fit together:',
-  '- For the common jobs, prefer the composite tools: `agents_start` starts an agent on a task in a repo and returns its pane and panel ids and a pane:// link; `agents_status` checks on it; `agents_send` sends it a follow-up message.',
+  '- 1 feature = 1 worktree = 1 branch = 1 Pane; reviews, audits, fixes and QA for it are tabs in that Pane. A new Pane creates a worktree that installs and builds, so create one only when the work\'s branch has no Pane yet. For any later agent on existing work, call `panels_create` with `pane: <id>` (or `agents_start` with `pane: <id>`), never a new Pane.',
+  '- For the common jobs, prefer the composite tools: `agents_start` starts an agent on a task (in a new Pane for new work, or as a tab in an existing Pane with `pane: <id>`) and returns its pane and panel ids and a pane:// link; `agents_status` checks on it; `agents_send` sends it a follow-up message.',
   '- `agents_send` types text, queues with Tab while Codex is working, and submits with Enter when ready. To answer a menu or prompt in an agent\'s terminal, send exact keys with `panels_input` (Down arrow \\u001b[B, Enter \\r, Escape \\u001b) and check the screen with `agents_status` afterwards. Ask the user before answering trust or permission prompts.',
   '- Discover before you change anything. Repo selectors come from `repos_list` (or `active`); pane ids come from `panes_list`, `workspace_state`, or `agents_start`; panel ids from `agents_start` or `panels_list`.',
   '- Tools with a `yes` input change Pane state. Pass `yes: true` only when the user asked for that change; without it the call is refused and nothing happens.',
@@ -161,7 +163,10 @@ async function callTool(tool: McpTool, input: JsonObject, signal: AbortSignal, r
   const { code, stdout, stderr } = await runCli(argv, signal);
   // Docs come back as written; everything else speaks in tool names.
   const translate = tool.toolsets.includes('docs') ? (text: string) => text : rewrite;
-  const text = translate(stdout.trim() || stderr.trim() || `runpane ${tool.command} exited with code ${code}`);
+  const failure = code !== 0 ? decodeFailure(stdout) : undefined;
+  const text = translate(failure
+    ? [failure.message, ...(failure.next ? [`Next: ${failure.next}`] : []), `Code: ${failure.code}`].join('\n')
+    : stdout.trim() || stderr.trim() || `runpane ${tool.command} exited with code ${code}`);
   if (code !== 0) {
     const unconfirmed = !argv.includes(CONFIRM_FLAG) && tool.parameters.some((parameter) => parameter.flag === CONFIRM_FLAG);
     return errorResult(unconfirmed ? `${text}\nIf Pane refused the change, pass \`yes: true\` to confirm it.` : text);
@@ -169,6 +174,20 @@ async function callTool(tool: McpTool, input: JsonObject, signal: AbortSignal, r
   const structuredContent = parseJsonObject(text);
   if (!structuredContent) return errorResult(`runpane ${tool.command} did not print JSON:\n${text}`);
   return { content: [{ type: 'text', text }], structuredContent };
+}
+
+const failureSchema = boundary.object({
+  ok: boundary.literal(false),
+  error: boundary.object({ code: boundary.string, message: boundary.string, next: boundary.optional(boundary.string) }),
+});
+
+/** The CLI's `--json` failure (see errors.ts); other `ok: false` results stay JSON. */
+function decodeFailure(stdout: string): RunpaneFailure | undefined {
+  try {
+    return decodeBoundary(JSON.parse(stdout), failureSchema).error;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseJsonObject(text: string): JsonObject | undefined {

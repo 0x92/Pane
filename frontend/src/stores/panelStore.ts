@@ -12,11 +12,13 @@ export const usePanelStore = create<PanelStore>()(
     activityStatus: {},
     agentStatus: {},
     agentStatusSession: {},
+    agentStatusReason: {},
     agentStatusSnapshotVersion: 0,
     lastActivityAt: {},
     unviewedCompletedActivity: {},
     layouts: {},
     focusedGroupIds: {},
+    activationRequests: {},
 
     // Pure synchronous state updates
     removeBrowserPanelsForHostSwitch: () => {
@@ -32,6 +34,7 @@ export const usePanelStore = create<PanelStore>()(
           if (owner === sessionId && !panelIds.has(panelId)) {
             delete state.agentStatus[panelId];
             delete state.agentStatusSession[panelId];
+            delete state.agentStatusReason[panelId];
             delete state.activityStatus[panelId];
             delete state.lastActivityAt[panelId];
           }
@@ -57,9 +60,6 @@ export const usePanelStore = create<PanelStore>()(
         if (!existing) {
           state.panels[panel.sessionId].push(panel);
         }
-        if (panel.state.isActive) {
-          state.activePanels[panel.sessionId] = panel.id;
-        }
       });
     },
 
@@ -75,6 +75,7 @@ export const usePanelStore = create<PanelStore>()(
         delete state.activityStatus[panelId];
         delete state.agentStatus[panelId];
         delete state.agentStatusSession[panelId];
+        delete state.agentStatusReason[panelId];
         delete state.lastActivityAt[panelId];
       });
     },
@@ -107,10 +108,11 @@ export const usePanelStore = create<PanelStore>()(
       });
     },
 
-    setAgentStatus: (panelId, sessionId, agentState) => {
+    setAgentStatus: (panelId, sessionId, agentState, reason = null) => {
       set((state) => {
         state.agentStatus[panelId] = agentState;
         state.agentStatusSession[panelId] = sessionId;
+        state.agentStatusReason[panelId] = reason;
       });
     },
 
@@ -118,6 +120,44 @@ export const usePanelStore = create<PanelStore>()(
       set((state) => {
         delete state.agentStatus[panelId];
         delete state.agentStatusSession[panelId];
+        delete state.agentStatusReason[panelId];
+      });
+    },
+
+    forgetPanel: (panelId) => {
+      set((state) => {
+        // `removePanel` needs the session id to find the panel in the list;
+        // this does not. A panel deleted anywhere — another session, RunPane,
+        // a remote daemon — leaves its status behind otherwise, and a stale
+        // `blocked` entry keeps the sidebar's "needs input" badge lit for a
+        // pane that no longer exists.
+        delete state.activityStatus[panelId];
+        delete state.agentStatus[panelId];
+        delete state.agentStatusSession[panelId];
+        delete state.agentStatusReason[panelId];
+        delete state.lastActivityAt[panelId];
+      });
+    },
+
+    forgetSession: (sessionId) => {
+      set((state) => {
+        // Archiving a session deletes its panes without a `panel:deleted` for
+        // each one, so the session is the only handle on what to forget. Panel
+        // ids come from both sides: the loaded panel list, and the session id
+        // that rides on every status event (background sessions never load
+        // their panels at all).
+        const panelIds = new Set((state.panels[sessionId] ?? []).map((panel: ToolPanel) => panel.id));
+        for (const [panelId, panelSessionId] of Object.entries(state.agentStatusSession)) {
+          if (panelSessionId === sessionId) panelIds.add(panelId);
+        }
+        for (const panelId of panelIds) {
+          delete state.activityStatus[panelId];
+          delete state.agentStatus[panelId];
+          delete state.agentStatusSession[panelId];
+          delete state.agentStatusReason[panelId];
+          delete state.lastActivityAt[panelId];
+        }
+        delete state.unviewedCompletedActivity[sessionId];
       });
     },
 
@@ -143,6 +183,18 @@ export const usePanelStore = create<PanelStore>()(
     setFocusedGroup: (sessionId, groupId) => {
       set((state) => {
         state.focusedGroupIds[sessionId] = groupId;
+      });
+    },
+
+    requestActivation: (request) => {
+      set((state) => {
+        state.activationRequests[request.sessionId] = request;
+      });
+    },
+
+    clearActivationRequest: (sessionId) => {
+      set((state) => {
+        delete state.activationRequests[sessionId];
       });
     },
 

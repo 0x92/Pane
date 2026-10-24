@@ -6,7 +6,7 @@ function partialMock<Contract>(implementation: Partial<Contract>): Contract {
   // its scenario; unexpected calls fail immediately.
   return implementation as Contract;
 }
-import type { PathResolver } from '../../utils/pathResolver';
+import { PathResolver } from '../../utils/pathResolver';
 import { resolveDefaultWorktreeBase, WorktreeManager } from '../worktreeManager';
 import { worktreePoolManager } from '../worktreePoolManager';
 
@@ -124,7 +124,7 @@ describe('WorktreeManager.resolveWorkingDirectory', () => {
       undefined,
       true,
       undefined,
-      partialMock<PathResolver>({}),
+      new PathResolver({ path: '/repo' }),
       runner,
     );
 
@@ -141,6 +141,7 @@ describe('WorktreeManager.resolveWorkingDirectory', () => {
       worktreePath: '/repo/worktrees/pane',
       baseCommit: 'base-commit',
       baseBranch: 'origin/main',
+      base: { ref: 'origin/main', commit: 'base-commit', refresh: 'skipped' },
     });
   });
 
@@ -169,7 +170,7 @@ describe('WorktreeManager.resolveWorkingDirectory', () => {
       undefined,
       true,
       undefined,
-      partialMock<PathResolver>({}),
+      new PathResolver({ path: '/repo' }),
       runner,
     );
 
@@ -216,7 +217,7 @@ describe('WorktreeManager.resolveWorkingDirectory', () => {
     });
 
     await manager.resolveWorkingDirectory(
-      '/repo', 'w5a', 'release/foo', true, undefined, partialMock<PathResolver>({}), runner,
+      '/repo', 'w5a', 'release/foo', true, undefined, new PathResolver({ path: '/repo' }), runner,
       { branchName: 'agents/w5a' },
     );
 
@@ -240,7 +241,7 @@ describe('WorktreeManager.resolveWorkingDirectory', () => {
     const createWorktree = vi.spyOn(manager, 'createWorktree');
 
     await expect(manager.resolveWorkingDirectory(
-      '/repo', 'w5a', 'origin/main', true, undefined, partialMock<PathResolver>({}), runner,
+      '/repo', 'w5a', 'origin/main', true, undefined, new PathResolver({ path: '/repo' }), runner,
       { branchName },
     )).rejects.toThrow(message);
     expect(claimReserve).not.toHaveBeenCalled();
@@ -250,8 +251,8 @@ describe('WorktreeManager.resolveWorkingDirectory', () => {
   it('renames a claimed reserve branch to the exact requested name', async () => {
     const runner = commandRunner(async command => {
       if (command === 'git check-ref-format --branch agents/w5a') return { stdout: 'agents/w5a\n', stderr: '' };
-      if (command === 'git fetch' || command.startsWith('git worktree add -b ')) return { stdout: '', stderr: '' };
-      if (command === 'git rev-parse --verify --end-of-options origin/main') {
+      if (command.startsWith('git worktree add -b ')) return { stdout: '', stderr: '' };
+      if (command === 'git rev-parse --verify --end-of-options origin/main^{commit}') {
         return { stdout: 'base-commit\n', stderr: '' };
       }
       if (command.startsWith('git worktree move ') || command.startsWith('git branch -m ')) return { stdout: '', stderr: '' };

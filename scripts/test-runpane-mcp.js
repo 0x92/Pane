@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Behavior tests for `runpane mcp`: tool generation from the contract and
-// stdio round-trips to a stubbed Pane daemon. Run after `pnpm --filter runpane build`.
+// Behavior tests for `runpane mcp`: tool generation from the contract,
+// stdio round-trips to a stubbed Pane daemon, and the CLI errors tools relay. Run after `pnpm --filter runpane build`.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -81,6 +81,9 @@ async function exchangeRaw(messages) {
 
 /** A stub result that never answers, to hold a tool call open. */
 const HOLD = Symbol('hold');
+/** A stub result the daemon answers with an error frame: `fail({ code, message, next })`. */
+const FAILED = Symbol('failed');
+const fail = (error) => ({ [FAILED]: error });
 
 const MODERN_META = {
   'io.modelcontextprotocol/protocolVersion': '2026-07-28',
@@ -115,8 +118,10 @@ async function withStubDaemon(paneDir, results, action) {
         }
         requests.push({ channel: frame.channel, args: frame.args, socket });
         if (answer === HOLD) continue;
-        const result = answer instanceof Function ? answer(frame.args) : answer;
-        socket.write(`${JSON.stringify({ type: 'response', id: frame.id, ok: true, result })}\n`);
+        const result = answer instanceof Function ? answer(frame.args, socket) : answer;
+        if (result === HOLD) continue;
+        const response = result?.[FAILED] ? { ok: false, error: result[FAILED] } : { ok: true, result };
+        socket.write(`${JSON.stringify({ type: 'response', id: frame.id, ...response })}\n`);
       }
     });
   });
@@ -216,6 +221,7 @@ test('the server lists daemon and diagnostic commands but not installer commands
   assert.equal(tools.find((tool) => tool.name === 'repos_add').annotations.readOnlyHint, false);
   const watch = tools.find((tool) => tool.name === 'watch');
   assert.ok(!('follow' in watch.inputSchema.properties), 'watch must not offer --follow over MCP');
+  assert.ok(!('untilEvent' in watch.inputSchema.properties), 'watch must not offer --until-event over MCP');
 });
 
 test('a tool call returns the CLI JSON from the daemon', async () => {
@@ -321,6 +327,140 @@ test('a failing command returns isError with the CLI message', async () => {
   }
 });
 
+const REPO_GONE = {
+  code: 'ERR_RUNPANE_REPO_NOT_FOUND',
+  message: 'Repository 7 is not saved in Pane. Nothing was changed.',
+  next: 'List the saved repositories with `runpane repos list`.',
+};
+
+/** Runs the CLI without blocking, so an in-process stub daemon can answer it. */
+function runCli(args) {
+  const child = spawn(process.execPath, [dist('cli.js'), ...args], { env: { ...process.env, RUNPANE_TELEMETRY_DISABLED: '1' } });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+  return new Promise((resolve) => child.once('close', (status) => resolve({ status, stdout, stderr })));
+}
+
+test('a daemon error prints as {ok:false, error:{code, message, next}} under --json and as a Next line for people', async () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-errors-'));
+  try {
+    await withStubDaemon(paneDir, { 'runpane:repos:list': fail(REPO_GONE) }, async () => {
+      const json = await runCli(['repos', 'list', '--pane-dir', paneDir, '--json']);
+      assert.equal(json.status, 1);
+      assert.deepEqual(JSON.parse(json.stdout), { ok: false, error: REPO_GONE });
+
+      const human = await runCli(['repos', 'list', '--pane-dir', paneDir]);
+      assert.equal(human.status, 1);
+      assert.equal(human.stderr.trim(), 'Repository 7 is not saved in Pane. Nothing was changed.\nNext: List the saved repositories with `runpane repos list`.');
+    });
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+});
+
+test('when Pane is not running, the CLI keeps the connection error and says what to do', async () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-errors-'));
+  try {
+    const result = await runCli(['repos', 'list', '--pane-dir', paneDir, '--json']);
+    assert.equal(result.status, 1);
+    const { ok, error } = JSON.parse(result.stdout);
+    assert.equal(ok, false);
+    assert.equal(error.code, 'ENOENT');
+    assert.match(error.message, /Could not connect to Pane daemon at .*ENOENT.*Pane is not running for .* Nothing was changed\./s);
+    assert.match(error.next, /Open Pane.*`runpane doctor --pane-dir /);
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+});
+
+test('a connection lost after the request was sent says the command may have run, never that nothing changed', async () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-errors-'));
+  try {
+    await withStubDaemon(paneDir, { 'runpane:repos:list': (args, socket) => { socket.destroy(); return HOLD; } }, async () => {
+      const result = await runCli(['repos', 'list', '--pane-dir', paneDir, '--json']);
+      assert.equal(result.status, 1);
+      const { error } = JSON.parse(result.stdout);
+      assert.doesNotMatch(error.message, /Nothing was changed/);
+      assert.equal(error.code, 'ERR_RUNPANE_DAEMON_CLOSED');
+      assert.match(error.message, /after runpane:repos:list was sent.*Pane may have finished it/s);
+      assert.match(error.next, /before running it again/);
+    });
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+});
+
+test('a remote machine that drops the reply after the request arrived does not claim nothing changed', async () => {
+  const { invokeRemoteDaemon } = require(dist('daemonClient.js'));
+  const { boundary } = require(dist('boundaryDecoder.js'));
+  const http = require('node:http');
+  let received = 0;
+  const server = http.createServer((request) => { received += 1; request.socket.destroy(); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const target = { machine: 'qa-box', baseUrl: `http://127.0.0.1:${server.address().port}` };
+    const error = await invokeRemoteDaemon(target, 'runpane:panes:create', [], boundary.json, 5_000).then(() => null, (cause) => cause);
+    assert.equal(received, 1);
+    assert.doesNotMatch(error.message, /Nothing was changed/);
+    assert.match(error.message, /may have finished runpane:panes:create/);
+    assert.match(error.next, /before running it again/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('the doctor hint checks the Pane the command used', async () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane errors-'));
+  try {
+    const result = await runCli(['repos', 'list', '--pane-dir', paneDir, '--json']);
+    assert.equal(JSON.parse(result.stdout).error.next, `Open Pane on this machine, then check the connection with \`runpane doctor --pane-dir '${paneDir}'\`.`);
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+});
+
+test('a --json after -- belongs to the remote command, so a failure prints for people only', async () => {
+  const result = await runCli(['workspace', 'no-such-machine-qa999', 'exec', '--', 'echo', '--json']);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.notEqual(result.stderr.trim(), '');
+});
+
+test('a result this runpane cannot read says the command ran and how to line up versions', async () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-errors-'));
+  try {
+    await withStubDaemon(paneDir, { 'runpane:repos:list': { ok: true, repos: 'not-a-list' } }, async () => {
+      const result = await runCli(['repos', 'list', '--pane-dir', paneDir, '--json']);
+      assert.equal(result.status, 1);
+      const { error } = JSON.parse(result.stdout);
+      assert.equal(error.code, 'ERR_RUNPANE_RESULT_UNREADABLE');
+      assert.match(error.message, /Pane answered runpane:repos:list, but this runpane could not read the result \(input\.repos: expected array\)\. Pane ran the command; only reading its answer failed\./);
+      assert.match(error.next, /`runpane doctor`/);
+    });
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+});
+
+test('a tool error reads as the message, the next step in tool names, and the code', async () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-errors-'));
+  try {
+    await withStubDaemon(paneDir, { 'runpane:repos:list': fail(REPO_GONE) }, async () => {
+      const result = await withMcpClient((client) => client.callTool({ name: 'repos_list', arguments: { paneDir } }));
+      assert.equal(result.isError, true);
+      assert.equal(result.content[0].text, [
+        'Repository 7 is not saved in Pane. Nothing was changed.',
+        'Next: List the saved repositories with `repos_list`.',
+        'Code: ERR_RUNPANE_REPO_NOT_FOUND',
+      ].join('\n'));
+    });
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+});
+
 test('cancelling a call stops its runpane process', async () => {
   const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-mcp-'));
   try {
@@ -349,7 +489,7 @@ test('serves the core toolset by default, and named toolsets or read-only on req
   const core = await names([]);
   assert.deepEqual(core.map((tool) => tool.name).sort(), [
     'agents_send', 'agents_start', 'agents_status', 'docs_read', 'docs_search', 'doctor', 'links_create',
-    'panels_input', 'panes_archive', 'panes_git_status', 'panes_list', 'panes_restore', 'repos_add', 'repos_list', 'workspace_state',
+    'panels_create', 'panels_input', 'panes_archive', 'panes_git_status', 'panes_list', 'panes_restore', 'repos_add', 'repos_list', 'workspace_state',
   ]);
   const git = await names(['--toolsets', 'git']);
   assert.deepEqual(git.map((tool) => tool.name).sort(), [
@@ -359,6 +499,23 @@ test('serves the core toolset by default, and named toolsets or read-only on req
   const readOnly = await names(['--toolsets', 'all', '--read-only']);
   assert.ok(readOnly.length > 0 && readOnly.every((tool) => tool.annotations.readOnlyHint));
   assert.ok(!readOnly.some((tool) => tool.name === 'panes_archive'));
+});
+
+test('agents start refuses --pane together with --repo or --name before changing anything, and says which form to use', () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-agents-start-'));
+  try {
+    const run = (args) => require('node:child_process').spawnSync(process.execPath, [dist('cli.js'), 'agents', 'start', ...args, '--prompt', 'Review it', '--agent', 'codex', '--yes', '--json', '--pane-dir', paneDir], {
+      encoding: 'utf8', input: '', env: { ...process.env, RUNPANE_TELEMETRY_DISABLED: '1' },
+    });
+    const mixed = run(['--pane', 'pane-1', '--repo', 'active', '--name', 'other']);
+    assert.notEqual(mixed.status, 0);
+    assert.match(mixed.stderr + mixed.stdout, /either --pane <id> \(a new tab in existing work\) or --repo and --name \(a new Pane for new work\), not both/);
+    const neither = run([]);
+    assert.notEqual(neither.status, 0);
+    assert.match(neither.stderr + neither.stdout, /needs --pane <id> to add a tab to existing work, or --repo and --name/);
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
 });
 
 test('an unknown toolset stops the server with the valid names', () => {
@@ -457,7 +614,7 @@ test('agent tasks start, check on, and message an agent in one call each', async
         items: [{
           ok: true, index: 0, name: 'fix-login', pinned: true, sessionId: 'pane-7', panelId: 'panel-8', worktreePath: '/work/app-fix-login',
           readiness: { ok: true, condition: 'ready', matched: true, timedOut: false, elapsedMs: 900, state: { initialized: true } },
-          initialInput: { delivered: true, submitted: true, inputBytes: 17 },
+          initialInput: { delivered: true, submitted: true, inputBytes: 17, verifiedSubmitted: true, delivery: { state: 'taken', evidence: 'transcript' } },
         }],
       },
       'runpane:panels:list': { ok: true, paneId: 'pane-7', panels: [
@@ -525,6 +682,81 @@ test('panels_input presses named keys, so a model can answer a menu without raw 
         assert.match(unknown.content[0].text, /Unknown key "pagedown"\. Use enter, escape/);
       }, { args: [] });
       assert.deepEqual(requests.map((request) => request.args[0]), [{ panelId: 'panel-8', input: '\u001b[B\r' }]);
+    });
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+});
+
+test('panels_resume restarts a stopped panel through the daemon and keeps the --yes rule', async () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-mcp-'));
+  const panel = { id: 'panel-8', panelId: 'panel-8', paneId: 'pane-1', type: 'terminal', title: 'Claude Code', active: false, initialized: true, running: true, agentType: 'claude' };
+  try {
+    await withStubDaemon(paneDir, {
+      'runpane:panels:resume': (args) => ({
+        ok: true,
+        panelId: args[0].panelId,
+        paneId: 'pane-1',
+        action: 'resumed',
+        message: "Relaunched the panel's agent, resuming conversation panel-8.",
+        agentType: 'claude',
+        agentSessionId: 'panel-8',
+        panel,
+        nextCommand: 'runpane panels wait --panel panel-8 --for ready --timeout-ms 30000 --json',
+      }),
+    }, async (requests) => {
+      await withMcpClient(async (client) => {
+        const tool = (await client.listTools()).tools.find((item) => item.name === 'panels_resume');
+        assert.ok(tool, 'panels_resume is served in the panels toolset');
+        assert.equal(tool.annotations.destructiveHint, false);
+        assert.equal(tool.annotations.idempotentHint, true);
+        const refused = await client.callTool({ name: 'panels_resume', arguments: { panel: 'panel-8', paneDir } });
+        assert.equal(refused.isError, true);
+        const resumed = await client.callTool({ name: 'panels_resume', arguments: { panel: 'panel-8', waitReady: true, yes: true, paneDir } });
+        assert.equal(resumed.isError, undefined, resumed.content[0].text);
+        assertMatchesAdvertisedSchema(tool, resumed.structuredContent);
+        assert.equal(resumed.structuredContent.action, 'resumed');
+      }, { args: ['--toolsets', 'panels'] });
+      assert.deepEqual(requests.map((request) => request.args[0]), [{ panelId: 'panel-8', waitReady: true }]);
+    });
+  } finally {
+    fs.rmSync(paneDir, { recursive: true, force: true });
+  }
+});
+
+test('panels_resume resumes every stopped agent panel of a Session or of every Pane', async () => {
+  const paneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runpane-mcp-'));
+  const bulk = (args) => ({
+    ok: !args[0].sessionId,
+    scope: args[0].sessionId ? { kind: 'session', sessionId: '__orchestration_session_s1__', sessionName: 'Release' } : { kind: 'all-stopped' },
+    resumed: 2,
+    alreadyRunning: 1,
+    failed: 0,
+    notReady: args[0].sessionId ? 1 : 0,
+    concurrency: args[0].concurrency ?? 3,
+    items: [
+      { ok: true, panelId: 'panel-1', paneId: 'pane-1', paneName: 'one', action: 'resumed', readiness: { ok: true, condition: 'ready', matched: true, timedOut: false, elapsedMs: 900, state: { initialized: true, running: true } } },
+      { ok: false, panelId: 'panel-2', paneId: 'pane-2', paneName: 'two', action: 'resumed', readiness: { ok: false, condition: 'ready', matched: false, timedOut: false, elapsedMs: 400, state: { initialized: true, running: true }, blocked: { kind: 'agent-prompt', message: 'The terminal is waiting at an interactive prompt.' } } },
+    ],
+  });
+  try {
+    await withStubDaemon(paneDir, { 'runpane:panels:resume-many': bulk }, async (requests) => {
+      await withMcpClient(async (client) => {
+        const tool = (await client.listTools()).tools.find((item) => item.name === 'panels_resume');
+        assert.ok(!tool.inputSchema.required?.includes('panel'), 'panel is optional once --session and --all-stopped exist');
+        // A panel stuck at a prompt makes the bulk result not ok: an error whose text is the full JSON.
+        const bySession = await client.callTool({ name: 'panels_resume', arguments: { session: 'Release', waitReady: true, concurrency: '2', yes: true, paneDir } });
+        assert.equal(bySession.isError, true);
+        assert.equal(JSON.parse(bySession.content[0].text).items[1].readiness.blocked.kind, 'agent-prompt');
+        const all = await client.callTool({ name: 'panels_resume', arguments: { allStopped: true, yes: true, paneDir } });
+        assert.equal(all.isError, undefined, all.content[0].text);
+        assertMatchesAdvertisedSchema(tool, all.structuredContent);
+        assert.equal(all.structuredContent.scope.kind, 'all-stopped');
+      }, { args: ['--toolsets', 'panels'] });
+      assert.deepEqual(requests.map((request) => request.args[0]), [
+        { sessionId: 'Release', waitReady: true, concurrency: 2 },
+        { allStopped: true },
+      ]);
     });
   } finally {
     fs.rmSync(paneDir, { recursive: true, force: true });

@@ -1,4 +1,4 @@
-import { customCommandResumeSchema, type CustomCommandResume } from '../../../shared/types/customCommandResume';
+import { customCommandResumeSchema, effectiveCustomResume, type CustomCommandResume } from '../../../shared/types/customCommandResume';
 /**
  * Session management for Pane.
  * Note: "Sessions" are called "Panes" in the UI. Internally they remain
@@ -12,7 +12,7 @@ import type { Session, SessionUpdate, SessionOutput } from '../types/session';
 import type { DatabaseService } from '../database/database';
 import type { Session as DbSession, CreateSessionData, UpdateSessionData, ConversationMessage, PromptMarker, ExecutionDiff, CreateExecutionDiffData, Project } from '../database/models';
 import { TerminalSessionManager } from './terminalSessionManager';
-import type { ToolPanelState, ResumableSession } from '../../../shared/types/panels';
+import type { TerminalPanelState, ToolPanelState, ResumableSession } from '../../../shared/types/panels';
 import { formatForDisplay } from '../utils/timestampUtils';
 import { isCliAgentType, resolveAgentTypeFromCommand } from './agents/agentIdentity';
 import { resolveResumeId } from './agents/agentResume';
@@ -99,7 +99,7 @@ const terminalResumeStateSchema = boundary.object({
   customResume: boundary.optional(boundary.nullable(customCommandResumeSchema)),
   wasInterrupted: boundary.optional(boundary.boolean),
   initialCommand: boundary.optional(boundary.string),
-  agentType: boundary.optional(boundary.enumeration('claude', 'codex', 'cursor')),
+  agentType: boundary.optional(boundary.enumeration('claude', 'codex', 'cursor', 'opencode')),
   agentSessionId: boundary.optional(boundary.string),
   hasClaudeSessionId: boundary.optional(boundary.boolean),
 });
@@ -108,7 +108,7 @@ function parseTerminalResumeState(value: ToolPanelState['customState']): {
   customResume?: CustomCommandResume | null;
   wasInterrupted?: boolean;
   initialCommand?: string;
-  agentType?: 'claude' | 'codex' | 'cursor';
+  agentType?: 'claude' | 'codex' | 'cursor' | 'opencode';
   agentSessionId?: string;
   hasClaudeSessionId?: boolean;
 } | undefined {
@@ -117,6 +117,12 @@ function parseTerminalResumeState(value: ToolPanelState['customState']): {
   } catch {
     return undefined;
   }
+}
+
+function terminalCustomState(value: ToolPanelState['customState']): TerminalPanelState {
+  // SAFETY: This helper is called only for panels whose type is terminal; their
+  // persisted custom state is the TerminalPanelState contract.
+  return (value ?? {}) as TerminalPanelState;
 }
 
 function normalizeDbOutputType(type: DbSessionOutputType): SessionOutput['type'] {
@@ -588,12 +594,13 @@ export class SessionManager extends EventEmitter {
 
   emitSessionCreated(
     session: Session,
-    options: { activateOnCreate?: boolean; createDefaultTerminalOnCreate?: boolean } = {},
+    options: { activateOnCreate?: boolean; createDefaultTerminalOnCreate?: boolean; clientRequestId?: string } = {},
   ): void {
     this.emit('session-created', {
       ...session,
       activateOnCreate: options.activateOnCreate !== false,
       createDefaultTerminalOnCreate: options.createDefaultTerminalOnCreate !== false,
+      clientRequestId: options.clientRequestId,
     });
   }
 
@@ -799,7 +806,11 @@ export class SessionManager extends EventEmitter {
     }));
   }
 
-  async archiveSession(id: string): Promise<void> {
+  getArchiveProcessPids(id: string): number[] {
+    return this.terminalSessionManager.getArchiveProcessPids(id);
+  }
+
+  async archiveSession(id: string, options: { trackedTeardown?: boolean } = {}): Promise<void> {
     // Track session archival with analytics before archiving
     if (this.analyticsManager) {
       const dbSession = this.db.getSession(id);
@@ -821,7 +832,8 @@ export class SessionManager extends EventEmitter {
     }
 
     // Close terminal session if it exists
-    await this.terminalSessionManager.closeTerminalSession(id);
+    if (options.trackedTeardown) this.terminalSessionManager.retireForArchive(id);
+    else await this.terminalSessionManager.closeTerminalSession(id);
     
     this.activeSessions.delete(id);
     this.emit('session-deleted', { id }); // Keep the same event name for frontend compatibility
@@ -1483,10 +1495,10 @@ export class SessionManager extends EventEmitter {
 
           if (termState?.wasInterrupted && termState?.initialCommand) {
             const state = panel.state;
-            const customState = { ...(state.customState ?? {}), ...termState };
+            const customState: TerminalPanelState = { ...terminalCustomState(state.customState), ...termState };
             const agentType = customState.agentType ?? resolveAgentTypeFromCommand(customState.initialCommand);
 
-            if (!isCliAgentType(agentType) && !customState.customResume) {
+            if (!isCliAgentType(agentType) && !effectiveCustomResume(customState)) {
               continue;
             }
             customState.agentType = agentType;

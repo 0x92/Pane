@@ -22,6 +22,7 @@ import type {
   RemotePaneConnectionState,
   RemotePaneConnectionProfile,
 } from '../../../shared/types/remoteDaemon';
+import type { TailnetMachineList, WorkspaceAccessSummary, WorkspaceAccessUpdate } from '../../../shared/types/workspaceAccess';
 import type {
   PanePermissionRequest,
   PanePermissionResolvedEvent,
@@ -31,6 +32,7 @@ import type {
   CreatePanelRequest,
   PanelEventType,
   ResumableSession,
+  PanelActivationRequest,
   SessionPanelLayout,
   ToolPanel,
 } from '../../../shared/types/panels';
@@ -39,6 +41,7 @@ import type { PanelAgentStatusEvent } from '../../../shared/types/agentStatus';
 import type { DiffManifest, DiffScope, FileDiffRequest, FileDiffResult } from '../../../shared/types/gitDiff';
 import type { AgentUsageSnapshot } from '../../../shared/types/agentUsage';
 import type { PaneChatAgent, PaneChatState } from '../../../shared/types/paneChat';
+import type { SshHostList, SshHostOpenResult } from '../../../shared/types/sshHosts';
 import type {
   OrchestrationAssociationInput,
   OrchestrationSessionCreateInput,
@@ -52,11 +55,13 @@ import type {
 import type { UsageIndexStatus, UsageReport, UsageReportRequest } from '../../../shared/types/usage';
 import type { LeaderboardResponse, LeaderboardStatus, LeaderboardSubmitResult } from '../../../shared/types/leaderboard';
 import type { ScheduledRun, ScheduledRunInput } from '../../../shared/types/schedule';
+import type { MissionControlAgentPanel, MissionControlSnapshotRequest, MissionControlSnapshotResult } from '../../../shared/types/missionControl';
 import type { CreateSessionRequest } from './session';
 import type { DetectedProjectConfig } from '../../../shared/types/projectConfig';
 import type { RunpanePaneFocusRequestedEvent } from '../../../shared/types/runpaneOrchestration';
 import type { PaneLinkTarget } from '../../../shared/types/paneLinks';
 import type { ArchiveProgressSnapshot } from '../../../shared/types/archiveProgress';
+import type { ListeningPortsSnapshot } from '../../../shared/types/listeningPorts';
 import type { UpdateCapabilities } from '../../../shared/types/updater';
 import type {
   ProjectDashboardData,
@@ -92,9 +97,13 @@ interface IPCResponse<T = any> {
 }
 
 interface ElectronAPI {
+  onNotesChanged: (callback: () => void) => () => void;
   // Generic invoke method. Daemon-owned channels route through the main-process
   // daemon bridge while adapter-only channels stay on direct Electron IPC.
   invoke: {
+    (channel: 'notes:context', paneId: string): Promise<import('../../../shared/types/notes').NoteContext>;
+    (channel: 'notes:list', paneId: string, scope: import('../../../shared/types/notes').NoteScope): Promise<import('../../../shared/types/notes').Note[]>;
+    (channel: 'notes:mutate', paneId: string, input: import('../../../shared/types/notes').NoteMutation): Promise<{ note?: import('../../../shared/types/notes').Note; exports: import('../../../shared/types/notes').NoteExportResult[] }>;
     (channel: 'panels:get-layout', sessionId: string): Promise<IPCResponse<SessionPanelLayout | null>>;
     (channel: 'panels:set-layout', sessionId: string, layout: SessionPanelLayout | null): Promise<IPCResponse<void>>;
     (channel: 'panels:emitEvent', panelId: string, eventType: PanelEventType, data: JsonValue): Promise<void>;
@@ -144,9 +153,16 @@ interface ElectronAPI {
     rendererFatal: (payload: RendererDiagnosticPayload) => Promise<IPCResponse>;
   };
 
+  agentChat: import('../../../shared/types/agentChat').AgentChatClient;
+
   paneChat: {
     getOrCreate: () => Promise<IPCResponse<PaneChatState<Session>>>;
     setAgent: (agent: PaneChatAgent) => Promise<IPCResponse<PaneChatState<Session>>>;
+  };
+
+  sshHosts: {
+    list: () => Promise<IPCResponse<SshHostList>>;
+    open: (alias: string, newTab: boolean) => Promise<IPCResponse<SshHostOpenResult>>;
   };
 
   orchestrationSessions: {
@@ -156,6 +172,8 @@ interface ElectronAPI {
     create: (input: OrchestrationSessionCreateInput) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     get: (selector: OrchestrationSessionSelector) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     update: (selector: OrchestrationSessionSelector, input: OrchestrationSessionUpdateInput) => Promise<IPCResponse<OrchestrationSessionRecord>>;
+    /** Saves the order of the listed Sessions among the places they hold; leaves every Session record unchanged. */
+    reorder: (sessionIds: string[]) => Promise<IPCResponse<OrchestrationSessionListResult>>;
     setAgent: (selector: OrchestrationSessionSelector, agent: PaneChatAgent) => Promise<IPCResponse<OrchestrationSessionView<Session>>>;
     associate: (selector: OrchestrationSessionSelector, association: OrchestrationAssociationInput) => Promise<IPCResponse<OrchestrationSessionRecord>>;
     detach: (selector: OrchestrationSessionSelector, paneId?: string) => Promise<IPCResponse<OrchestrationSessionRecord>>;
@@ -192,6 +210,12 @@ interface ElectronAPI {
     setEnabled: (id: string, enabled: boolean) => Promise<IPCResponse<ScheduledRun>>;
     runNow: (id: string) => Promise<IPCResponse<ScheduledRun>>;
   };
+  // Mission Control — every agent pane across all sessions
+  missionControl: {
+    listAgents: (options?: { includeArchived?: boolean }) => Promise<IPCResponse<MissionControlAgentPanel[]>>;
+    snapshots: (request: MissionControlSnapshotRequest) => Promise<IPCResponse<MissionControlSnapshotResult>>;
+  };
+
   // Session management
   sessions: {
     getAll: () => Promise<IPCResponse>;
@@ -339,9 +363,11 @@ interface ElectronAPI {
     getSessionPreferences: () => Promise<IPCResponse>;
     updateSessionPreferences: (preferences: SessionCreationPreferences) => Promise<IPCResponse>;
     getMonospaceFonts: () => Promise<IPCResponse>;
+    chooseApnsKey: () => Promise<IPCResponse<{ privateKey: string; keyId: string | null } | null>>;
   };
 
   remoteDaemon: {
+    restoreComplete: (restoreId: number, error?: string) => Promise<void>;
     getConfig: () => Promise<IPCResponse<RemoteDaemonConfig>>;
     getConnectionState: () => Promise<IPCResponse<RemotePaneConnectionState>>;
     getHostState: () => Promise<IPCResponse<RemoteDaemonHostRuntimeState>>;
@@ -359,6 +385,10 @@ interface ElectronAPI {
     importConnectionCode: (code: string, options?: { connect?: boolean }) => Promise<IPCResponse<RemoteDaemonImportResult>>;
     deleteConnectionProfile: (profileId: string) => Promise<IPCResponse<RemoteDaemonClientSettings>>;
     updateClientState: (updates: Partial<Pick<RemoteDaemonClientSettings, 'activeProfileId' | 'mode'>>) => Promise<IPCResponse<RemoteDaemonClientSettings>>;
+    getWorkspaceAccess: () => Promise<IPCResponse<WorkspaceAccessSummary>>;
+    updateWorkspaceAccess: (update: WorkspaceAccessUpdate) => Promise<IPCResponse<WorkspaceAccessSummary>>;
+    listTailnetMachines: () => Promise<IPCResponse<TailnetMachineList>>;
+    saveTailnetMachine: (input: { name: string; password?: string }) => Promise<IPCResponse<RemotePaneConnectionProfile>>;
     onConnectionStateChanged: (callback: (state: RemotePaneConnectionState) => void) => () => void;
     onHostStateChanged: (callback: (state: RemoteDaemonHostRuntimeState) => void) => () => void;
   };
@@ -404,16 +434,25 @@ interface ElectronAPI {
       sessionSortAscending: boolean;
       pinnedSectionExpanded: boolean;
       repositoriesSectionExpanded: boolean;
+      sshHostsSectionExpanded: boolean;
+      sessionsSectionExpanded: boolean;
+      expandedSessions: string[];
+      archivedSectionExpanded: boolean;
+      expandedArchivedProjects: number[];
     }>>;
     saveExpanded: (projectIds: number[], folderIds: string[]) => Promise<IPCResponse>;
     saveExpandedProjects: (projectIds: number[]) => Promise<IPCResponse>;
     saveExpandedFolders: (folderIds: string[]) => Promise<IPCResponse>;
     saveSessionSortAscending: (ascending: boolean) => Promise<IPCResponse>;
-    saveSidebarSectionExpanded: (section: 'pinned' | 'repositories', expanded: boolean) => Promise<IPCResponse>;
+    saveSidebarSectionExpanded: (section: 'pinned' | 'repositories' | 'sshHosts' | 'sessions' | 'archived', expanded: boolean) => Promise<IPCResponse>;
+    saveExpandedSessions: (sessionIds: string[]) => Promise<IPCResponse>;
+    saveExpandedArchivedProjects: (projectIds: number[]) => Promise<IPCResponse>;
     getNavigationMemory: (hostId: string | null) => Promise<IPCResponse<HostNavigationMemory | null>>;
     saveNavigationMemory: (hostId: string | null, memory: HostNavigationMemory) => Promise<IPCResponse>;
     getSessionWorkspaceLayout: (hostId: string | null) => Promise<IPCResponse<SessionWorkspaceLayout | null>>;
     saveSessionWorkspaceLayout: (hostId: string | null, layout: SessionWorkspaceLayout | null) => Promise<IPCResponse>;
+    getPaneLayout: (hostId: string | null, paneId: string) => Promise<IPCResponse<SessionPanelLayout | null>>;
+    savePaneLayout: (hostId: string | null, paneId: string, layout: SessionPanelLayout | null) => Promise<IPCResponse>;
   };
 
   // Event listeners for real-time updates
@@ -425,7 +464,10 @@ interface ElectronAPI {
     onSessionUpdated: (callback: (session: Session) => void) => () => void;
     onPaneFocusRequested: (callback: (data: RunpanePaneFocusRequestedEvent) => void) => () => void;
     onArchiveProgress: (callback: (progress: ArchiveProgressSnapshot) => void) => () => void;
+    onListeningPortsChanged: (callback: (snapshot: ListeningPortsSnapshot) => void) => () => void;
     onPaneOpenLink: (callback: (target: PaneLinkTarget) => void) => () => void;
+    /** A phone or another window saved settings on this host; refetch the config. */
+    onRemoteSettingsChanged: (callback: () => void) => () => void;
     onSessionDeleted: (callback: (session: Pick<Session, 'id'>) => void) => () => void;
     onSessionsLoaded: (callback: (sessions: Session[]) => void) => () => void;
     onSessionOutput: (callback: (output: SessionOutput) => void) => () => void;
@@ -441,6 +483,7 @@ interface ElectronAPI {
     
     // Project events
     onProjectUpdated: (callback: (project: Project) => void) => () => void;
+    onProjectListChanged?: (callback: () => void) => () => void;
     
     // Folder events
     onFolderCreated: (callback: (folder: Folder) => void) => () => void;
@@ -448,6 +491,7 @@ interface ElectronAPI {
     onFolderDeleted: (callback: (folderId: string) => void) => () => void;
     
     // Panel events
+    onPanelActivationRequested: (callback: (request: PanelActivationRequest) => void) => () => void;
     onPanelCreated: (callback: (panel: ToolPanel) => void) => () => void;
     onPanelUpdated: (callback: (panel: ToolPanel) => void) => () => void;
     onPanelDeleted: (callback: (data: { panelId: string; sessionId: string }) => void) => () => void;
@@ -485,7 +529,7 @@ interface ElectronAPI {
     // Window focus state from BrowserWindow (more reliable than document.hasFocus())
     onAppMenuAction: (callback: (action: 'open-about' | 'open-settings') => void) => () => void;
     onWindowFocusChanged: (callback: (focused: boolean) => void) => () => void;
-    onRemoteDaemonResyncRequested: (callback: (event: { hostChanged: boolean }) => void) => () => void;
+    onRemoteDaemonResyncRequested: (callback: (event: { hostChanged: boolean; restoreId?: number }) => void) => () => void;
 
     // Spotlight events
     onSpotlightStatusChanged?: (callback: (data: { sessionId: string; projectId: number; active: boolean }) => void) => () => void;
@@ -607,9 +651,16 @@ interface ElectronAPI {
     get: (force?: boolean) => Promise<IPCResponse<AgentUsageSnapshot>>;
   };
 
+  // Whether Dictate's watcher shows Pane's alerts, so Pane skips its desktop notification
+  notifications: {
+    isHandedOff: () => Promise<boolean>;
+  };
+
   // Window state queries (invoke, not event subscriptions)
   window: {
     isFocused: () => Promise<boolean>;
+    /** Raises the window and opens a pane:// link, like one opened from the OS. */
+    openPaneLink: (link: string) => Promise<void>;
   };
 
   // ptyHost: typed wrapper over the per-window MessagePort installed by the

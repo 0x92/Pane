@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
 from .daemon_client import get_pane_daemon_endpoint, invoke_daemon, resolve_pane_directory
+from .workspaces import read_workspace_summary
 from .generated_contract import RUNPANE_CONTRACT
 from .installers import resolve_existing_pane_path
 from .platforms import PanePlatform, detect_platform
@@ -262,6 +263,7 @@ def build_doctor_report(parsed, source: str) -> Dict[str, Any]:
         "remoteDaemonService": remote_daemon_service,
         "remoteSetup": remote_setup,
         "watchDefaults": watch_defaults(),
+        "workspaces": read_workspace_summary(parsed.pane_dir),
         "nextCommands": [
             "runpane agent-context --json",
             "runpane agent-context --command \"<command>\" --json",
@@ -665,23 +667,17 @@ def resolve_daemon_recovery_command(endpoint: Dict[str, str], message: str) -> s
     return "Open Pane, then rerun runpane doctor --json"
 
 
-WATCH_DEFAULTS_NOT_REPORTED = {"format", "agentsOnly", "includeHeldInputPresence"}
-
-
 def watch_defaults() -> Dict[str, Any]:
-    defaults = RUNPANE_CONTRACT["defaults"]["watch"]
-    return {
-        **{key: value for key, value in defaults.items() if key not in WATCH_DEFAULTS_NOT_REPORTED},
-        "kinds": "all",
-    }
+    return RUNPANE_CONTRACT["defaults"]["watch"]
 
 
 def format_watch_defaults(defaults: Dict[str, Any]) -> str:
+    follow = defaults["follow"]
     return (
-        f"Watch defaults (--follow): heartbeat {defaults['heartbeatSeconds']}s, idle-after {defaults['idleAfterMs']}ms, "
-        f"settle {defaults['settleMs']}ms, blocked-settle {defaults['blockedSettleMs']}ms, "
-        f"min-interval {defaults['minIntervalMs']}ms, "
-        f"idle-backoff {'on' if defaults['idleBackoff'] else 'off'}, kinds {defaults['kinds']}"
+        f"Watch defaults (--follow): heartbeat {follow['heartbeat']}, idle-after {follow['idleAfter']}, "
+        f"ready-settle {follow['readySettle']}, blocked-settle {follow['blockedSettle']}, "
+        f"min-interval {follow['minInterval']}, expire-after {follow['expireAfter']}, "
+        f"idle-backoff {'on' if follow['idleBackoff'] else 'off'}, kinds {','.join(follow['kinds'])}"
     )
 
 
@@ -732,6 +728,8 @@ def render_doctor_text(report: Dict[str, Any]) -> None:
             print(f"  Recovery: {diagnostic['recoveryCommand']}")
 
     print(format_watch_defaults(report["watchDefaults"]))
+    for line in report["workspaces"]["lines"]:
+        print(line)
     print('Agent discovery: run "runpane doctor --json" before Pane actions, then "runpane agent-context --json" for full CLI context.')
     print('Remote setup: run "runpane setup" for guided setup, or "runpane install daemon --label <name>" for scripting.')
 

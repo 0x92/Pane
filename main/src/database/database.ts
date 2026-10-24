@@ -33,6 +33,7 @@ import {
 import { JOURNEYS, type Journey, type JourneyTimingSummary } from "../../../shared/types/journeyTimings";
 import { PanelBufferStore, splitPanelBufferState, type PanelBuffers } from "./panelBuffers";
 import { ensureUsageRollup } from "../services/usage/usageRollup";
+import { ensureArchiveCleanup, readArchiveCleanupJobs, readArchiveCleanupJob, writeArchiveCleanupJob, type ArchiveCleanupJob } from './archiveCleanup';
 import {
   migratePanelBuffers,
   unwrapStringWrappedPanelState,
@@ -2553,6 +2554,7 @@ export class DatabaseService {
     }
 
     ensureUsageRollup(this.db);
+    ensureArchiveCleanup(this.db);
 
     // Keep this ownership migration after legacy table-rebuild migrations above,
     // since those intentionally reconstruct sessions from an older column set.
@@ -3493,16 +3495,34 @@ export class DatabaseService {
     return this.getSession(id);
   }
 
-  archiveSession(id: string): boolean {
-    const result = this.db
-      .prepare(
-        "UPDATE sessions SET archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-      )
-      .run(id);
-    return result.changes > 0;
+  getArchiveCleanupJobs(): ArchiveCleanupJob[] {
+    return readArchiveCleanupJobs(this.db);
+  }
+
+  saveArchiveCleanupJob(job: ArchiveCleanupJob): void {
+    writeArchiveCleanupJob(this.db, job);
+  }
+
+  archiveSession(id: string, cleanup?: ArchiveCleanupJob): boolean {
+    return this.db.transaction(() => {
+      if (cleanup && cleanup.sessionId !== id) throw new Error('Archive cleanup session mismatch');
+      const previous = cleanup ? readArchiveCleanupJob(this.db, id) : undefined;
+      if (previous && previous.status !== 'completed') {
+        throw new Error('Archive cleanup is already pending');
+      }
+      const result = this.db
+        .prepare("UPDATE sessions SET archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(id);
+      if (result.changes > 0 && cleanup) writeArchiveCleanupJob(this.db, cleanup);
+      return result.changes > 0;
+    })();
   }
 
   restoreSession(id: string): boolean {
+    const cleanup = readArchiveCleanupJob(this.db, id);
+    if (cleanup && cleanup.status !== 'completed') {
+      throw new Error('Finish archive cleanup before restoring this pane');
+    }
     const result = this.db
       .prepare(
         "UPDATE sessions SET archived = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -4888,6 +4908,12 @@ export class DatabaseService {
         }),
       };
     });
+  }
+
+  getAgentChatPanelIds(): string[] {
+    // SAFETY: The fixed projection selects IDs of terminal rows with host-owned chat state.
+    const rows = this.db.prepare("SELECT id FROM tool_panels WHERE type = 'terminal' AND json_extract(state, '$.customState.agentChat') IS NOT NULL").all() as Array<{ id: string }>;
+    return rows.map(row => row.id);
   }
 
   // Only these panel types need restart cleanup. Terminal history stays on disk

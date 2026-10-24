@@ -4,12 +4,17 @@ import { decodeHostNavigationMemory } from '../../../shared/types/hostNavigation
 import type { HostNavigationMemory } from '../../../shared/types/hostNavigation';
 import { decodeSessionWorkspaceLayout } from '../../../shared/types/sessionWorkspaceLayout';
 import type { SessionWorkspaceLayout } from '../../../shared/types/sessionWorkspaceLayout';
+import { decodeSessionPanelLayout } from '../../../shared/types/panels';
+import type { SessionPanelLayout } from '../../../shared/types/panels';
 
-type SidebarSection = 'pinned' | 'repositories';
+type SidebarSection = 'pinned' | 'repositories' | 'sshHosts' | 'sessions' | 'archived';
 
 const SIDEBAR_SECTION_KEYS = {
   pinned: 'treeView.pinnedSectionExpanded',
-  repositories: 'treeView.repositoriesSectionExpanded'
+  repositories: 'treeView.repositoriesSectionExpanded',
+  sshHosts: 'treeView.sshHostsSectionExpanded',
+  sessions: 'treeView.sessionsSectionExpanded',
+  archived: 'treeView.archivedSectionExpanded'
 } satisfies Record<SidebarSection, string>;
 
 interface ExpandedUiState {
@@ -18,6 +23,11 @@ interface ExpandedUiState {
   sessionSortAscending: boolean;
   pinnedSectionExpanded: boolean;
   repositoriesSectionExpanded: boolean;
+  sshHostsSectionExpanded: boolean;
+  sessionsSectionExpanded: boolean;
+  expandedSessions: string[];
+  archivedSectionExpanded: boolean;
+  expandedArchivedProjects: number[];
 }
 
 type UiStateStore = Pick<DatabaseService, 'getUIState' | 'setUIState' | 'deleteUIState'>;
@@ -46,6 +56,48 @@ class UIStateManager {
     }
   }
 
+  // Session ids are per host too, so each host keeps the Sessions you opened. A Session not in
+  // the list shows collapsed. The older `treeView.collapsedSessions` rows are left unread: they
+  // only recorded collapses, so they cannot say which Sessions were opened on purpose.
+  private expandedSessionsKey(): string {
+    const hostId = this.getRemoteHostId();
+    return hostId ? `treeView.expandedSessions@${hostId}` : 'treeView.expandedSessions';
+  }
+
+  getExpandedSessions(): string[] {
+    const value = this.db.getUIState(this.expandedSessionsKey());
+    if (!value) return [];
+    try {
+      return decodeBoundary(JSON.parse(value), boundary.array(boundary.string));
+    } catch {
+      return [];
+    }
+  }
+
+  saveExpandedSessions(sessionIds: string[]): void {
+    this.db.setUIState(this.expandedSessionsKey(), JSON.stringify(sessionIds));
+  }
+
+  // Archived groups are keyed by repository id, so they are per host like expanded repositories.
+  private expandedArchivedProjectsKey(): string {
+    const hostId = this.getRemoteHostId();
+    return hostId ? `treeView.expandedArchivedProjects@${hostId}` : 'treeView.expandedArchivedProjects';
+  }
+
+  getExpandedArchivedProjects(): number[] {
+    const value = this.db.getUIState(this.expandedArchivedProjectsKey());
+    if (!value) return [];
+    try {
+      return decodeBoundary(JSON.parse(value), boundary.array(boundary.number));
+    } catch {
+      return [];
+    }
+  }
+
+  saveExpandedArchivedProjects(projectIds: number[]): void {
+    this.db.setUIState(this.expandedArchivedProjectsKey(), JSON.stringify(projectIds));
+  }
+
   getExpandedFolders(): string[] {
     const value = this.db.getUIState('treeView.expandedFolders');
     if (!value) return [];
@@ -66,13 +118,15 @@ class UIStateManager {
     }
   }
 
+  // Sections start open, except Archived.
   getSidebarSectionExpanded(section: SidebarSection): boolean {
+    const fallback = section !== 'archived';
     const value = this.db.getUIState(SIDEBAR_SECTION_KEYS[section]);
-    if (!value) return true;
+    if (!value) return fallback;
     try {
       return decodeBoundary(JSON.parse(value), boundary.boolean);
     } catch {
-      return true;
+      return fallback;
     }
   }
 
@@ -147,13 +201,45 @@ class UIStateManager {
     this.db.setUIState(key, JSON.stringify(layout));
   }
 
+  // This computer's own split and tabs for one Pane. The host keeps the layout
+  // last used by any client; this copy is what this desktop shows when it
+  // returns. Keyed by host like navigation memory, for the same reason.
+  private paneLayoutKey(hostId: string | null, paneId: string): string {
+    return hostId ? `paneLayout.${paneId}@${hostId}` : `paneLayout.${paneId}`;
+  }
+
+  getPaneLayout(hostId: string | null, paneId: string): SessionPanelLayout | null {
+    const value = this.db.getUIState(this.paneLayoutKey(hostId, paneId));
+    if (!value) return null;
+    try {
+      return decodeSessionPanelLayout(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+
+  /** A null layout forgets the Pane, as when it is archived or deleted. */
+  savePaneLayout(hostId: string | null, paneId: string, layout: SessionPanelLayout | null): void {
+    const key = this.paneLayoutKey(hostId, paneId);
+    if (!layout) {
+      this.db.deleteUIState(key);
+      return;
+    }
+    this.db.setUIState(key, JSON.stringify(layout));
+  }
+
   getExpandedState(): ExpandedUiState {
     return {
       expandedProjects: this.getExpandedProjects(),
       expandedFolders: this.getExpandedFolders(),
       sessionSortAscending: this.getSessionSortAscending(),
       pinnedSectionExpanded: this.getSidebarSectionExpanded('pinned'),
-      repositoriesSectionExpanded: this.getSidebarSectionExpanded('repositories')
+      repositoriesSectionExpanded: this.getSidebarSectionExpanded('repositories'),
+      sshHostsSectionExpanded: this.getSidebarSectionExpanded('sshHosts'),
+      sessionsSectionExpanded: this.getSidebarSectionExpanded('sessions'),
+      expandedSessions: this.getExpandedSessions(),
+      archivedSectionExpanded: this.getSidebarSectionExpanded('archived'),
+      expandedArchivedProjects: this.getExpandedArchivedProjects()
     };
   }
 
@@ -163,6 +249,12 @@ class UIStateManager {
     this.db.deleteUIState('treeView.sessionSortAscending');
     this.db.deleteUIState(SIDEBAR_SECTION_KEYS.pinned);
     this.db.deleteUIState(SIDEBAR_SECTION_KEYS.repositories);
+    this.db.deleteUIState(SIDEBAR_SECTION_KEYS.sshHosts);
+    this.db.deleteUIState(SIDEBAR_SECTION_KEYS.sessions);
+    this.db.deleteUIState('treeView.expandedSessions');
+    this.db.deleteUIState('treeView.collapsedSessions');
+    this.db.deleteUIState(SIDEBAR_SECTION_KEYS.archived);
+    this.db.deleteUIState('treeView.expandedArchivedProjects');
   }
 }
 

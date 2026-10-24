@@ -1,3 +1,4 @@
+import { AgentViewMenu } from '../agentChat/AgentViewMenu';
 /**
  * PanelTabStrip: renders a horizontal strip of panel tab items.
  *
@@ -6,18 +7,20 @@
  */
 
 import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react';
-import { X, Terminal, GitBranch, FileCode, FileDiff, FileText, FolderTree, BarChart3, Globe } from 'lucide-react';
+import { X } from 'lucide-react';
 import { cn } from '../../utils/cn';
-import { ToolPanel, ToolPanelType, LogsPanelState } from '../../../../shared/types/panels';
+import { ToolPanel, LogsPanelState } from '../../../../shared/types/panels';
 import { useHotkeyStore } from '../../stores/hotkeyStore';
 import { formatKeyDisplay } from '../../utils/hotkeyUtils';
 import { Tooltip } from '../ui/Tooltip';
 import { Kbd } from '../ui/Kbd';
 import { usePanelStore } from '../../stores/panelStore';
-import { getCliBrandIcon } from '../ui/brandIconRegistry';
+import { isChatEnabled, useConfigStore } from '../../stores/configStore';
+import { showActionError } from '../../stores/errorStore';
 import { PanelTabStatusDot } from './PanelTabStatusDot';
 import type { PanelTabPresentationResolver } from '../../types/panelComponents';
 import { getPanelTabId, getPanelTabPanelId } from './panelTabIds';
+import { getPanelIcon } from './panelIcon';
 import { editorPanelState, pinEditorPanel } from '../../services/openFileInEditor';
 
 // ---------------------------------------------------------------------------
@@ -66,36 +69,6 @@ export interface PanelTabStripProps {
 }
 
 // ---------------------------------------------------------------------------
-// Icon helper (existing icons from PanelTabBar)
-// ---------------------------------------------------------------------------
-
-function getPanelIcon(type: ToolPanelType, panel?: ToolPanel, iconClass = 'w-4 h-4'): React.ReactNode {
-  switch (type) {
-    case 'terminal': {
-      if (panel?.title) {
-        const brandIcon = getCliBrandIcon(panel.title, iconClass);
-        if (brandIcon) return brandIcon;
-      }
-      return <Terminal className={iconClass} />;
-    }
-    case 'diff':
-      return <GitBranch className={iconClass} />;
-    case 'explorer':
-      return <FolderTree className={iconClass} />;
-    case 'editor':
-      return panel && editorPanelState(panel)?.diff ? <FileDiff className={iconClass} /> : <FileText className={iconClass} />;
-    case 'logs':
-      return <FileCode className={iconClass} />;
-    case 'dashboard':
-      return <BarChart3 className={iconClass} />;
-    case 'browser':
-      return <Globe className={iconClass} />;
-    default:
-      return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -138,6 +111,7 @@ export const PanelTabStrip: React.FC<PanelTabStripProps> = React.memo(({
   }, [activePanelId, panels]);
 
   const hotkeys = useHotkeyStore(s => s.hotkeys);
+  const chatEnabled = useConfigStore(s => isChatEnabled(s.config));
   const hotkeyDisplay = useCallback((id: string) => {
     const keys = hotkeys.get(id)?.keys;
     return keys ? formatKeyDisplay(keys) : null;
@@ -154,15 +128,18 @@ export const PanelTabStrip: React.FC<PanelTabStripProps> = React.memo(({
   const handleRenameSubmit = useCallback(async () => {
     if (editingPanelId && editingTitle.trim()) {
       try {
-        await window.electron?.invoke('panels:update', editingPanelId, {
+        const response: { success?: boolean; error?: string } | undefined = await window.electron?.invoke('panels:update', editingPanelId, {
           title: editingTitle.trim()
         });
         const panel = panels.find(p => p.id === editingPanelId);
-        if (panel) {
+        if (response?.success === false) {
+          showActionError('Could not rename the tab', response.error);
+        } else if (panel) {
           usePanelStore.getState().updatePanelState({ ...panel, title: editingTitle.trim() });
         }
       } catch (error) {
         console.error('Failed to rename panel:', error);
+        showActionError('Could not rename the tab', error);
       }
     }
     setEditingPanelId(null);
@@ -384,6 +361,10 @@ export const PanelTabStrip: React.FC<PanelTabStripProps> = React.memo(({
           />
         ) : null;
 
+        const tooltipTab = tooltipContent && tabButton ? <Tooltip content={tooltipContent} side="bottom">{tabButton}</Tooltip> : tabButton;
+        const contextualTab = chatEnabled && panel.type === 'terminal' && tooltipTab
+          ? <AgentViewMenu panelId={panel.id} title={displayTitle} client={window.electronAPI.agentChat} trigger={tooltipTab} />
+          : tooltipTab;
         const tab = (
           <div
             className={cn(
@@ -413,9 +394,7 @@ export const PanelTabStrip: React.FC<PanelTabStripProps> = React.memo(({
             onDragOver={(e) => handleStripDragOver(e, index)}
             onDrop={handleStripDrop}
           >
-            {tooltipContent && tabButton ? (
-              <Tooltip content={tooltipContent} side="bottom">{tabButton}</Tooltip>
-            ) : tabButton}
+            {contextualTab}
             {/* Strip drop indicator line. Between-tab boundaries render as the
                 next tab's left edge; only the strip's end renders a right edge. */}
             {isTabDragging && stripDropIndex === index && (

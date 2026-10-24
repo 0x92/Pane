@@ -3,6 +3,7 @@ import type { RemoteDaemonConfig } from '../../../shared/types/remoteDaemon';
 import type { PaneChatAgent } from '../../../shared/types/paneChat';
 import type { VoiceTranscriptionMode } from '../../../shared/types/voiceTranscription';
 import type { WorktreeFileSyncEntry } from '../../../shared/types/worktreeFileSync';
+import type { ApnsCredentialConfig, SharedCredentialId, SharedCredentialMeta } from '../../../shared/types/sharedCredentials';
 import type { AppearanceMode, DarkTheme, LightTheme, Theme } from '../../../shared/types/appearance';
 
 export interface TerminalShortcut {
@@ -53,6 +54,8 @@ interface AnalyticsConfig {
   gitUserName?: string;
 }
 
+export type HtmlFileOpenMode = 'preview' | 'source';
+
 export interface AppConfig {
   verbose?: boolean;
   anthropicApiKey?: string;
@@ -60,6 +63,8 @@ export interface AppConfig {
   falApiKey?: string;
   openRouterApiKey?: string;
   deepgramApiKey?: string;
+  apns?: ApnsCredentialConfig;
+  sharedCredentials?: Partial<Record<SharedCredentialId, SharedCredentialMeta>>;
   voiceTranscriptionMode?: VoiceTranscriptionMode;
   // Legacy fields for backward compatibility
   gitRepoPath?: string;
@@ -73,15 +78,18 @@ export interface AppConfig {
   defaultModel?: string;
   // Default agent used by the global Pane Chat orchestrator terminal
   defaultOrchestratorAgent?: PaneChatAgent;
+  // Experimental: open Claude and Codex agent tabs as Chat (off by default).
+  experimentalChatEnabled?: boolean;
+  defaultAgentInterface?: 'terminal' | 'chat';
   // Auto-check for updates
   autoCheckUpdates?: boolean;
   // Start Pane automatically when the user logs in
   autoStartOnBoot?: boolean;
-  // Keep the computer awake while any session is active
+  // Master toggle: keep the computer awake while any session is active
   keepAwakeWhileSessionsActive?: boolean;
-  // Stravu MCP integration
-  stravuApiKey?: string;
-  stravuServerUrl?: string;
+  // Under the master toggle: on AC power (default on) and on battery (default off)
+  keepAwakeWhilePluggedIn?: boolean;
+  keepAwakeOnBattery?: boolean;
   // Theme preference
   appearanceMode?: AppearanceMode;
   theme?: Theme;
@@ -144,6 +152,10 @@ export interface AppConfig {
   // isolation. On by default on Windows. Requires app restart; the supervisor is forked
   // once at `app.whenReady`.
   usePtyHost?: boolean;
+  // Experimental: show Mission Control, the grid of every agent pane (off by default).
+  missionControlEnabled?: boolean;
+  // What a click on an .html file in Explorer opens: the browser preview (default when absent) or its source
+  htmlFileOpenMode?: HtmlFileOpenMode;
   // PostHog analytics settings
   analytics?: AnalyticsConfig;
   // User-defined custom commands for the Add Tool picker
@@ -151,6 +163,7 @@ export interface AppConfig {
   defaultSessionCommand?: string;
   defaultSessionResume?: CustomCommandResume | null;
   defaultSessionProfile?: string;
+  defaultSessionPinned?: boolean;
   // Terminal shortcuts — hotkey-triggered clipboard paste snippets
   terminalShortcuts?: TerminalShortcut[];
   // Whether Pane intercepts application keyboard shortcuts
@@ -181,17 +194,20 @@ export interface UpdateConfigRequest {
   falApiKey?: string;
   openRouterApiKey?: string;
   deepgramApiKey?: string;
+  apns?: ApnsCredentialConfig;
   voiceTranscriptionMode?: VoiceTranscriptionMode;
   claudeExecutablePath?: string;
   systemPromptAppend?: string;
   defaultPermissionMode?: 'approve' | 'ignore';
   defaultModel?: string;
   defaultOrchestratorAgent?: PaneChatAgent;
+  experimentalChatEnabled?: boolean;
+  defaultAgentInterface?: 'terminal' | 'chat';
   autoCheckUpdates?: boolean;
   autoStartOnBoot?: boolean;
   keepAwakeWhileSessionsActive?: boolean;
-  stravuApiKey?: string;
-  stravuServerUrl?: string;
+  keepAwakeWhilePluggedIn?: boolean;
+  keepAwakeOnBattery?: boolean;
   theme?: AppConfig['theme'];
   appearanceMode?: AppearanceMode;
   systemLightTheme?: LightTheme;
@@ -207,11 +223,16 @@ export interface UpdateConfigRequest {
   agentContext?: AppConfig['agentContext'];
   useInteractiveMode?: boolean;
   usePtyHost?: boolean;
+  // Experimental: show Mission Control, the grid of every agent pane (off by default).
+  missionControlEnabled?: boolean;
+  // What a click on an .html file in Explorer opens: the browser preview (default when absent) or its source
+  htmlFileOpenMode?: HtmlFileOpenMode;
   analytics?: AnalyticsConfig;
   customCommands?: CustomCommand[];
   defaultSessionCommand?: string;
   defaultSessionResume?: CustomCommandResume | null;
   defaultSessionProfile?: string;
+  defaultSessionPinned?: boolean;
   terminalShortcuts?: TerminalShortcut[];
   keyboardShortcutsEnabled?: boolean;
   commandPaletteShortcutEnabled?: boolean;

@@ -12,11 +12,14 @@ import type {
 } from '../../../shared/types/daemon';
 import { boundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
 import { serializeJsonTransport } from './jsonTransport';
+import { toPaneDaemonError } from '../../../shared/paneError';
 
 const DAEMON_EVENT_PREFIXES = [
+  'agent-chat:',
   'archive:',
   'folder:',
   'panel:',
+  'ports:',
   'project:',
   'resource-monitor:',
   'orchestration-sessions:',
@@ -36,6 +39,8 @@ const DAEMON_EVENT_EXACT_CHANNELS = new Set<string>([
   'process:ended',
   'project-script-changed',
   'project-script-closing',
+  'remote:settings-changed',
+  'remote:update-intent',
   'session-log',
   'session-logs-cleared',
   'script-closing',
@@ -52,6 +57,7 @@ export function isPaneDaemonEventChannel(channel: string): boolean {
 
 interface ConnectedPaneDaemonClient {
   socket: net.Socket;
+  lifetime: AbortController;
   decoder: PaneDaemonFrameDecoder;
   pendingFrames: string[];
   pendingBytes: number;
@@ -193,6 +199,7 @@ export class PaneDaemonServer {
     const clientId = String(this.nextClientId++);
     const client: ConnectedPaneDaemonClient = {
       socket,
+      lifetime: new AbortController(),
       decoder: new PaneDaemonFrameDecoder(),
       pendingFrames: [],
       pendingBytes: 0,
@@ -227,7 +234,7 @@ export class PaneDaemonServer {
     });
 
     socket.on('close', () => {
-      this.clients.delete(clientId);
+      this.dropClient(clientId);
       try {
         client.decoder.finish();
       } catch {
@@ -243,6 +250,7 @@ export class PaneDaemonServer {
     }
 
     this.clients.delete(clientId);
+    client.lifetime.abort(new Error('Pane daemon client disconnected'));
     client.pendingFrames.length = 0;
     client.pendingBytes = 0;
     client.waitingForDrain = false;
@@ -254,7 +262,7 @@ export class PaneDaemonServer {
   private async handleRequest(clientId: string, frame: PaneDaemonRequestFrame): Promise<void> {
     const response = frame.channel === 'daemon:events'
       ? this.buildEventFilterResponse(clientId, frame)
-      : await this.buildResponseFrame(frame);
+      : await this.buildResponseFrame(frame, this.clients.get(clientId)?.lifetime.signal);
     const client = this.clients.get(clientId);
 
     if (!client || client.socket.destroyed) {
@@ -355,9 +363,12 @@ export class PaneDaemonServer {
 
   private async buildResponseFrame(
     frame: PaneDaemonRequestFrame,
+    signal?: AbortSignal,
   ): Promise<PaneDaemonSuccessResponseFrame | PaneDaemonErrorResponseFrame> {
     try {
-      const result = await this.commandRegistry.invoke(frame.channel, frame.args);
+      const result = signal
+        ? await this.commandRegistry.invokeConnected(frame.channel, frame.args, signal)
+        : await this.commandRegistry.invoke(frame.channel, frame.args);
       return {
         type: 'response',
         id: frame.id,
@@ -365,20 +376,7 @@ export class PaneDaemonServer {
         result: result === undefined ? undefined : serializeJsonTransport(result, boundary.json),
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const code = message.includes('No Pane daemon command registered')
-        ? 'ERR_UNKNOWN_CHANNEL'
-        : 'ERR_DAEMON_REQUEST_FAILED';
-
-      return {
-        type: 'response',
-        id: frame.id,
-        ok: false,
-        error: {
-          message,
-          code,
-        },
-      };
+      return { type: 'response', id: frame.id, ok: false, error: toPaneDaemonError(error, 'ERR_DAEMON_REQUEST_FAILED') };
     }
   }
 }

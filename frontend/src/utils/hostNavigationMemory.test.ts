@@ -4,12 +4,16 @@ import type { HostNavigationMemory } from '../../../shared/types/hostNavigation'
 import type { AppConfig } from '../types/config';
 import type { Project } from '../types/project';
 import type { Session } from '../types/session';
+import type { OrchestrationSessionRecord } from '../../../shared/types/orchestrationSession';
 
 const REMOTE_HOST_ID = 'host-b';
 
 let storedMemories: Map<string, HostNavigationMemory>;
 let savedMemories: Array<{ hostId: string | null; memory: HostNavigationMemory }>;
 let hostProjects: Project[];
+let memoryReply: Promise<void> | null;
+// SAFETY: Selection only reads Session ids and the archived flag.
+const sessionRecords = ['host-pick', 'mine', 'newer'].map(id => ({ id, name: id }) as OrchestrationSessionRecord);
 
 const saveNavigationMemory = vi.fn((hostId: string | null, memory: HostNavigationMemory) => {
   savedMemories.push({ hostId, memory });
@@ -28,9 +32,14 @@ function stubWindow(): void {
       invoke: () => Promise.resolve({ success: true }),
       sessions: { markViewed: () => Promise.resolve({ success: true }) },
       projects: { getAll: () => Promise.resolve({ success: true, data: hostProjects }) },
+      orchestrationSessions: {
+        list: () => Promise.resolve({ success: true, data: { sessions: sessionRecords, selectedSessionId: 'host-pick' } }),
+        select: (selector: { sessionId: string }) => Promise.resolve({ success: true, data: { sessions: sessionRecords, selectedSessionId: selector.sessionId } }),
+      },
       uiState: {
-        getNavigationMemory: (hostId: string | null) =>
-          Promise.resolve({ success: true, data: storedMemories.get(hostId ?? '') ?? null }),
+        getNavigationMemory: (hostId: string | null) => memoryReply
+          ? memoryReply.then(() => ({ success: true, data: storedMemories.get(hostId ?? '') ?? null }))
+          : Promise.resolve({ success: true, data: storedMemories.get(hostId ?? '') ?? null }),
         saveNavigationMemory,
       },
     },
@@ -75,11 +84,22 @@ beforeEach(() => {
   storedMemories = new Map();
   savedMemories = [];
   hostProjects = [];
+  memoryReply = null;
   saveNavigationMemory.mockClear();
   vi.unstubAllGlobals();
 });
 
 describe('restoreHostNavigation', () => {
+  it('restores Mission Control for the incoming host and clears the active Pane', async () => {
+    storedMemories.set(REMOTE_HOST_ID, { view: 'mission-control', projectId: null, paneId: 'pane-1' });
+    const { restoreHostNavigation, useNavigationStore, useSessionStore } = await loadHostNavigationMemory();
+    useSessionStore.getState().loadSessions([paneFixture('pane-1')]);
+    await useSessionStore.getState().setActiveSession('pane-1');
+    await restoreHostNavigation();
+    expect(useNavigationStore.getState().activeView).toBe('mission-control');
+    expect(useSessionStore.getState().activeSessionId).toBeNull();
+  });
+
   it('reopens the Pane the host was left on', async () => {
     storedMemories.set(REMOTE_HOST_ID, { view: 'sessions', projectId: null, paneId: 'pane-2' });
     const { restoreHostNavigation, useNavigationStore, useSessionStore } = await loadHostNavigationMemory();
@@ -153,7 +173,7 @@ describe('withHostNavigationWritesPaused', () => {
       stop();
 
       expect(savedMemories).toEqual([
-        { hostId: REMOTE_HOST_ID, memory: { view: 'pane-chat', projectId: null, paneId: null } },
+        { hostId: REMOTE_HOST_ID, memory: { view: 'pane-chat', projectId: null, paneId: null, orchestrationSessionId: null } },
       ]);
     } finally {
       vi.useRealTimers();
@@ -174,10 +194,44 @@ describe('withHostNavigationWritesPaused', () => {
       stop();
 
       expect(savedMemories).toEqual([
-        { hostId: REMOTE_HOST_ID, memory: { view: 'pane-chat', projectId: null, paneId: null } },
+        { hostId: REMOTE_HOST_ID, memory: { view: 'pane-chat', projectId: null, paneId: null, orchestrationSessionId: null } },
       ]);
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('restoreSessionSelection', () => {
+  async function launch() {
+    const loaded = await loadHostNavigationMemory();
+    const { useOrchestrationSessionStore } = await import('../stores/orchestrationSessionStore');
+    return { ...loaded, useOrchestrationSessionStore };
+  }
+
+  it('opens on the Session this desktop remembered rather than the host\'s last pick', async () => {
+    storedMemories.set(REMOTE_HOST_ID, { view: 'sessions', projectId: null, paneId: null, orchestrationSessionId: 'mine' });
+    const { restoreSessionSelection, useOrchestrationSessionStore } = await launch();
+
+    await useOrchestrationSessionStore.getState().load();
+    expect(useOrchestrationSessionStore.getState().selectedSessionId).toBe('host-pick');
+    await restoreSessionSelection();
+
+    expect(useOrchestrationSessionStore.getState().selectedSessionId).toBe('mine');
+  });
+
+  it('keeps a Session picked while the memory was still being read', async () => {
+    storedMemories.set(REMOTE_HOST_ID, { view: 'sessions', projectId: null, paneId: null, orchestrationSessionId: 'mine' });
+    let release!: () => void;
+    memoryReply = new Promise(resolve => { release = resolve; });
+    const { restoreSessionSelection, useOrchestrationSessionStore } = await launch();
+    await useOrchestrationSessionStore.getState().load();
+
+    const restoring = restoreSessionSelection();
+    await useOrchestrationSessionStore.getState().select({ sessionId: 'newer' });
+    release();
+    await restoring;
+
+    expect(useOrchestrationSessionStore.getState().selectedSessionId).toBe('newer');
   });
 });

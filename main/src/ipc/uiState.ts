@@ -6,6 +6,8 @@ import { decodeHostNavigationMemory } from '../../../shared/types/hostNavigation
 import type { HostNavigationMemory } from '../../../shared/types/hostNavigation';
 import { decodeSessionWorkspaceLayout } from '../../../shared/types/sessionWorkspaceLayout';
 import type { SessionWorkspaceLayout } from '../../../shared/types/sessionWorkspaceLayout';
+import { decodeSessionPanelLayout } from '../../../shared/types/panels';
+import type { SessionPanelLayout } from '../../../shared/types/panels';
 
 export function registerUIStateHandlers(services: AppServices) {
   const uiStateManager = new UIStateManager(
@@ -88,9 +90,39 @@ export function registerUIStateHandlers(services: AppServices) {
     }
   });
 
-  ipcMain.handle('ui-state:save-sidebar-section-expanded', async (_, section: 'pinned' | 'repositories', expanded: boolean) => {
+  ipcMain.handle('ui-state:save-expanded-sessions', async (_, sessionIds: string[]) => {
     try {
-      if (section !== 'pinned' && section !== 'repositories') {
+      uiStateManager.saveExpandedSessions(sessionIds);
+      return {
+        success: true
+      };
+    } catch (error) {
+      console.error('Error saving opened Sessions:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  });
+
+  ipcMain.handle('ui-state:save-expanded-archived-projects', async (_, projectIds: number[]) => {
+    try {
+      uiStateManager.saveExpandedArchivedProjects(projectIds);
+      return {
+        success: true
+      };
+    } catch (error) {
+      console.error('Error saving expanded archived projects:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  });
+
+  ipcMain.handle('ui-state:save-sidebar-section-expanded', async (_, section: 'pinned' | 'repositories' | 'sshHosts' | 'sessions' | 'archived', expanded: boolean) => {
+    try {
+      if (section !== 'pinned' && section !== 'repositories' && section !== 'sshHosts' && section !== 'sessions' && section !== 'archived') {
         throw new Error(`Invalid sidebar section: ${section}`);
       }
 
@@ -153,6 +185,41 @@ export function registerUIStateHandlers(services: AppServices) {
       };
     } catch (error) {
       console.error('Error saving Session workspace layout:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  });
+
+  ipcMain.handle('ui-state:get-pane-layout', async (_, hostId: string | null, paneId: string) => {
+    try {
+      return {
+        success: true,
+        data: uiStateManager.getPaneLayout(hostId, paneId)
+      };
+    } catch (error) {
+      console.error('Error getting Pane layout memory:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  });
+
+  ipcMain.handle('ui-state:save-pane-layout', async (_, hostId: string | null, paneId: string, layout: SessionPanelLayout | null) => {
+    try {
+      // Decoded on the way in, so a stored layout is always readable back.
+      const decoded = layout === null ? null : decodeSessionPanelLayout(layout);
+      if (!paneId || (layout !== null && !decoded)) {
+        throw new Error('Invalid Pane layout');
+      }
+      uiStateManager.savePaneLayout(hostId, paneId, decoded);
+      return {
+        success: true
+      };
+    } catch (error) {
+      console.error('Error saving Pane layout memory:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'

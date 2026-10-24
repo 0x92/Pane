@@ -9,7 +9,7 @@ You coordinate. Planning sessions own investigation, options and plans. Implemen
 
 ## Host and workflow
 
-Before any workspace or session action, read the host's own instructions (in Pane: the `pane-orchestrator` and `runpane` skills), and follow [references/host-policy.md](references/host-policy.md).
+Before any workspace or session action, read the host's own instructions (in Pane: the [`pane-orchestration`](../pane-orchestration/SKILL.md) guide, plus `pane-orchestrator` and `runpane` in a Pane Session), and follow [references/host-policy.md](references/host-policy.md).
 
 - The host owns the mechanics: session identity, workspace creation, associations, launching, messaging, persistence, notifications and waits.
 - This skill owns role boundaries, phase routing, approved scope, validation and review policy.
@@ -19,8 +19,10 @@ Use the host's own tools for its mechanics. If a required host capability is mis
 
 ## In Pane
 
-Pane's `pane-orchestrator` and `runpane` skills bind this skill to Pane, and
-they win where the two differ:
+Pane's [`pane-orchestration`](../pane-orchestration/SKILL.md) guide (launching,
+waiting, reports, answers, resume) and, in a Pane Session, its
+`pane-orchestrator` and `runpane` skills bind this skill to Pane, and they win
+on mechanics where the two differ:
 
 - The Pane Chat Session is the planning session. Discussion, investigation,
   options, and the ticket happen there; start a separate planning session only
@@ -28,13 +30,30 @@ they win where the two differ:
 - Pane refreshes Session state and arms its watcher at startup.
 - Workers end with `runpane report`. Its REPORT event (`agent.report`) is the
   completion and blocker signal; a READY without one is only a cue to look.
-  `runpane` has the prompt line and how to read a report.
-- Review and QA run as `runpane` describes: fresh panels or the `reviewer` and
-  `qa-and-verify` subagents, returning findings to the implementation
-  authority.
+  `pane-orchestration` has the one wait primitive, the prompt line, and how to
+  read a report and pair it with a status file.
+- **1 feature = 1 worktree = 1 branch = 1 Pane; reviews, audits, fixes and QA
+  for it are tabs in that Pane.** A feature means one branch and its PR. A new
+  Pane creates a worktree that checks out, installs and often builds, so it is
+  expensive. Create a Pane only when the work's branch has no Pane yet: new
+  work, or an existing PR with no Pane. Every later agent for that branch
+  (implementer, reviewer, follow-up reviewer, auditor, fix implementer, QA)
+  opens as a new agent tab in its Pane:
+  `runpane panels create --pane <feature Pane id> --tool-command "<agent command>" --source agent --no-focus --wait-ready --yes --json`.
+  Before any `runpane panes create`, find the feature's Pane in the ledger or
+  with `runpane panes list --repo <repo> --json`, matching the PR's head branch (`gh pr view <n> --json headRefName`) against `git -C <worktreePath> branch --show-current`.
+  Tabs share one checkout: only the implementer changes the branch or HEAD,
+  one writer at a time, and a fix tab starts only after the previous writer
+  has stopped. Review, audit and QA tabs never run `git checkout`, `reset` or
+  `stash`. Never create a Pane on this machine to review, audit, fix or QA work
+  that already has one here, and keep the feature's Pane until its PR merges
+  or closes.
+- Review and QA run as `runpane` describes: fresh agent tabs in the feature's
+  Pane, returning findings to the implementation authority. Use the `reviewer`
+  and `qa-and-verify` subagents only when the user asks for a private review.
 - Durable records live where `runpane` says. The status board is optional,
   on request.
-- A new workspace on a named branch comes from
+- A new feature's workspace on a named branch comes from
   `runpane panes create --base <ref> --branch <name> --prompt-file <file>`,
   which replaces `git worktree add` plus `panes adopt`.
 - When workers share a resource only one may use at a time, such as a test
@@ -89,6 +108,55 @@ A quiet worker or a long-running step is normal. On a reported failure, explicit
 ## Questions and resumption
 
 Answer from an existing approved source when you can, and cite where. Leave routine in-scope technical decisions to the assigned worker. For a bounded, unresolved technical question that merits a second opinion, ask one fresh-context subagent. Send product and architecture changes, and ask-first actions, to the user.
+
+## Presenting decisions
+
+This is the canonical decision frame for Pane's skills; others link here
+rather than restating it. It applies whenever a key decision goes to the user,
+whether you write it (in Pane, this Session is also the planning session) or
+relay it from a worker.
+
+A decision is **key** when it is hard to reverse, changes what users see, adds
+architecture, schema or infrastructure, touches security or sensitive data
+such as health records, or makes the system act on a user's behalf. Small,
+reversible choices can stay one line: state the choice and move on.
+
+For every key decision:
+
+- **Options, not a bare yes/no.** Give at least two real alternatives,
+  including doing nothing or the simplest workable option when relevant. For
+  each one, state:
+  - **Functional differences:** what the user and their customers will
+    experience, including failure and edge states.
+  - **Engineering complexity, architecture and maintainability:** new moving
+    parts, background jobs, schema, infrastructure and operating cost, and
+    what we would have to maintain afterwards. Use the complexity ladder in
+    [`options`](../options/SKILL.md).
+  - **Prior art:** what leading apps or products do for the same behaviour.
+    Mark each claim **verified** (with a source or checked behaviour) or
+    **unverified**. Never lean on an unchecked analogy.
+- **Recommend one option, with the reason**, and say what the user accepts by
+  taking it.
+- **Product decisions stand alone.** A decision that changes what users see,
+  or makes the system act on a user's behalf (posting, sending, deleting,
+  charging), is labelled a product decision and presented on its own. Never
+  bundle it into a list of technical yes/no items.
+- **Check the premises before relaying.** Whoever passes a decision on checks
+  the worker's framing first: is the assumed constraint real, is a simpler
+  mechanism missing, is the comparison true? Challenge a recommendation rather
+  than passing it through.
+
+When you relay, you are a check, not a pipe:
+
+- If a worker's options fall short of the frame, send them back to the worker
+  rather than filling the gaps with guesses.
+- Pull product decisions out of any batch and present each on its own.
+  Technical items can stay a compact list.
+- Add no analogy or claim about another product that you haven't checked.
+  Label what you couldn't check as unverified.
+
+[references/decision-framing.md](references/decision-framing.md) shows a
+relayed decision before and after, from a real postmortem.
 
 Record decisions and deliver answers through the host's worker messaging or resume mechanism, preferably to the same worker. Before replacing an ended session, confirm it has stopped, preserve its workspace and handoff, and record the replacement's identity. Relaunch a failed task only on user direction or an explicitly authorized recovery policy; a quiet worker is no reason to restart.
 

@@ -1,9 +1,11 @@
+import { remoteFailureKind, reportUnknownRemoteDelivery } from './utils/remoteFailure';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { BrowserFallback } from './components/BrowserFallback';
+import { stripIpcWrapper } from './utils/ipcErrorMessage';
 import './index.css';
 import './styles/markdown-preview.css';
 import './styles/notebook-preview.css';
@@ -48,6 +50,12 @@ export function mountDesktopRenderer(): void {
 
   // Global error handlers catch failures outside React error boundaries.
   window.addEventListener('unhandledrejection', (event) => {
+    const remoteMessage = event.reason instanceof Error ? event.reason.message : String(event.reason);
+    if (remoteFailureKind(remoteMessage)) {
+      reportUnknownRemoteDelivery(remoteMessage);
+      event.preventDefault();
+      return;
+    }
     if (REMOTE_HOST_UNREACHABLE.test(getErrorMessage(event.reason))) {
       // The remote host dropped (sleep, a network change). The connection
       // status reports it and the client reconnects; this is not a crash.
@@ -63,7 +71,7 @@ export function mountDesktopRenderer(): void {
       url: window.location.href,
     });
     event.preventDefault();
-    alert('An unexpected error occurred. The application may need to be restarted.\n\nError: ' + (event.reason?.message || String(event.reason)));
+    alert(`Something went wrong: ${stripIpcWrapper(getErrorMessage(event.reason))}\n\nPane is still running. If something looks wrong, restart Pane.`);
   });
 
   window.addEventListener('error', (event) => {

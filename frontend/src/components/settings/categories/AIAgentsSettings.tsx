@@ -8,12 +8,21 @@ import { SettingRow, SettingsPage } from '../SettingRow';
 import { ImmediateToggle, SegmentedControl } from '../SettingsControls';
 import type { SettingsPersistence } from '../useSettingsPersistence';
 import { API } from '../../../utils/api';
+import { isChatEnabled } from '../../../stores/configStore';
 import { PANE_CHAT_AGENT_LABELS, type PaneChatAgent } from '../../../../../shared/types/paneChat';
 import { SessionLaunchFields } from '../../SessionLaunchFields';
 import { DEFAULT_SESSION_PROFILE } from '../../../../../shared/types/sessionProfile';
 import { visibleAgentPresets } from '../../../utils/agentPresets';
+import type { AgentLaunchPresetId } from '../../../../../shared/constants/agentLaunchPresets';
 
-const paneChatAgentOptions = visibleAgentPresets().map(({ id }) => ({ id, label: PANE_CHAT_AGENT_LABELS[id] }));
+function isPaneChatAgent(id: AgentLaunchPresetId): id is PaneChatAgent {
+  return id === 'claude' || id === 'codex' || id === 'cursor';
+}
+
+const paneChatAgentOptions = visibleAgentPresets()
+  .map(({ id }) => id)
+  .filter(isPaneChatAgent)
+  .map(id => ({ id, label: PANE_CHAT_AGENT_LABELS[id] }));
 
 type McpToolsetChoice = 'core' | 'all';
 const mcpToolsetOptions: { id: McpToolsetChoice; label: string }[] = [
@@ -51,6 +60,10 @@ export function AIAgentsSettings({ persistence, onDirtyChange }: AIAgentsSetting
   return (
     <SettingsPage title="AI & Agents" description="Application-wide defaults for Sessions and coding-agent integrations.">
       <SettingsSection title="Agent defaults">
+        {isChatEnabled(config) && <SettingRow settingId="default-agent-interface" label="Default agent interface" description="Choose the interface for new agent tabs. Switching a tab also updates this default; existing tabs keep their choice. Pane sets up required adapters automatically on the workspace host." saveState={persistence.saveStates['default-agent-interface']}>
+          <SegmentedControl<'terminal' | 'chat'> label="Default agent interface" value={config.defaultAgentInterface ?? 'terminal'} options={[{ id: 'terminal', label: 'Terminal' }, { id: 'chat', label: 'Chat' }]} onChange={value => void persistence.saveConfig('default-agent-interface', { defaultAgentInterface: value })} />
+        </SettingRow>}
+
         <SettingRow
           settingId="default-pane-chat-agent"
           label="Default Sessions agent"
@@ -105,7 +118,7 @@ export function AIAgentsSettings({ persistence, onDirtyChange }: AIAgentsSetting
         <SettingRow
           settingId="agent-context"
           label="Publish Pane instructions to AGENTS.md"
-          description="Edits files in your repositories: adds a marked Pane section to the AGENTS.md at each active repository's root, creating the file if needed. Off by default; turning it off removes only Pane's section."
+          description="Edits repository files: adds Pane instructions to AGENTS.md and exports scoped Notes to AGENTS.md and CLAUDE.md in their workspaces. These edits can appear in Git changes. Off by default; turning it off removes Pane's managed sections. Notes remain available through native Pane terminals."
           saveState={persistence.saveStates['agent-context']}
         >
           <ImmediateToggle

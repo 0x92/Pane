@@ -10,6 +10,9 @@ import { panelApi } from '../services/panelApi';
 import { openPaneTarget } from '../components/terminal/openPaneLink';
 import { restoreHostNavigation, withHostNavigationWritesPaused } from '../utils/hostNavigationMemory';
 import { API } from '../utils/api';
+import { rememberPaneLayout } from '../utils/paneLayoutMemory';
+import { getActiveRemoteHostId } from '../../../shared/types/remoteDaemon';
+import { restoreRemoteTerminals, restoreRemoteWorkspace } from '../utils/remoteRestoration';
 import { devLog } from '../utils/console';
 import { claimCreatedPane, markAppReady } from '../utils/journeyTimings';
 import type { Session, SessionOutput, GitStatus } from '../types/session';
@@ -21,23 +24,38 @@ interface SessionEventData {
 
 type ValidatedEventData = SessionEventData | SessionOutput;
 
-async function reloadRemoteRuntimeState(loadSessions: (sessions: Session[]) => void, hostChanged: boolean): Promise<void> {
+// Initial reads and all resyncs share ownership. A later runtime event retires
+// the whole outgoing continuation, including lists, restoration and events.
+let runtimeGeneration = 0;
+
+async function reloadRemoteRuntimeState(loadSessions: (sessions: Session[]) => void, hostChanged: boolean, ownsRuntime: () => boolean): Promise<void> {
+  if (!ownsRuntime()) return;
   if (hostChanged) {
-    // Main keeps expanded repositories per host; load them before the new host's repositories arrive.
-    const uiState = await window.electronAPI.uiState.getExpanded();
-    useNavigationStore.getState().resetExpandedProjectsForHost(uiState.success ? uiState.data?.expandedProjects ?? [] : []);
-    // Session tiling is per host too, and its Session ids belong to the host we
-    // are leaving. Drop it so the incoming host hydrates its own.
+    // Invalidate outgoing Session requests and tile memory before any host read.
+    useOrchestrationSessionStore.getState().invalidateHost();
+    useSessionStore.getState().invalidateHost();
+    usePanelStore.setState({ panels: {}, activePanels: {}, layouts: {}, focusedGroupIds: {}, activationRequests: {},
+      agentStatus: {}, agentStatusSession: {}, agentStatusReason: {}, agentStatusSnapshotVersion: 0, activityStatus: {}, lastActivityAt: {}, unviewedCompletedActivity: {} });
     useSessionWorkspaceLayoutStore.getState().reset();
+    // Main keeps expanded repositories, opened Sessions and open Archived groups per host; load them before the new host's lists arrive.
+    const uiState = await window.electronAPI.uiState.getExpanded();
+    if (!ownsRuntime()) return;
+    useNavigationStore.getState().resetExpandedProjectsForHost(uiState.success ? uiState.data?.expandedProjects ?? [] : []);
+    useNavigationStore.getState().hydrateExpandedSessions(uiState.success ? uiState.data?.expandedSessions ?? [] : []);
+    useNavigationStore.getState().hydrateExpandedArchivedProjects(uiState.success ? uiState.data?.expandedArchivedProjects ?? [] : []);
   }
   // Repository ids are per host, so another host's repository view is meaningless.
   if (hostChanged && useNavigationStore.getState().activeView === 'project') {
     useNavigationStore.getState().navigateToSessions();
     await useSessionStore.getState().setActiveSession(null);
+    if (!ownsRuntime()) return;
   }
-  await useConfigStore.getState().fetchConfig();
+  await useConfigStore.getState().fetchConfig(ownsRuntime);
+  if (!ownsRuntime()) return;
 
   const sessionsResponse = await API.sessions.getAll();
+  if (!ownsRuntime()) return;
+  if (!sessionsResponse.success || !sessionsResponse.data) throw new Error(sessionsResponse.error || 'Could not restore Sessions');
   if (sessionsResponse.success && sessionsResponse.data) {
     const sessionsWithJsonMessages = sessionsResponse.data.map((session: Session) => ({
       ...session,
@@ -50,6 +68,7 @@ async function reloadRemoteRuntimeState(loadSessions: (sessions: Session[]) => v
     if (activeSessionId && activeSessionId !== activeMainRepoSession?.id
       && !sessionsWithJsonMessages.some((session: Session) => session.id === activeSessionId)) {
       await useSessionStore.getState().setActiveSession(null);
+      if (!ownsRuntime()) return;
       usePanelStore.getState().setPanels(activeSessionId, []);
     }
   }
@@ -57,34 +76,35 @@ async function reloadRemoteRuntimeState(loadSessions: (sessions: Session[]) => v
   if (hostChanged) {
     // The new host's config and Panes have landed, so its remembered location
     // can be validated and reopened; the panel load below brings back its tab.
-    await restoreHostNavigation();
+    await restoreHostNavigation(ownsRuntime);
+    if (!ownsRuntime()) return;
   }
 
   const activeSessionId = useSessionStore.getState().activeSessionId;
   if (activeSessionId) {
     const panels = await panelApi.loadPanelsForSession(activeSessionId);
+    if (!ownsRuntime()) return;
+    // The tab shown stays this desktop's own; the host's active flag is only
+    // the last one any client picked.
     usePanelStore.getState().setPanels(activeSessionId, panels);
-
-    const activePanel = panels.find((panel) => panel.state.isActive);
-    if (activePanel) {
-      usePanelStore.getState().setActivePanel(activeSessionId, activePanel.id);
-    }
   }
 
+  if (!ownsRuntime()) return;
   window.dispatchEvent(new Event('project-changed'));
   window.dispatchEvent(new Event('project-sessions-refresh'));
   // Sessions belong to the host too; adopt the new host's selection.
-  window.dispatchEvent(new CustomEvent('orchestration-sessions-changed', { detail: { selectionChanged: true } }));
+  await useOrchestrationSessionStore.getState().refresh({ adoptServerSelection: true, throwOnError: true });
+  if (ownsRuntime()) await restoreRemoteWorkspace();
 }
 
-async function resyncRemoteRuntimeState(loadSessions: (sessions: Session[]) => void, hostChanged: boolean): Promise<void> {
+async function resyncRemoteRuntimeState(loadSessions: (sessions: Session[]) => void, hostChanged: boolean, ownsRuntime: () => boolean): Promise<void> {
   if (!hostChanged) {
-    await reloadRemoteRuntimeState(loadSessions, false);
+    await reloadRemoteRuntimeState(loadSessions, false, ownsRuntime);
     return;
   }
   // A switch clears the outgoing host's selection before restoring the incoming
   // host's; don't let those intermediate states be remembered as either one's.
-  await withHostNavigationWritesPaused(() => reloadRemoteRuntimeState(loadSessions, true));
+  await withHostNavigationWritesPaused(() => reloadRemoteRuntimeState(loadSessions, true, ownsRuntime));
 }
 
 // Frontend validation helpers
@@ -205,6 +225,9 @@ export function useIPCEvents() {
     }
 
     // Set up IPC event listeners
+    let disposed = false;
+    const initialGeneration = runtimeGeneration;
+    const ownsInitialRead = () => !disposed && initialGeneration === runtimeGeneration;
     const unsubscribeFunctions: (() => void)[] = [];
 
     // Listen for session events
@@ -259,13 +282,16 @@ export function useIPCEvents() {
 
     const unsubscribePaneFocusRequested = window.electronAPI.events.onPaneFocusRequested(({ paneId, panelId }) => {
       devLog.debug('[useIPCEvents] Pane focus requested:', { paneId, panelId });
+      // `panes focus` and `panes create --focus` move the host's own desktop
+      // window only; a desktop connected to that host as a remote stays put.
+      const config = useConfigStore.getState().config;
+      if (!config || getActiveRemoteHostId(config.remoteDaemon) !== null) return;
       // Same as clicking the Pane in the sidebar, which also leaves a repository or Sessions view.
       useNavigationStore.getState().navigateToSessions();
-      void useSessionStore.getState().setActiveSession(paneId).then(() => {
-        if (panelId) {
-          usePanelStore.getState().setActivePanel(paneId, panelId);
-        }
-      });
+      // The Pane view applies the tab once its layout has loaded, over this
+      // desktop's remembered one.
+      if (panelId) usePanelStore.getState().requestActivation({ sessionId: paneId, panelId });
+      void useSessionStore.getState().setActiveSession(paneId);
     });
     unsubscribeFunctions.push(unsubscribePaneFocusRequested);
 
@@ -284,6 +310,12 @@ export function useIPCEvents() {
     });
     unsubscribeFunctions.push(unsubscribePaneOpenLink);
 
+    // A paired phone edited shortcuts or voice keys; pick them up without a restart.
+    const unsubscribeRemoteSettingsChanged = window.electronAPI.events.onRemoteSettingsChanged(() => {
+      void useConfigStore.getState().fetchConfig().catch(() => undefined);
+    });
+    unsubscribeFunctions.push(unsubscribeRemoteSettingsChanged);
+
     const unsubscribeSessionDeleted = window.electronAPI.events.onSessionDeleted((sessionData) => {
       devLog.debug('[useIPCEvents] Session deleted:', sessionData);
       const sessionId = sessionData.id;
@@ -293,6 +325,10 @@ export function useIPCEvents() {
         gitStatusLoading.drain(sessionId);
         gitStatusUpdated.drain(sessionId);
       }
+
+      // Archived or deleted: drop this desktop's view memory for the Pane.
+      const config = useConfigStore.getState().config;
+      if (sessionId && config) rememberPaneLayout(getActiveRemoteHostId(config.remoteDaemon), sessionId, null);
 
       // Dispatch a custom event for other components to listen to
       window.dispatchEvent(new CustomEvent('session-deleted', {
@@ -375,6 +411,12 @@ export function useIPCEvents() {
       window.dispatchEvent(new CustomEvent('orchestration-sessions-changed', { detail: change }));
     });
     if (unsubscribeOrchestrationChanged) unsubscribeFunctions.push(unsubscribeOrchestrationChanged);
+
+    // Every project create or delete (dialogs, onboarding, runpane CLI, MCP) reaches the project-changed listeners.
+    const unsubscribeProjectListChanged = window.electronAPI.events.onProjectListChanged?.(() => {
+      window.dispatchEvent(new Event('project-changed'));
+    });
+    if (unsubscribeProjectListChanged) unsubscribeFunctions.push(unsubscribeProjectListChanged);
 
     const unsubscribeOrchestrationOverview = window.electronAPI.events.onOrchestrationSessionsOverviewUpdated?.((change) => {
       window.dispatchEvent(new CustomEvent('orchestration-sessions-overview-updated', { detail: change }));
@@ -489,7 +531,9 @@ export function useIPCEvents() {
       unsubscribeFunctions.push(unsubscribeSpotlightTamper);
     }
 
-    const unsubscribeRemoteResync = window.electronAPI.events.onRemoteDaemonResyncRequested?.(({ hostChanged }) => {
+    const unsubscribeRemoteResync = window.electronAPI.events.onRemoteDaemonResyncRequested?.(({ hostChanged, restoreId }) => {
+      const generation = ++runtimeGeneration;
+      const ownsRuntime = () => !disposed && generation === runtimeGeneration;
       // Destroy outgoing guests before async resync. Hosts can share panel IDs,
       // but their file URLs and Electron partitions must never be reused.
       if (hostChanged) {
@@ -498,9 +542,14 @@ export function useIPCEvents() {
       }
       void (async () => {
         try {
-          await resyncRemoteRuntimeState(loadSessions, hostChanged);
+          await resyncRemoteRuntimeState(loadSessions, hostChanged, ownsRuntime);
+          if (ownsRuntime()) await restoreRemoteTerminals();
+          if (ownsRuntime() && restoreId !== undefined) await window.electronAPI.remoteDaemon.restoreComplete(restoreId);
         } catch (error) {
-          console.error('[useIPCEvents] Failed to resync renderer state after remote reconnect:', error);
+          if (ownsRuntime()) {
+            console.error('[useIPCEvents] Failed to resync renderer state after remote reconnect:', error);
+            if (restoreId !== undefined) await window.electronAPI.remoteDaemon.restoreComplete(restoreId, 'Workspace restoration failed').catch(() => undefined);
+          }
         }
       })();
     });
@@ -511,6 +560,7 @@ export function useIPCEvents() {
     // Load initial sessions
     API.sessions.getAll()
       .then(response => {
+        if (!ownsInitialRead()) return;
         if (response.success && response.data) {
           const sessionsWithJsonMessages = response.data.map((session: Session) => ({
             ...session,
@@ -521,10 +571,11 @@ export function useIPCEvents() {
         }
       })
       .catch(error => {
-        console.error('Failed to load initial sessions:', error);
+        if (ownsInitialRead()) console.error('Failed to load initial sessions:', error);
       });
 
     return () => {
+      disposed = true;
       // Clean up all event listeners
       unsubscribeFunctions.forEach(unsubscribe => unsubscribe());
     };

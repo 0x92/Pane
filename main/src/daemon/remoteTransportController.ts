@@ -50,6 +50,8 @@ export class PaneRemoteTransportController {
           sessionId: boundary.nonEmptyString,
           state: boundary.enumeration('blocked', 'working', 'idle', 'unknown'),
           reason: boundary.nullable(boundary.string),
+          agentType: boundary.optional(boundary.string),
+          workedVisibly: boundary.optional(boundary.boolean),
         }));
         if (event) void this.mobilePushSender.observeStatus(event).catch(() => {
           console.warn('[Pane mobile push] Could not persist attention state');
@@ -62,6 +64,7 @@ export class PaneRemoteTransportController {
     private readonly commandRegistry: PaneCommandRegistry,
     private readonly configManager: RemoteTransportConfigProvider,
     private readonly analyticsManager?: Pick<AnalyticsManager, 'track'>,
+    private readonly isForwardedPort?: (port: number) => boolean,
   ) {
     this.mobilePushSender = getMobilePushSender(configManager);
   }
@@ -125,6 +128,7 @@ export class PaneRemoteTransportController {
 
       const remoteHttpApiServer = new PaneRemoteHttpApiServer(this.commandRegistry, this.configManager, {
         analyticsSink: createRemotePaneAnalyticsSink(this.analyticsManager),
+        isForwardedPort: this.isForwardedPort,
       });
       try {
         await remoteHttpApiServer.start();

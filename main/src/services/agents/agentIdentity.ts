@@ -4,7 +4,7 @@ import { boundary, decodeBoundary } from '../../../../shared/validation/boundary
 
 export type CliAgentType = NonNullable<TerminalPanelState['agentType']>;
 
-export const CLI_AGENT_TYPES: readonly CliAgentType[] = ['claude', 'codex', 'cursor'];
+export const CLI_AGENT_TYPES: readonly CliAgentType[] = ['claude', 'codex', 'cursor', 'opencode'];
 
 interface AgentExecutableLookup {
   readonly [executable: string]: CliAgentType;
@@ -14,6 +14,7 @@ const AGENT_EXECUTABLES: AgentExecutableLookup = {
   'cursor-agent': 'cursor',
   claude: 'claude',
   codex: 'codex',
+  opencode: 'opencode',
 };
 
 const OPTIONLESS_COMMAND_WRAPPERS = new Set(['command', 'exec', 'nohup']);
@@ -29,7 +30,7 @@ const ENV_OPTIONS_WITH_SEPARATE_OPERAND = new Set([
 const ENV_FLAGS = new Set(['-i', '--ignore-environment', '-0', '--null', '-v', '--debug']);
 const MAX_ENV_SPLIT_EXPANSIONS = 16;
 
-function tokenizeShellCommand(command: string, platformHint: NodeJS.Platform, spans?: Array<{ start: number; end: number }>): string[] | undefined {
+export function tokenizeShellCommand(command: string, platformHint: NodeJS.Platform, spans?: Array<{ start: number; end: number }>): string[] | undefined {
   const tokens: string[] = [];
   let token = '';
   let tokenStarted = false;

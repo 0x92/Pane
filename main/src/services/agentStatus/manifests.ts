@@ -14,8 +14,11 @@
 
 import type { AgentManifest } from './manifestEngine';
 
-/** Braille spinner glyphs Claude/Codex animate in their OSC title / status line. */
-const SPINNER_TITLE = /^[\u{2800}-\u{28FF}] /u;
+/**
+ * Spinner glyphs agents animate in their OSC title while a turn runs: Braille
+ * (Codex, older Claude) and Claude Code 2.1.289's half circles (`✳` when idle).
+ */
+const SPINNER_TITLE = /^[\u{2800}-\u{28FF}\u{25D0}-\u{25D3}] /u;
 const CODEX_SPINNER = /(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)/u;
 /** Codex's header while it boots; its composer shows early and may give way to the trust prompt. */
 export const CODEX_LOADING_HEADER = /\bmodel:\s+loading\b/;
@@ -88,7 +91,19 @@ export const CLAUDE_MANIFEST: AgentManifest = {
       ],
     },
     {
-      // Startup menus: folder trust and bypass-permissions warnings ("❯ No, exit"
+      // Folder-trust prompt; the Session view shows a banner while it is up.
+      id: 'workspace_trust_prompt',
+      state: 'blocked',
+      priority: 1050,
+      region: 'after_last_horizontal_rule',
+      visibleBlocker: true,
+      contains: ['accessing workspace:', 'yes, i trust this folder'],
+      // Live only while its footer is the last thing on screen: after "No, exit"
+      // the screen stays in scrollback above a shell prompt.
+      regex: [/esc to cancel\s*$/i],
+    },
+    {
+      // Startup menus: bypass-permissions warnings ("❯ No, exit"
       // above "Enter to confirm · Esc to cancel"), and first-run theme and login
       // pickers ("❯ 2. Dark mode").
       id: 'live_selection_menu',
@@ -253,6 +268,36 @@ export const CODEX_MANIFEST: AgentManifest = {
         { contains: ['enter continue', 'esc quit'] },
       ],
     },
+    // Full-screen startup prompts that hold the composer back. Each is live only while its footer
+    // is the last thing on screen, and each has its own id so the next one reads as a new question.
+    {
+      id: 'update_prompt',
+      state: 'blocked',
+      priority: 1000,
+      region: 'whole_recent',
+      visibleBlocker: true,
+      contains: ['update available', 'skip until next version'],
+      regex: [/enter continue · esc skip\s*$/i],
+    },
+    {
+      id: 'sign_in_prompt',
+      state: 'blocked',
+      priority: 1000,
+      region: 'whole_recent',
+      visibleBlocker: true,
+      contains: ['sign in with chatgpt'],
+      regex: [/press enter to continue\s*$/i],
+    },
+    {
+      // Folder trust since 0.160 ("esc back"); the 0.156 footer is in live_strong_blocker.
+      id: 'folder_trust_prompt',
+      state: 'blocked',
+      priority: 1000,
+      region: 'whole_recent',
+      visibleBlocker: true,
+      contains: ['trust this folder?'],
+      regex: [/enter continue · esc (?:back|quit)\s*$/i],
+    },
     {
       id: 'weak_blocker',
       state: 'blocked',
@@ -320,6 +365,17 @@ export const GENERIC_MANIFEST: AgentManifest = {
         { lineRegex: [/waiting for permission\.{0,3}\s*$/i] },
       ],
     },
+    {
+      // A clack-style prompt still open at the bottom (Agent Farm's variant
+      // picker, for one): `◆` heads it, `│` rows follow, `└` closes it.
+      // Answered prompts turn `◆` into `◇`.
+      id: 'live_choice_prompt',
+      state: 'blocked',
+      priority: 590,
+      region: 'whole_recent',
+      visibleBlocker: true,
+      regex: [/(?:^|\n)[^\S\n]*◆[^\S\n][^\n]*\n(?:[^\S\n]*│[^\n]*\n)*[^\S\n]*└[^\S\n]*\s*$/u],
+    },
   ],
 };
 
@@ -380,6 +436,65 @@ export const CURSOR_MANIFEST: AgentManifest = {
   ],
 };
 
+/*
+ * Distilled from isolated OpenCode v2.0.19 PTY frames. OpenCode keeps its
+ * composer visible while work runs, so only the live footer distinguishes
+ * working from idle. Prompts are scoped to the bottom live region so matching
+ * approval or error text in conversation history cannot keep a pane blocked.
+ */
+export const OPENCODE_MANIFEST: AgentManifest = {
+  id: 'opencode',
+  rules: [
+    {
+      id: 'live_permission_action',
+      state: 'blocked',
+      priority: 1000,
+      region: 'bottom_non_empty_lines(2)',
+      visibleBlocker: true,
+      // Confirmation controls are current only at the bottom. Support the
+      // captured one-line layout and the established split-line fixture.
+      any: [
+        {
+          regex: [
+            /(?:^|\n)[^\S\n]*┃[^\S\n]+Allow once[^\S\n]+Always allow[^\S\n]+Reject[^\S\n]+ctrl\+f fullscreen[^\S\n]+⇆ select[^\S\n]+enter confirm[^\S\n]*$/iu,
+          ],
+        },
+        {
+          regex: [
+            /^[^\S\n]*┃[^\S\n]+Allow once[^\S\n]+Always allow[^\S\n]+Reject[^\S\n]*\n[^\S\n]*┃[^\S\n]+ctrl\+f fullscreen[^\S\n]+⇆ select[^\S\n]+enter confirm[^\S\n]*$/iu,
+          ],
+        },
+      ],
+    },
+    {
+      id: 'interruptible_composer',
+      state: 'working',
+      priority: 700,
+      region: 'bottom_non_empty_lines(4)',
+      visibleWorking: true,
+      lineRegex: [/\besc(?: again to)? interrupt\b.*\bctrl\+p commands\b/i],
+    },
+    {
+      id: 'idle_composer',
+      state: 'idle',
+      priority: 500,
+      region: 'bottom_non_empty_lines(4)',
+      visibleIdle: true,
+      contains: ['ctrl+p commands'],
+      any: [
+        { lineRegex: [/^\s*╹▀{3,}/u] },
+        // Transparent themes omit the bottom border; the metadata row still
+        // immediately precedes the live footer, separated only by blank rows.
+        { regex: [/(?:^|\n)[^\S\n]*┃[^\n]+\n\s*[^\n]*ctrl\+p commands[^\n]*\s*$/u] },
+      ],
+      not: [
+        { lineRegex: [/\besc(?: again to)? interrupt\b.*\bctrl\+p commands\b/i] },
+        { contains: ['permission required', 'enter confirm'] },
+      ],
+    },
+  ],
+};
+
 interface AgentManifestLookup {
   [agent: string]: AgentManifest;
 }
@@ -388,6 +503,7 @@ const MANIFESTS_BY_AGENT: AgentManifestLookup = {
   claude: CLAUDE_MANIFEST,
   codex: CODEX_MANIFEST,
   cursor: CURSOR_MANIFEST,
+  opencode: OPENCODE_MANIFEST,
 };
 
 /**

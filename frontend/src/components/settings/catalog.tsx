@@ -29,10 +29,10 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   {
     id: 'general',
     label: 'General',
-    description: 'Startup, application updates, and feedback.',
+    description: 'Startup, application updates, feedback, and opening files.',
     icon: Settings,
-    settingIds: ['automatic-updates', 'check-updates-now', 'send-feedback', 'start-on-login', 'keep-awake'],
-    aliases: ['startup', 'updates', 'feedback', 'bug report', 'feature request', 'github issue', 'login', 'sleep', 'caffeinate', 'awake', 'power'],
+    settingIds: ['automatic-updates', 'check-updates-now', 'send-feedback', 'start-on-login', 'keep-awake', 'html-file-open-mode'],
+    aliases: ['startup', 'updates', 'feedback', 'bug report', 'feature request', 'github issue', 'login', 'sleep', 'caffeinate', 'awake', 'power', 'battery', 'plugged in', 'lid', 'html', 'preview', 'open html', 'explorer', 'source'],
   },
   {
     id: 'appearance',
@@ -55,7 +55,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
     label: 'AI & Agents',
     description: 'Agent defaults, context, and CLI installations.',
     icon: Bot,
-    settingIds: ['default-pane-chat-agent', 'mcp-registration', 'mcp-toolsets', 'agent-skill', 'agent-context', 'session-defaults', 'claude-executable'],
+    settingIds: ['default-agent-interface', 'default-pane-chat-agent', 'mcp-registration', 'mcp-toolsets', 'agent-skill', 'agent-context', 'session-defaults', 'claude-executable'],
     aliases: ['claude', 'codex', 'cursor', 'pane chat', 'agents.md', 'mcp', 'tools', 'skill'],
   },
   {
@@ -87,16 +87,16 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
     label: 'Remote Access',
     description: 'Remote Pane hosts and saved connections.',
     icon: Link2,
-    settingIds: ['remote-pane', 'remote-host-setup', 'remote-connections', 'remote-advanced-host'],
-    aliases: ['remote pane', 'daemon', 'tailscale', 'cloud vm', 'vm', 'host'],
+    settingIds: ['remote-machines', 'remote-visibility', 'remote-address', 'remote-password', 'remote-pane', 'remote-host-setup', 'remote-advanced-host'],
+    aliases: ['remote pane', 'daemon', 'tailscale', 'cloud vm', 'vm', 'host', 'visibility', 'password', 'my machines', 'workspaces'],
   },
   {
     id: 'integrations',
     label: 'Integrations',
     description: 'Provider credentials and voice transcription.',
     icon: BrainCircuit,
-    settingIds: ['voice-transcription'],
-    aliases: ['fal', 'openrouter', 'deepgram', 'voice', 'dictation'],
+    settingIds: ['voice-transcription', 'apns-credentials'],
+    aliases: ['fal', 'openrouter', 'deepgram', 'voice', 'dictation', 'apns', 'push', 'notifications', 'keys'],
   },
   {
     id: 'shortcuts',
@@ -109,18 +109,18 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   {
     id: 'privacy',
     label: 'Privacy',
-    description: 'Analytics and data-sharing choices.',
+    description: 'Analytics, data-sharing choices, and browser logins.',
     icon: Shield,
-    settingIds: ['analytics'],
-    aliases: ['analytics', 'telemetry', 'tracking'],
+    settingIds: ['analytics', 'browser-data'],
+    aliases: ['analytics', 'telemetry', 'tracking', 'browser', 'cookies', 'logins', 'sign out'],
   },
   {
     id: 'advanced',
     label: 'Advanced',
-    description: 'Diagnostics, terminal backend, and environment paths.',
+    description: 'Diagnostics, terminal backend, environment paths, and experimental features.',
     icon: SlidersHorizontal,
-    settingIds: ['verbose-logging', 'developer-mode', 'journey-timings', 'pty-host', 'additional-paths'],
-    aliases: ['debug', 'verbose', 'developer', 'performance', 'timings', 'pty', 'path'],
+    settingIds: ['verbose-logging', 'developer-mode', 'journey-timings', 'pty-host', 'additional-paths', 'mission-control', 'experimental-chat', 'attention-inbox'],
+    aliases: ['debug', 'verbose', 'developer', 'performance', 'timings', 'pty', 'path', 'experimental', 'mission control', 'inbox', 'attention'],
   },
 ] as const;
 

@@ -1,3 +1,6 @@
+import type { AgentChatClient } from '../../../../shared/types/agentChat';
+import { boundary, decodeOptionalBoundary } from '../../../../shared/validation/boundaryDecoder';
+import { decodeAgentChatEvent, decodeAgentChatView } from '../../../../shared/types/agentChatDecoders';
 import type {
   OrchestrationSessionCreateInput,
   OrchestrationSessionListResult,
@@ -6,6 +9,7 @@ import type {
   OrchestrationSessionView,
 } from '../../../../shared/types/orchestrationSession';
 import type { ToolPanel } from '../../../../shared/types/panels';
+import type { ListeningPortsSnapshot } from '../../../../shared/types/listeningPorts';
 import type { RemoteDaemonEventEnvelope, RemotePaneConnectionProfile, RemotePwaAffordances } from '../../../../shared/types/remoteDaemon';
 import type {
   VoiceDeepgramTokenResult,
@@ -27,6 +31,17 @@ export interface RemoteBranchInfo {
   hasWorktree: boolean;
   isRemote: boolean;
 }
+
+/** One entry of a worktree folder; `path` is relative to the worktree, in the host's separators. */
+export interface RemoteFileEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number;
+}
+
+/** The `file:*` commands answer `{ success, error, ...result }` instead of the `{ success, data }` envelope. */
+type FileCommandResult<T> = T & { success: boolean; error?: string };
 
 export interface RemoteCreateSessionResult {
   jobId?: string;
@@ -53,12 +68,22 @@ export class RemoteRuntimeAdapter {
     return this.client.connect();
   }
 
+  retryNow(): void { this.client.retryNow(); }
+
+  suspend(): void { this.client.suspend(); }
+
+  resume(): void { this.client.resume(); }
+
   disconnect(): void {
     this.client.disconnect();
   }
 
   getStatus(): RemoteBrowserConnectionState {
     return this.client.getState();
+  }
+
+  onRestore(listener: (signal: AbortSignal) => Promise<void>): () => void {
+    return this.client.onRestore(listener);
   }
 
   onStatus(listener: RemoteRuntimeStatusListener): () => void {
@@ -85,6 +110,23 @@ export class RemoteRuntimeAdapter {
     // SAFETY: The adapter method selects T from the invoked channel contract.
     return response as T;
   }
+
+  readonly agentChat: AgentChatClient = {
+    get: async panelId => decodeAgentChatView(await this.invoke('agent-chat:get', [panelId])),
+    setup: () => this.invoke('agent-chat:setup'),
+    identify: async (panelId, nativeId, socketPath) => decodeAgentChatView(await this.invoke('agent-chat:identify', [panelId, nativeId, socketPath])),
+    switch: (panelId, mode, generation) => this.invoke('agent-chat:switch', [panelId, mode, generation]),
+    recover: (panelId, mode, generation) => this.invoke('agent-chat:recover', [panelId, mode, generation]),
+    send: (panelId, request) => this.invoke('agent-chat:send', [panelId, request]),
+    receipt: (panelId, operationId) => this.invoke('agent-chat:receipt', [panelId, operationId]),
+    configure: (panelId, generation, configId, value) => this.invoke('agent-chat:configure', [panelId, generation, configId, value]),
+    cancel: (panelId, generation) => this.invoke('agent-chat:cancel', [panelId, generation]),
+    permission: (panelId, generation, requestId, optionId) => this.invoke('agent-chat:permission', [panelId, generation, requestId, optionId]),
+    stop: panelId => this.invoke('agent-chat:stop', [panelId]),
+    onEvent: callback => this.onEvent(event => { if (event.channel === 'agent-chat:event') callback(decodeAgentChatEvent(event.args[0])); }),
+    onState: callback => this.onEvent(event => { if (event.channel === 'agent-chat:state') callback(decodeAgentChatView(event.args[0])); }),
+    onReconnect: callback => this.onStatus(state => { if (state.status === 'connected') callback(); }),
+  };
 
   getProjectsWithSessions(): Promise<RemoteProjectWithSessions[]> {
     return this.invoke<RemoteProjectWithSessions[]>('sessions:get-all-with-projects');
@@ -191,6 +233,46 @@ export class RemoteRuntimeAdapter {
     }]);
   }
 
+  createBrowserPanel(sessionId: string): Promise<ToolPanel> {
+    return this.invoke<ToolPanel>('panels:create', [{ sessionId, type: 'browser', title: 'Browser' }]);
+  }
+
+  updatePanelState(panelId: string, state: ToolPanel['state']): Promise<void> {
+    return this.invoke<void>('panels:update', [panelId, { state }]);
+  }
+
+  /** Asks the host for a web port's phone address; it arrives with the next ports:changed. */
+  requestPhoneAddress(port: number): Promise<void> {
+    return this.invoke<void>('ports:phone-address', [port]);
+  }
+
+  getListeningPorts(): Promise<ListeningPortsSnapshot> {
+    return this.invoke<ListeningPortsSnapshot>('ports:list');
+  }
+
+  /** A folder of the pane's worktree, folders first; '' is the worktree itself. */
+  async listFiles(sessionId: string, path: string): Promise<RemoteFileEntry[]> {
+    return (await this.invokeFileCommand<{ files: RemoteFileEntry[] }>('file:list', [{ sessionId, path }])).files;
+  }
+
+  /** A worktree file's text, or null when the host finds it binary. */
+  async readTextFile(sessionId: string, filePath: string): Promise<string | null> {
+    const result = await this.client.invoke<FileCommandResult<{ content?: string; binary?: boolean }>>('file:read', [{ sessionId, filePath }]);
+    if (result.binary) return null;
+    if (!result.success) throw new Error(result.error ?? 'Could not read the file');
+    return result.content ?? '';
+  }
+
+  async writeTextFile(sessionId: string, filePath: string, content: string): Promise<void> {
+    await this.invokeFileCommand('file:write', [{ sessionId, filePath, content }]);
+  }
+
+  private async invokeFileCommand<T extends object = object>(channel: string, args: unknown[]): Promise<T> {
+    const result = await this.client.invoke<FileCommandResult<T>>(channel, args);
+    if (!result.success) throw new Error(result.error ?? `${channel} failed`);
+    return result;
+  }
+
   checkPanelInitialized(panelId: string): Promise<boolean> {
     return this.invoke<boolean>('panels:checkInitialized', [panelId]);
   }
@@ -219,11 +301,11 @@ export class RemoteRuntimeAdapter {
     return this.invoke<void>('terminal:setVisibility', [panelId, visible, viewerId]);
   }
 
-  ackTerminalOutput(panelId: string, bytes: number): Promise<void> {
-    return this.invoke<void>('terminal:ack', [panelId, bytes]);
+  ackTerminalOutput(panelId: string, bytes: number, viewerId: string): Promise<void> {
+    return this.invoke<void>('terminal:ack', [panelId, bytes, viewerId]);
   }
 }
 
 function isIpcResponse<T>(value: IpcLikeResponse<T> | T): value is IpcLikeResponse<T> {
-  return Boolean(value && value instanceof Object && ('success' in value || 'data' in value || 'error' in value));
+  return decodeOptionalBoundary(value, boundary.object({ success: boundary.boolean })) !== undefined;
 }

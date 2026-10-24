@@ -1,10 +1,13 @@
 import type { CustomCommandResume } from '../../../shared/types/customCommandResume';
 import type { LeaderboardConfig } from '../../../shared/types/leaderboard';
 import type { RemoteDaemonConfig } from '../../../shared/types/remoteDaemon';
+import type { WorkspaceAccessConfig } from '../../../shared/types/workspaceAccess';
 import type { PaneChatAgent } from '../../../shared/types/paneChat';
 import type { VoiceTranscriptionMode } from '../../../shared/types/voiceTranscription';
 import type { WorktreeFileSyncEntry } from '../../../shared/types/worktreeFileSync';
+import type { ApnsCredentialConfig, SharedCredentialId, SharedCredentialMeta } from '../../../shared/types/sharedCredentials';
 import type { AppearanceMode, DarkTheme, LightTheme, Theme } from '../../../shared/types/appearance';
+import type { SessionRetention } from '../../../shared/types/orchestrationSession';
 
 interface TerminalShortcut {
   id: string;
@@ -40,13 +43,21 @@ export interface AnalyticsIdentity {
   gitUserName?: string;
 }
 
+type HtmlFileOpenMode = 'preview' | 'source';
+
 export interface AppConfig {
+  // Experimental: open Claude and Codex agent tabs as Chat (off by default).
+  experimentalChatEnabled?: boolean;
+  defaultAgentInterface?: 'terminal' | 'chat';
   verbose?: boolean;
   anthropicApiKey?: string;
   openaiApiKey?: string;
   falApiKey?: string;
   openRouterApiKey?: string;
   deepgramApiKey?: string;
+  apns?: ApnsCredentialConfig;
+  /** When and where each shared key was last set or cleared. A record without a value means cleared. */
+  sharedCredentials?: Partial<Record<SharedCredentialId, SharedCredentialMeta>>;
   voiceTranscriptionMode?: VoiceTranscriptionMode;
   // Legacy fields for backward compatibility
   gitRepoPath?: string;
@@ -63,15 +74,16 @@ export interface AppConfig {
   defaultSessionCommand?: string;
   defaultSessionResume?: CustomCommandResume | null;
   defaultSessionProfile?: string;
+  defaultSessionPinned?: boolean;
   // Auto-check for updates
   autoCheckUpdates?: boolean;
   // Start Pane automatically when the user logs in
   autoStartOnBoot?: boolean;
-  // Prevent idle sleep while Pane sessions are active
+  // Master toggle: prevent idle sleep while Pane sessions are active
   keepAwakeWhileSessionsActive?: boolean;
-  // Stravu MCP integration
-  stravuApiKey?: string;
-  stravuServerUrl?: string;
+  // Under the master toggle: hold keep-awake on AC power (default on) and on battery (default off)
+  keepAwakeWhilePluggedIn?: boolean;
+  keepAwakeOnBattery?: boolean;
   // Theme preference
   appearanceMode?: AppearanceMode;
   theme?: Theme;
@@ -115,7 +127,7 @@ export interface AppConfig {
   gitAttributionEnabled?: boolean;
   // Agent-facing Pane context
   agentContext?: {
-    /** Write a marked Pane section into repository AGENTS.md files (off by default; edits the repo). */
+    /** Publish Pane instructions and scoped Notes into repository instruction files (off by default; edits the repo). */
     managedAgentsMd?: boolean;
     /** Register Pane's MCP server with the user-level Claude Code, Codex, and Cursor configs. */
     registerMcp?: boolean;
@@ -133,6 +145,12 @@ export interface AppConfig {
   // Route PTY spawns through an isolated ptyHost UtilityProcess for crash isolation.
   // On by default on Windows. Requires app restart; the supervisor is forked once at `app.whenReady`.
   usePtyHost?: boolean;
+  // Entries each Session keeps before the oldest are dropped; a missing value uses the default
+  retention?: Partial<SessionRetention>;
+  // Experimental: show Mission Control, the grid of every agent pane (off by default).
+  missionControlEnabled?: boolean;
+  // What a click on an .html file in Explorer opens: the browser preview (default when absent) or its source
+  htmlFileOpenMode?: HtmlFileOpenMode;
   // PostHog analytics settings
   analytics?: {
     enabled: boolean;
@@ -165,6 +183,8 @@ export interface AppConfig {
   terminalPowerMode?: TerminalPowerMode;
   // Self-hosted remote daemon settings and saved client profiles
   remoteDaemon?: RemoteDaemonConfig;
+  // Codeless remote access over Tailscale (runpane workspace and desktop remote mode)
+  workspaces?: WorkspaceAccessConfig;
   terminalFontFamily?: string;
   terminalFontSize?: number;
   // Leaderboard opt-in and cached state
@@ -178,6 +198,7 @@ export interface UpdateConfigRequest {
   falApiKey?: string;
   openRouterApiKey?: string;
   deepgramApiKey?: string;
+  apns?: ApnsCredentialConfig;
   voiceTranscriptionMode?: VoiceTranscriptionMode;
   claudeExecutablePath?: string;
   systemPromptAppend?: string;
@@ -187,11 +208,12 @@ export interface UpdateConfigRequest {
   defaultSessionCommand?: string;
   defaultSessionResume?: CustomCommandResume | null;
   defaultSessionProfile?: string;
+  defaultSessionPinned?: boolean;
   autoCheckUpdates?: boolean;
   autoStartOnBoot?: boolean;
   keepAwakeWhileSessionsActive?: boolean;
-  stravuApiKey?: string;
-  stravuServerUrl?: string;
+  keepAwakeWhilePluggedIn?: boolean;
+  keepAwakeOnBattery?: boolean;
   appearanceMode?: AppearanceMode;
   theme?: Theme;
   systemLightTheme?: LightTheme;
@@ -227,6 +249,10 @@ export interface UpdateConfigRequest {
   // Route PTY spawns through an isolated ptyHost UtilityProcess for crash isolation.
   // On by default on Windows. Requires app restart to take effect.
   usePtyHost?: boolean;
+  // Experimental: show Mission Control, the grid of every agent pane (off by default).
+  missionControlEnabled?: boolean;
+  // What a click on an .html file in Explorer opens: the browser preview (default when absent) or its source
+  htmlFileOpenMode?: HtmlFileOpenMode;
   // PostHog analytics settings
   analytics?: AppConfig['analytics'];
   // User-defined custom commands for the Add Tool picker

@@ -17,7 +17,7 @@ import {
 } from '../../../shared/types/paneChat';
 import { RUNPANE_CONTRACT } from '../../../shared/types/generatedRunpaneContract';
 import { isAgentSupportedOnPlatform } from '../../../shared/constants/agentLaunchPresets';
-import { isCliAgentType } from './agents/agentIdentity';
+import { paneChatFirstPrompt } from './paneChatMigrateOffer';
 
 const PANE_CHAT_TITLE = 'Pane Chat';
 const PANE_CHAT_BOOTSTRAP_VERSION = 10;
@@ -25,6 +25,10 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 function isValidUuid(value: string | undefined): value is string {
   return value !== undefined && UUID_PATTERN.test(value);
+}
+
+function isPaneChatAgent(agent: string | undefined): agent is PaneChatAgent {
+  return agent === 'claude' || agent === 'codex' || agent === 'cursor';
 }
 
 export class PaneChatManager {
@@ -154,6 +158,10 @@ export class PaneChatManager {
       initialInputError: wasInitialized ? previousCustomState?.initialInputError : undefined,
     };
 
+    if (wasInitialized) {
+      // A running terminal already passed (or skipped) its first prompt.
+      nextCustomState.initialInput = previousCustomState?.initialInput;
+    }
     if (shouldResetClaudeLaunch && !wasInitialized) {
       nextCustomState.hasClaudeSessionId = undefined;
     }
@@ -175,7 +183,7 @@ export class PaneChatManager {
 
     const panelState: TerminalPanelState = {
       initialCommand: this.skillCacheManager?.launchCommand(agent) ?? RUNPANE_CONTRACT.agentTemplates[agent].command,
-      initialInput: undefined,
+      initialInput: paneChatFirstPrompt(agent, previousState, this.skillCacheManager?.paneChatSkillsRoot),
       orchestrationSessionId: 'legacy-pane-chat',
       orchestrationWorkspace: sessionWorkspacePath('legacy-pane-chat'),
       orchestrationProfile: this.configManager.getConfig().defaultSessionProfile,
@@ -220,6 +228,8 @@ export class PaneChatManager {
   private resolvePanelAgent(panel: ToolPanel): PaneChatAgent | undefined {
     // SAFETY: Pane Chat owns this terminal panel and writes its custom state exclusively as TerminalPanelState.
     const customState = panel.state.customState as TerminalPanelState | undefined;
-    return isCliAgentType(customState?.agentType) ? customState?.agentType : undefined;
+    return isPaneChatAgent(customState?.agentType)
+      ? customState.agentType
+      : undefined;
   }
 }

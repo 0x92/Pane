@@ -1,12 +1,13 @@
 import http from 'http';
 import zlib from 'zlib';
+import WebSocket from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDefaultRemoteDaemonConfig, type RemoteDaemonConfig } from '../../../shared/types/remoteDaemon';
+import { createDefaultRemoteDaemonConfig, NATIVE_APP_WEBSOCKET_ORIGIN, type RemoteDaemonConfig } from '../../../shared/types/remoteDaemon';
 import { PaneCommandRegistry } from './commandRegistry';
 import { hashRemoteDaemonToken } from './auth';
 import { boundary, decodeBoundary, type JsonValue } from '../../../shared/validation/boundaryDecoder';
 
-import { PaneRemoteHttpApiServer } from './httpApiServer';
+import { PaneRemoteHttpApiServer, type WorkspaceAccessPolicy } from './httpApiServer';
 
 interface ConfigManagerStub {
   getConfig(): { deepgramApiKey?: string; remoteDaemon?: RemoteDaemonConfig };
@@ -274,7 +275,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1500): Promise<void
 }
 
 describe('PaneRemoteHttpApiServer', () => {
-  it.each(['mobile:push-status', 'mobile:push-register', 'mobile:push-controls', 'mobile:push-revoke'])(
+  it.each(['mobile:push-status', 'mobile:push-register', 'mobile:push-controls', 'mobile:push-revoke', 'credentials:shared:get', 'credentials:shared:apply'])(
     'uses the authenticated client for %s even when extra arguments forge an identity', async channel => {
       const registry = new PaneCommandRegistry();
       const handler = vi.fn(async () => ({ ok: true }));
@@ -288,6 +289,20 @@ describe('PaneRemoteHttpApiServer', () => {
       }, 'secret-token')).resolves.toMatchObject({ statusCode: 200, body: { ok: true } });
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler).toHaveBeenCalledWith(input, { clientId: 'client-1' });
+    },
+  );
+
+  it.each(['credentials:shared:get', 'credentials:shared:apply'])(
+    'refuses %s when the host does not require pairing, so no unpaired caller reads keys', async channel => {
+      const registry = new PaneCommandRegistry();
+      const handler = vi.fn(async () => ({}));
+      registry.register(channel, handler);
+      const server = new PaneRemoteHttpApiServer(registry, createConfigManagerStub(createEnabledRemoteConfig({ pairingRequired: false })));
+      activeServers.push(server);
+      await server.start();
+
+      await expect(requestJson(server, 'POST', '/invoke', { channel, args: [{}] })).resolves.toMatchObject({ statusCode: 403, body: { ok: false } });
+      expect(handler).not.toHaveBeenCalled();
     },
   );
 
@@ -358,6 +373,32 @@ describe('PaneRemoteHttpApiServer', () => {
     expect(handler).toHaveBeenCalledWith(
       'panel-1',
       true,
+      'remote:client-1:runtime-1:viewer:renderer-viewer-1',
+    );
+  });
+
+  it('scopes terminal acknowledgements to the authenticated remote runtime', async () => {
+    const registry = new PaneCommandRegistry();
+    const handler = vi.fn(async () => ({ ok: true }));
+    registry.register('terminal:ack', handler);
+
+    const server = new PaneRemoteHttpApiServer(registry, createConfigManagerStub(createEnabledRemoteConfig()));
+    activeServers.push(server);
+    await server.start();
+
+    await expect(requestJson(server, 'POST', '/invoke', {
+      channel: 'terminal:ack',
+      args: ['panel-1', 42, 'renderer-viewer-1'],
+    }, 'secret-token', {
+      'X-Pane-Remote-Runtime-Id': 'runtime-1',
+    })).resolves.toMatchObject({
+      statusCode: 200,
+      body: { ok: true },
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      'panel-1',
+      42,
       'remote:client-1:runtime-1:viewer:renderer-viewer-1',
     );
   });
@@ -750,5 +791,296 @@ describe('PaneRemoteHttpApiServer', () => {
     await expect(server.start()).rejects.toThrow(
       'Remote daemon direct HTTP only supports loopback listen hosts; keep listenHost on 127.0.0.1, ::1, or localhost and expose it through an SSH tunnel, Tailscale/VPN, or a reverse proxy.',
     );
+  });
+});
+
+describe('workspace identity mode', () => {
+  const owner = 'owner@example.com';
+  const teammate = 'teammate@example.com';
+
+  function ownerOnly(overrides: Partial<WorkspaceAccessPolicy> = {}): WorkspaceAccessPolicy {
+    return {
+      ownerLogin: owner,
+      visibility: 'owner',
+      tailnetLogins: new Set([owner, teammate]),
+      verifySecret: null,
+      ...overrides,
+    };
+  }
+
+  async function startWorkspaceServer(access: () => WorkspaceAccessPolicy | null) {
+    const registry = new PaneCommandRegistry();
+    registry.register('runpane:machine:info', () => ({ hostname: 'devbox' }));
+    registry.register('runpane:workspaces:machines', () => ({ machines: ['private-laptop'] }));
+    const server = new PaneRemoteHttpApiServer(registry, createConfigManagerStub(), {
+      workspace: { listenPort: 0, pathSecret: 'serve-secret', access },
+    });
+    activeServers.push(server);
+    await server.start();
+    return server;
+  }
+  async function startOwnerServer(ownerLogin: string | null) {
+    return startWorkspaceServer(() => (ownerLogin ? ownerOnly({ ownerLogin }) : null));
+  }
+  const invoke = { channel: 'runpane:machine:info', args: [] };
+  // Tailscale Serve forwards /invoke to the target path, /serve-secret/invoke.
+  const invokePath = '/serve-secret/invoke';
+  const as = (login: string, password?: string) => {
+    const headers: RequestHeaders = { 'Tailscale-User-Login': login };
+    if (password !== undefined) headers.Authorization = `Bearer ${password}`;
+    return headers;
+  };
+  const passwordIs = (expected: string) => (secret: string) => (secret === expected ? 'valid' as const : 'invalid' as const);
+
+  it('under "Only me", refuses a different Tailscale login on the same tailnet', async () => {
+    const server = await startWorkspaceServer(() => ownerOnly());
+    const response = await requestJson(server, 'POST', invokePath, invoke, undefined, as(teammate));
+    expect(response.statusCode).toBe(403);
+    expect(JSON.stringify(response.body)).toContain('ERR_WORKSPACE_IDENTITY_REFUSED');
+  });
+
+  it('under "Everyone on this tailnet", lets a different login on the tailnet in', async () => {
+    const server = await startWorkspaceServer(() => ownerOnly({ visibility: 'tailnet' }));
+    const response = await requestJson(server, 'POST', invokePath, invoke, undefined, as(teammate));
+    expect(response).toEqual({ statusCode: 200, body: { ok: true, result: { hostname: 'devbox' } } });
+  });
+
+  it('exposes discovery only to the signed owner even when teammates can connect', async () => {
+    const server = await startWorkspaceServer(() => ownerOnly({ visibility: 'tailnet' }));
+    const discovery = { channel: 'runpane:workspaces:machines', args: [] };
+    const refused = await requestJson(server, 'POST', invokePath, discovery, undefined, as(teammate));
+    expect(refused.statusCode).toBe(403);
+    expect(refused.body).toMatchObject({ error: { code: 'ERR_WORKSPACE_DISCOVERY_OWNER_REQUIRED' } });
+    const allowed = await requestJson(server, 'POST', invokePath, discovery, undefined, as(owner.toUpperCase()));
+    expect(allowed).toEqual({ statusCode: 200, body: { ok: true, result: { machines: ['private-laptop'] } } });
+  });
+
+  it('under "Everyone on this tailnet", still refuses a login from outside the tailnet, such as a user a device was shared with', async () => {
+    const server = await startWorkspaceServer(() => ownerOnly({ visibility: 'tailnet' }));
+    const response = await requestJson(server, 'POST', invokePath, invoke, undefined, as('stranger@other.example'));
+    expect(response.statusCode).toBe(403);
+    expect(JSON.stringify(response.body)).toContain('ERR_WORKSPACE_IDENTITY_REFUSED');
+  });
+
+  it('with password protection on, makes every allowed client present the password, the owner included', async () => {
+    const server = await startWorkspaceServer(() => ownerOnly({ visibility: 'tailnet', verifySecret: passwordIs('correct horse') }));
+    for (const login of [owner, teammate]) {
+      const missing = await requestJson(server, 'POST', invokePath, invoke, undefined, as(login));
+      expect(missing.statusCode).toBe(401);
+      expect(JSON.stringify(missing.body)).toContain('ERR_WORKSPACE_PASSWORD_REQUIRED');
+
+      const wrong = await requestJson(server, 'POST', invokePath, invoke, undefined, as(login, 'guess'));
+      expect(wrong.statusCode).toBe(401);
+      expect(JSON.stringify(wrong.body)).toContain('ERR_WORKSPACE_PASSWORD_INVALID');
+
+      const right = await requestJson(server, 'POST', invokePath, invoke, undefined, as(login, 'correct horse'));
+      expect(right.statusCode).toBe(200);
+    }
+  });
+
+  it('answers 429 once the password check is throttled for a login', async () => {
+    const server = await startWorkspaceServer(() => ownerOnly({ verifySecret: () => 'throttled' }));
+    const response = await requestJson(server, 'POST', invokePath, invoke, undefined, as(owner, 'any guess'));
+    expect(response.statusCode).toBe(429);
+    expect(JSON.stringify(response.body)).toContain('ERR_WORKSPACE_PASSWORD_THROTTLED');
+  });
+
+  it('checks visibility before the password, so a refused login learns nothing about it', async () => {
+    const server = await startWorkspaceServer(() => ownerOnly({ verifySecret: passwordIs('correct horse') }));
+    const response = await requestJson(server, 'POST', invokePath, invoke, undefined, as(teammate, 'correct horse'));
+    expect(response.statusCode).toBe(403);
+    expect(JSON.stringify(response.body)).toContain('ERR_WORKSPACE_IDENTITY_REFUSED');
+  });
+
+  it('gates the event stream the same way', async () => {
+    const server = await startWorkspaceServer(() => ownerOnly({ verifySecret: passwordIs('correct horse') }));
+    const refused = await requestRaw(server, 'GET', '/serve-secret/events', as(teammate));
+    expect(refused.statusCode).toBe(403);
+    const noPassword = await requestRaw(server, 'GET', '/serve-secret/events', as(owner));
+    expect(noPassword.statusCode).toBe(401);
+    const stream = await openEventStream(server, 'correct horse', as(owner), '/serve-secret/events');
+    await expect(stream.nextEvent()).resolves.toMatchObject({ event: 'ready' });
+    stream.close();
+  });
+
+  it('drops a connected client when the access it came in with no longer holds', async () => {
+    let policy = ownerOnly({ visibility: 'tailnet' });
+    const server = await startWorkspaceServer(() => policy);
+    const stream = await openEventStream(server, undefined, as(teammate), '/serve-secret/events');
+    await stream.nextEvent();
+    await stream.nextEvent();
+
+    policy = ownerOnly({ visibility: 'owner' });
+    server.getEventSink().send('session:created', { id: 'session-1' });
+    await expect(stream.nextEvent(100)).rejects.toThrow('Timed out waiting for SSE event');
+    stream.close();
+  });
+
+  it.each([
+    ['visibility narrows to "Only me"', ownerOnly({ visibility: 'owner' }), {}],
+    ['password protection turns on', ownerOnly({ visibility: 'tailnet', verifySecret: passwordIs('correct horse') }), {}],
+    [
+      'the password changes',
+      ownerOnly({ visibility: 'tailnet', verifySecret: passwordIs('new password') }),
+      { previous: ownerOnly({ visibility: 'tailnet', verifySecret: passwordIs('old password') }), password: 'old password' },
+    ],
+  ])('refuses an invoke whose body finishes uploading after %s', async (_change, revoked, { previous, password }: { previous?: WorkspaceAccessPolicy; password?: string }) => {
+    let policy = previous ?? ownerOnly({ visibility: 'tailnet' });
+    let checks = 0;
+    const server = await startWorkspaceServer(() => {
+      checks += 1;
+      return policy;
+    });
+    const address = server.getAddress();
+    if (!address) throw new Error('Remote HTTP API server is not listening');
+
+    const response = new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
+      const request = http.request({
+        host: address.host,
+        port: address.port,
+        path: invokePath,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...as(teammate, password) },
+      }, (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => resolve({ statusCode: res.statusCode ?? 0, body }));
+      });
+      activeRequests.add(request);
+      request.on('error', reject);
+      const body = JSON.stringify(invoke);
+      request.write(body.slice(0, 10));
+      void vi.waitFor(() => expect(checks).toBeGreaterThan(0)).then(() => {
+        policy = revoked;
+        request.end(body.slice(10));
+      });
+    });
+
+    const result = await response;
+    expect(result.statusCode).toBeGreaterThanOrEqual(400);
+    expect(result.body).not.toContain('devbox');
+  });
+
+  it('drops a connected client when password protection is turned on', async () => {
+    let policy = ownerOnly();
+    const server = await startWorkspaceServer(() => policy);
+    const stream = await openEventStream(server, undefined, as(owner), '/serve-secret/events');
+    await stream.nextEvent();
+    await stream.nextEvent();
+
+    policy = ownerOnly({ verifySecret: passwordIs('correct horse') });
+    server.getEventSink().send('session:created', { id: 'session-1' });
+    await expect(stream.nextEvent(100)).rejects.toThrow('Timed out waiting for SSE event');
+    stream.close();
+  });
+
+  it('serves the owner\'s own Tailscale login without a pairing token', async () => {
+    const server = await startOwnerServer('owner@example.com');
+    const response = await requestJson(server, 'POST', invokePath, invoke, undefined, {
+      'Tailscale-User-Login': 'owner@example.com',
+    });
+    expect(response).toEqual({ statusCode: 200, body: { ok: true, result: { hostname: 'devbox' } } });
+  });
+
+  it('refuses another Tailscale user and requests without an identity, such as tagged devices', async () => {
+    const server = await startOwnerServer('owner@example.com');
+    const otherUser = await requestJson(server, 'POST', invokePath, invoke, undefined, {
+      'Tailscale-User-Login': 'teammate@example.com',
+    });
+    expect(otherUser.statusCode).toBe(403);
+    expect(JSON.stringify(otherUser.body)).toContain('ERR_WORKSPACE_IDENTITY_REFUSED');
+
+    const tagged = await requestJson(server, 'POST', invokePath, invoke);
+    expect(tagged.statusCode).toBe(403);
+    expect(JSON.stringify(tagged.body)).toContain('ERR_WORKSPACE_IDENTITY_REQUIRED');
+  });
+
+  it.each(['credentials:shared:get', 'credentials:shared:apply'])(
+    'shares keys over %s with the owner only, even when teammates can connect', async (channel) => {
+      const registry = new PaneCommandRegistry();
+      const handler = vi.fn(async () => ({}));
+      registry.register(channel, handler);
+      const server = new PaneRemoteHttpApiServer(registry, createConfigManagerStub(), {
+        workspace: { listenPort: 0, pathSecret: 'serve-secret', access: () => ownerOnly({ visibility: 'tailnet' }) },
+      });
+      activeServers.push(server);
+      await server.start();
+      const request = { channel, args: [{}, { clientId: 'forged' }] };
+
+      const refused = await requestJson(server, 'POST', invokePath, request, undefined, as(teammate));
+      expect(refused.statusCode).toBe(403);
+      expect(refused.body).toMatchObject({ error: { code: 'ERR_SHARED_CREDENTIALS_OWNER_REQUIRED' } });
+      expect(handler).not.toHaveBeenCalled();
+
+      const allowed = await requestJson(server, 'POST', invokePath, request, undefined, as(owner.toUpperCase()));
+      expect(allowed).toEqual({ statusCode: 200, body: { ok: true, result: {} } });
+      expect(handler).toHaveBeenCalledWith({}, { clientId: `tailnet:${owner}` });
+    },
+  );
+
+  it('admits the voice stream upgrade, checking the same identity', async () => {
+    vi.stubEnv('DEEPGRAM_API_KEY', '');
+    const server = await startOwnerServer(owner);
+    const address = server.getAddress();
+    if (!address) throw new Error('Remote HTTP API server is not listening');
+    const upgradeStatus = (headers: RequestHeaders) => new Promise<number>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${address.port}/serve-secret/voice/deepgram-stream`, { headers });
+      socket.once('unexpected-response', (_request, response) => {
+        resolve(response.statusCode ?? 0);
+        socket.terminate();
+      });
+      socket.once('open', () => {
+        socket.terminate();
+        reject(new Error('voice stream opened without a Deepgram key'));
+      });
+      socket.once('error', reject);
+    });
+    // React Native always sends an Origin on a WebSocket; the app names itself with one no browser can send.
+    const fromApp = { Origin: NATIVE_APP_WEBSOCKET_ORIGIN };
+    expect(await upgradeStatus({ ...as(teammate), ...fromApp })).toBe(403);
+    expect(await upgradeStatus({ ...as(owner), Origin: 'https://attacker.example' })).toBe(403);
+    // Past the workspace and identity checks, the host reports the missing key rather than dropping the socket.
+    expect(await upgradeStatus({ ...as(owner), ...fromApp })).toBe(503);
+    vi.unstubAllEnvs();
+  });
+
+  it('refuses everyone while the owner is unknown', async () => {
+    const server = await startOwnerServer(null);
+    const response = await requestJson(server, 'POST', invokePath, invoke, undefined, {
+      'Tailscale-User-Login': 'owner@example.com',
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('answers only requests that came through Tailscale Serve with the per-launch path', async () => {
+    const server = await startOwnerServer('owner@example.com');
+    const direct = await requestJson(server, 'POST', '/invoke', invoke, undefined, {
+      'Tailscale-User-Login': 'owner@example.com',
+    });
+    expect(direct.statusCode).toBe(404);
+  });
+
+  it('refuses browsers, so a web page cannot drive the owner\'s machines', async () => {
+    const server = await startOwnerServer('owner@example.com');
+    const fromPage = await requestJson(server, 'POST', invokePath, invoke, undefined, {
+      'Tailscale-User-Login': 'owner@example.com',
+      Origin: 'https://attacker.example',
+    });
+    expect(fromPage.statusCode).toBe(403);
+    expect(JSON.stringify(fromPage.body)).toContain('ERR_WORKSPACE_BROWSER_REFUSED');
+  });
+
+  it('keeps machine commands off the pairing-token transport', async () => {
+    const registry = new PaneCommandRegistry();
+    registry.register('runpane:machine:info', () => ({ hostname: 'devbox' }));
+    registry.register('runpane:workspaces:machines', () => ({ machines: ['private-laptop'] }));
+    const server = new PaneRemoteHttpApiServer(registry, createConfigManagerStub(createEnabledRemoteConfig()));
+    activeServers.push(server);
+    await server.start();
+    const response = await requestJson(server, 'POST', '/invoke', invoke, 'secret-token');
+    expect(response.statusCode).toBe(403);
+    const discovery = await requestJson(server, 'POST', '/invoke', { channel: 'runpane:workspaces:machines', args: [] }, 'secret-token', as(owner));
+    expect(discovery.statusCode).toBe(403);
+    expect(discovery.body).toMatchObject({ error: { code: 'ERR_WORKSPACE_DISCOVERY_OWNER_REQUIRED' } });
   });
 });

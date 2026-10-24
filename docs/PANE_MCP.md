@@ -33,7 +33,7 @@ A server that offers dozens of tools makes models, especially smaller ones, wors
 
 | Toolset | Tools |
 |---|---|
-| `core` (default) | `agents_start`, `agents_status`, `agents_send`, `panels_input` (exact keys, for menus and prompts), `repos_list`, `repos_add`, `panes_list`, `workspace_state`, `panes_git_status`, `panes_archive`, `panes_restore`, `links_create`, `docs_search`, `docs_read`, `doctor` |
+| `core` (default) | `agents_start`, `agents_status`, `agents_send`, `panels_create` (a new agent tab in an existing Pane), `panels_input` (exact keys, for menus and prompts), `repos_list`, `repos_add`, `panes_list`, `workspace_state`, `panes_git_status`, `panes_archive`, `panes_restore`, `links_create`, `docs_search`, `docs_read`, `doctor` |
 | `agents` | the three agent tasks, `workspace_state`, `watch` |
 | `panes` | create, adopt, list, archive, restore, pin, unpin, rename, focus, cost, run and stop the run script, move to a folder, `folders_list`, `folders_create` |
 | `panels` | create, list, output, screen, input, submit, submit-composer, wait |
@@ -48,7 +48,7 @@ Choose with `runpane mcp --toolsets core,git` (comma-separated). `--read-only` k
 
 The core set is built around the three jobs agents most often need, each finished in one call:
 
-- `agents_start`: creates a Pane in a repository, starts the agent with the task, waits until it is ready, and returns the pane and panel ids and a `pane://` link.
+- `agents_start`: starts the agent with the task, waits until it is ready, and returns the pane and panel ids and a `pane://` link. Pass `pane` to open it as a new tab in an existing Pane (review, audit, fix, QA); pass `repo` and `name` only for new work, which creates a Pane. 1 feature = 1 worktree = 1 branch = 1 Pane; reviews, audits, fixes and QA for it are tabs in that Pane.
 - `agents_status`: whether the agent is working, ready, blocked (waiting on a person), idle, or exited, plus its current screen.
 - `agents_send`: submits a follow-up and reports whether the agent took it or queued it behind its current turn (`delivery`), read from the agent's transcript where Pane can find it.
 
@@ -128,7 +128,7 @@ Automated tests cover the registration and link logic on every OS. Check these b
 
 ## Not supported
 
-- Streaming. `watch --follow` isn't offered; use `agents_status`, or `watch` with `timeoutMs`.
+- Streaming. `watch --follow` and `watch --until-event` aren't offered; use `agents_status`, or `watch` with `timeoutMs`.
 - App settings. Agents can't read or change Pane's settings.
 - Permanently deleting Panes or removing repositories. Those stay in the app, where the user sees what goes.
 - Progress notifications and pagination (the full list is small).
@@ -148,13 +148,13 @@ Tools are generated from [`contracts/runpane/contract.json`](../contracts/runpan
 - The tool's inputs are the flags from the command's `usage` lines and its `agentContext` arguments, in camelCase (`--timeout-ms` → `timeoutMs`). Flags that take a value are strings; flags without one are booleans. Daemon commands also accept `paneDir`.
 - The description combines the command's summary, details, and notes from `agentContext`. The title is `runpane <command>`.
 - The output schema is the command's `*Result` JSON schema. Every call runs `runpane <command> … --json` and returns its JSON output unchanged, both as `structuredContent` and as a text block for older clients.
-- A non-zero exit returns the output as a tool error (`isError: true`), and so do bad arguments, so the model can correct them. An unknown tool name is a JSON-RPC Invalid Params error (`-32602`).
+- A non-zero exit returns a tool error (`isError: true`). A CLI failure reads as its message, a `Next:` line that names tools instead of CLI commands, and a `Code:` line; a command's own `ok: false` result comes back as its JSON. Bad arguments are tool errors too, so the model can correct them. An unknown tool name is a JSON-RPC Invalid Params error (`-32602`).
 - Annotations come from the contract. `readOnlyHint` is the inverse of `mutates`. A mutating tool is `destructiveHint: true` unless the command is marked `additive`. `idempotentHint` and `openWorldHint` follow the `idempotent` and `openWorld` fields.
 - Values are passed as `--flag=value`, so a value may start with `-` (for example `- [ ] item`).
 
 Adding or changing a command in the contract changes its tool. There is no per-tool code.
 
-A few flags are left out. `--json` is always passed. `--follow` is omitted because a streaming watch cannot return a single result; call `watch` with `timeoutMs` instead. Tools have no stdin, so pass exact terminal bytes in `text` (for example `\u0003` for Ctrl-C) rather than `inputFile: "-"`.
+A few flags are left out. `--json` is always passed. `--follow` and `--until-event` are omitted because a streaming or open-ended watch cannot return a single result; call `watch` with `timeoutMs` instead. Tools have no stdin, so pass exact terminal bytes in `text` (for example `\u0003` for Ctrl-C) rather than `inputFile: "-"`.
 
 ## Confirmation
 

@@ -12,6 +12,7 @@ import type { ToolPanel } from '../../../shared/types/panels';
 import type { AgentState } from '../../../shared/types/agentStatus';
 import { databaseService } from './database';
 import { panelManager } from './panelManager';
+import { setPaneRuntime, type PaneRuntime } from '../core/runtime';
 import type {
   OrchestrationLink,
   OrchestrationSessionCreateInput,
@@ -25,6 +26,9 @@ import { OrchestrationSessionStore } from './orchestrationSessionStore';
 import { terminalPanelManager } from './terminalPanelManager';
 import { sessionWorkspacePath, prepareSessionWorkspace } from './sessionWorkspace';
 import { OrchestrationSessionManager } from './orchestrationSessionManager';
+import { normalizeAgentReport } from './agentReport';
+import { serializeJsonTransport } from '../daemon/jsonTransport';
+import { boundary } from '../../../shared/validation/boundaryDecoder';
 import * as wslUtils from '../utils/wslUtils';
 
 const liveStates = new Map<string, AgentState>();
@@ -268,12 +272,153 @@ function orchestrationRecord(id: string, name: string): OrchestrationSessionReco
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   liveStates.clear();
   for (const directory of temporaryDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 
 describe('OrchestrationSessionManager', () => {
+  it('opens a Session view as a client-local read that asks no client to move', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'Quiet open' });
+    const send = vi.fn();
+    setPaneRuntime(partialRuntime({ eventSink: { send } }));
+
+    const view = await fixture.manager.getView({ sessionId: created.session.id });
+
+    expect(databaseService.getActivePanel(view.internalSession.id)?.id).toBe(view.panel.id);
+    expect(send.mock.calls.filter(([channel]) => channel === 'panel:activeChanged')).toEqual([]);
+    setPaneRuntime(partialRuntime({ eventSink: { send: () => undefined } }));
+  });
+
+  it('creates a Session whose agent tab resumes a native conversation when it opens', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'Moved here', agent: 'claude', resume: '5d0c7a1e-2b9f-4e3a-8c61-0f7d2e4b9a35' });
+    expect(created.panel.state.customState).toMatchObject({
+      agentType: 'claude', agentSessionId: '5d0c7a1e-2b9f-4e3a-8c61-0f7d2e4b9a35', hasClaudeSessionId: true,
+    });
+    await expect(fixture.manager.create({ name: 'Bad id', agent: 'codex', resume: 'not an id; rm -rf' }))
+      .rejects.toThrow('Session resume must be a native session id');
+  });
+
+  it('saves the resumed conversation with the Session, so a tab created after an interrupted create still resumes it', async () => {
+    const fixture = createFixture();
+    const id = '0e5c1b2a-7d3f-4a69-9b84-3c2d1e0f9a87';
+    // The durable record is written, then the tab can't be created (the app exits, or a write fails).
+    vi.spyOn(panelManager, 'createPanel').mockRejectedValueOnce(new Error('interrupted'));
+    await expect(fixture.manager.create({ name: 'Moved mid-create', agent: 'codex', resume: id })).rejects.toThrow('was saved but could not be opened');
+    const restarted = new OrchestrationSessionManager(fixture.configManager, fixture.sessionManager,
+      fixture.skillCacheManager, fixture.paneChatManager, undefined, fixture.store);
+    const [saved] = (await restarted.list()).sessions.filter(session => session.name === 'Moved mid-create');
+    expect(saved.resume).toBe(id);
+    // Startup repair creates the missing tab from the record: with the conversation, not a fresh one.
+    const repaired = await restarted.getView({ sessionId: saved.id });
+    expect(repaired.panel.state.customState).toMatchObject({ agentType: 'codex', agentSessionId: id });
+    expect(repaired.panel.state.customState?.initialInput).toBeUndefined();
+  });
+
+  it('repairs a resumed Session\'s tab without replacing a conversation the tab has moved on to', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'Moved on', agent: 'claude', resume: '5d0c7a1e-2b9f-4e3a-8c61-0f7d2e4b9a35' });
+    // The tab lost its id (a crash before it was saved), so repair fills it in from the record.
+    await panelManager.updatePanel(created.panel.id, { state: { ...created.panel.state, customState: { ...created.panel.state.customState, agentSessionId: undefined } } });
+    const filled = await fixture.manager.getView({ sessionId: created.session.id });
+    expect(filled.panel.state.customState?.agentSessionId).toBe('5d0c7a1e-2b9f-4e3a-8c61-0f7d2e4b9a35');
+    // Later the conversation moved on (Claude /clear); repair keeps the tab's own id.
+    await panelManager.updatePanel(created.panel.id, { state: { ...filled.panel.state, customState: { ...filled.panel.state.customState, agentSessionId: '9a9a9a9a-0000-4000-8000-000000000000' } } });
+    const kept = await fixture.manager.getView({ sessionId: created.session.id });
+    expect(kept.panel.state.customState?.agentSessionId).toBe('9a9a9a9a-0000-4000-8000-000000000000');
+  });
+
+  it('drops the resumed conversation when the Session changes agent', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'Switching', agent: 'claude', resume: '5d0c7a1e-2b9f-4e3a-8c61-0f7d2e4b9a35' });
+    const updated = await fixture.manager.update({ sessionId: created.session.id }, { agent: 'codex' });
+    expect(updated.resume).toBeUndefined();
+  });
+
+  it('keeps the newest activity entries up to the configured retention', async () => {
+    const fixture = createFixture();
+    Object.assign(fixture.configManager.getConfig(), { retention: { sessionActivity: 2 } });
+    const created = await fixture.manager.create({ name: 'Busy' });
+    const selector = { sessionId: created.session.id };
+    for (const goal of ['one', 'two', 'three']) await fixture.manager.update(selector, { goal });
+
+    const { activity } = await fixture.manager.get(selector);
+    expect(activity).toHaveLength(2);
+    expect(activity.every(entry => entry.kind === 'updated')).toBe(true);
+  });
+
+  it('creates a pinned Session and persists declarative pin updates', async () => {
+    const fixture = createFixture();
+    const input = { name: 'Pinned coordinator', isPinned: true };
+    const created = await fixture.manager.create(input);
+    const selector = { sessionId: created.session.id };
+    expect((await fixture.manager.get(selector)).isPinned).toBe(true);
+    await fixture.manager.update(selector, { isPinned: false });
+    expect((await fixture.manager.get(selector)).isPinned).toBe(false);
+    await fixture.manager.update(selector, { isPinned: true });
+    await fixture.manager.update(selector, { isPinned: true });
+    expect((await fixture.manager.get(selector)).isPinned).toBe(true);
+  });
+
+  it('names a Session created without a typed name from its first message, once', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'New chat', nameFromFirstMessage: true, agent: 'claude' });
+    const selector = { sessionId: created.session.id };
+    const panelId = created.session.panelIds.claude;
+    fixture.manager.observeInput(panelId, '1\r');
+    fixture.manager.observeInput(panelId, 'fix the flaky checkout test please\r');
+    await vi.waitFor(async () => expect((await fixture.manager.get(selector)).name).toBe('fix the flaky checkout test please'));
+    fixture.manager.observeInput(panelId, 'now update the docs\r');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await fixture.manager.get(selector)).name).toBe('fix the flaky checkout test please');
+    expect((await fixture.manager.get(selector)).activity.at(-1)).toMatchObject({ message: 'Renamed to “fix the flaky checkout test please”.', source: 'system' });
+  });
+
+  it('does not name the Session from a message edited with cursor keys', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'New chat', nameFromFirstMessage: true, agent: 'claude' });
+    const selector = { sessionId: created.session.id };
+    const panelId = created.session.panelIds.claude;
+    // The composer sends "fix cuts"; Pane cannot follow the cursor, so it skips this message.
+    for (const key of ['fix cats', '\x1b[D', '\x1b[D', '\x7f', 'u', '\r']) fixture.manager.observeInput(panelId, key);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await fixture.manager.get(selector)).name).toBe('New chat');
+    fixture.manager.observeInput(panelId, 'update the docs\r');
+    await vi.waitFor(async () => expect((await fixture.manager.get(selector)).name).toBe('update the docs'));
+  });
+
+  it('names the Session from a later message when the first rename fails', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'New chat', nameFromFirstMessage: true, agent: 'claude' });
+    const selector = { sessionId: created.session.id };
+    const panelId = created.session.panelIds.claude;
+    vi.spyOn(fixture.manager, 'update').mockRejectedValueOnce(new Error('Session changed'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    fixture.manager.observeInput(panelId, 'fix the flaky checkout test please\r');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await fixture.manager.get(selector)).name).toBe('New chat');
+    fixture.manager.observeInput(panelId, 'now update the docs\r');
+    await vi.waitFor(async () => expect((await fixture.manager.get(selector)).name).toBe('now update the docs'));
+  });
+
+  it('keeps a name the person chose', async () => {
+    const fixture = createFixture();
+    const typed = await fixture.manager.create({ name: 'Release prep', agent: 'claude' });
+    const typedNewChat = await fixture.manager.create({ name: 'New chat 42', agent: 'claude' });
+    const renamed = await fixture.manager.create({ name: 'New chat', nameFromFirstMessage: true, agent: 'claude' });
+    await fixture.manager.update({ sessionId: renamed.session.id }, { name: 'Billing' });
+    for (const session of [typed, typedNewChat, renamed]) {
+      fixture.manager.observeInput(session.session.panelIds.claude, 'fix the flaky checkout test please\r');
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await fixture.manager.get({ sessionId: typed.session.id })).name).toBe('Release prep');
+    expect((await fixture.manager.get({ sessionId: typedNewChat.session.id })).name).toBe('New chat 42');
+    expect((await fixture.manager.get({ sessionId: renamed.session.id })).name).toBe('Billing');
+  });
+
   it('reopens WSL Sessions with Linux paths, native commands, and durable distro choice', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     vi.spyOn(wslUtils, 'validateWSLAvailable').mockResolvedValue(null);
@@ -416,6 +561,61 @@ describe('OrchestrationSessionManager', () => {
       .rejects.toThrow('The launch command runs claude, but the Session agent is codex');
   });
 
+  it('rejects OpenCode from named Session command and default boundaries', async () => {
+    const fixture = createFixture();
+
+    await expect(fixture.manager.create({ name: 'OpenCode command', launchCommand: 'opencode --auto' }))
+      .rejects.toThrow(/OpenCode.*named Session/i);
+
+    Object.assign(fixture.configManager.getConfig(), { defaultSessionCommand: 'opencode --auto' });
+    await expect(fixture.manager.create({ name: 'OpenCode default' }))
+      .rejects.toThrow(/OpenCode.*named Session/i);
+
+    Object.assign(fixture.configManager.getConfig(), { defaultSessionCommand: '' });
+    const created = await fixture.manager.create({ name: 'OpenCode update baseline' });
+    await expect(fixture.manager.update({ sessionId: created.session.id }, { launchCommand: 'opencode --auto' }))
+      .rejects.toThrow(/OpenCode.*named Session/i);
+    expect((await fixture.manager.getView({ sessionId: created.session.id })).panel.state.customState?.agentType)
+      .not.toBe('opencode');
+  });
+
+  it('rejects OpenCode launch commands even when custom resume identifies another agent', async () => {
+    const fixture = createFixture();
+    const customResume = {
+      mode: 'claude',
+      initialTemplate: '{command} -- --session-id {sessionId}',
+      resumeTemplate: '{command} -- --resume {sessionId}',
+    } as const;
+
+    await expect(fixture.manager.create({
+      name: 'OpenCode with resume',
+      launchCommand: 'opencode --auto',
+      customResume,
+    })).rejects.toThrow(/OpenCode.*named Session/i);
+
+    const created = await fixture.manager.create({
+      name: 'Update OpenCode with resume',
+      launchCommand: 'my-launcher run',
+      customResume,
+    });
+    await expect(fixture.manager.update({ sessionId: created.session.id }, {
+      launchCommand: 'opencode --auto',
+    })).rejects.toThrow(/OpenCode.*named Session/i);
+  });
+
+  it('titles phone alerts by Session and groups workers under their Session', async () => {
+    const fixture = createFixture();
+    const created = await fixture.manager.create({ name: 'Launch' });
+    const worker = paneFixture(fixture, 'worker', { name: 'api-fix' });
+    paneFixture(fixture, 'loose', { name: 'docs' });
+    await fixture.manager.associate({ sessionId: created.session.id }, { paneId: worker.id });
+    const sessionPane = created.session.internalSessionId;
+
+    expect(fixture.manager.alertSubject(sessionPane)).toEqual({ title: 'Launch', groupPaneId: sessionPane });
+    expect(fixture.manager.alertSubject('worker')).toEqual({ title: 'Launch › api-fix', groupPaneId: sessionPane });
+    expect(fixture.manager.alertSubject('loose')).toEqual({ title: 'docs', groupPaneId: 'loose' });
+  });
+
   it('unpins first-time Session children and preserves later manual pins', async () => {
     const fixture = createFixture();
     const created = await fixture.manager.create({ name: 'Coordinator' });
@@ -488,6 +688,23 @@ describe('OrchestrationSessionManager', () => {
     expect(reopened.panel.state.customState?.initialInput).toBeUndefined();
     expect(reopened.panel.state.customState?.agentSessionId).toBe('22222222-2222-4222-8222-222222222222');
     expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it('keeps an Agent Farm Session\'s reported ID across refreshes and an unchanged settings save', async () => {
+    const fixture = createFixture();
+    const launchCommand = 'agent-farm run greenfield/implementer:opus';
+    const created = await fixture.manager.create({ name: 'Farm', agent: 'claude', launchCommand });
+    await panelManager.updatePanel(created.panel.id, { state: { ...created.panel.state, customState: {
+      ...created.panel.state.customState, agentSessionId: 'farm-launch-id', customResumeStarted: true,
+    } } });
+    for (const initialized of [false, true]) {
+      vi.mocked(terminalPanelManager.isTerminalInitialized).mockReturnValue(initialized);
+      await fixture.manager.update({ sessionId: created.session.id }, { launchCommand, profile: created.session.profile, customResume: null });
+      const view = await fixture.manager.getView({ sessionId: created.session.id });
+      expect(view.panel.id).toBe(created.panel.id);
+      expect(view.panel.state.customState).toMatchObject({ agentSessionId: 'farm-launch-id', customResumeStarted: true });
+      expect(view.panel.state.customState?.customResume ?? null).toBeNull();
+    }
   });
 
   it('routes native custom commands to the right agent slot and preserves inactive histories', async () => {
@@ -867,6 +1084,28 @@ describe('OrchestrationSessionManager', () => {
     expect(fixture.sessionManager.createSessionWithId).toHaveBeenCalledTimes(1);
   });
 
+  it('includes an associated OpenCode terminal without offering it as a Session orchestrator', async () => {
+    const fixture = createFixture();
+    const pane = paneFixture(fixture, 'opencode-worker-pane');
+    const worker = createPanel('opencode-worker-panel', pane.id, 'OpenCode worker');
+    worker.state.customState = { agentType: 'opencode', isInitialized: true };
+    await seedPanel(worker);
+    await seedPanel(createPanel('claude-worker-panel', pane.id, 'Claude worker'));
+    const named = await fixture.manager.create({ name: 'OpenCode workers', agent: 'claude' });
+    await fixture.manager.associate({ sessionId: named.session.id }, { paneId: pane.id });
+
+    const overview = await fixture.manager.overview({ sessionId: named.session.id });
+
+    expect(overview.session.agent).toBe('claude');
+    expect(overview.panes).toHaveLength(1);
+    expect(overview.panes[0].panels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ panelId: worker.id, initialized: true, agentType: undefined }),
+      expect.objectContaining({ panelId: 'claude-worker-panel', agentType: 'claude' }),
+    ]));
+    await expect(fixture.manager.update({ sessionId: named.session.id }, { launchCommand: 'opencode --auto' }))
+      .rejects.toThrow(/OpenCode.*named Session/i);
+  });
+
   it('enforces exclusive Pane ownership, validates tab membership, and permits reassignment after detach', async () => {
     const fixture = createFixture();
     const pane = paneFixture(fixture, 'pane-1', { name: 'Feature Pane' });
@@ -893,7 +1132,7 @@ describe('OrchestrationSessionManager', () => {
 
     const detached = await fixture.manager.detach({ sessionId: first.session.id }, pane.id);
     expect(detached.associations).toEqual([]);
-    expect(detached.activity.at(-1)?.kind).toBe('detached');
+    expect(detached.activity.at(-1)).toMatchObject({ kind: 'detached', message: 'Detached Pane “Feature Pane”.' });
     const reassigned = await fixture.manager.associate({ sessionId: second.session.id }, { paneId: pane.id });
     expect(reassigned.associations).toEqual([expect.objectContaining({ paneId: pane.id, panelIds: [] })]);
   });
@@ -984,6 +1223,8 @@ describe('OrchestrationSessionManager', () => {
   });
 
   it('records a worker report as Session activity and shows the newest one under its Pane in the overview', async () => {
+    // Association and report can be recorded in the same millisecond.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-09-27T18:00:00.000Z') });
     const fixture = createFixture();
     const named = await fixture.manager.create({ name: 'Reports' });
     const other = await fixture.manager.create({ name: 'Unrelated' });
@@ -1015,6 +1256,79 @@ describe('OrchestrationSessionManager', () => {
     const untouched = await fixture.manager.overview({ sessionId: other.session.id });
     expect(untouched.activity.some(activity => activity.kind === 'report')).toBe(false);
     await expect(fixture.manager.recordAgentReport('missing-panel', newer)).resolves.toEqual([]);
+  });
+
+  it('J-2: gives each panel its own latest report, with data only for a complete JSON object summary', async () => {
+    const fixture = createFixture();
+    const named = await fixture.manager.create({ name: 'Panel reports' });
+    const pane = paneFixture(fixture, 'panel-report-pane', { name: 'Panel Report Pane' });
+    const planner = createPanel('panel-report-planner', pane.id, 'Planner');
+    const plain = createPanel('panel-report-plain', pane.id, 'Plain');
+    const list = createPanel('panel-report-list', pane.id, 'List');
+    const truncated = createPanel('panel-report-truncated', pane.id, 'Truncated');
+    const silent = createPanel('panel-report-silent', pane.id, 'Silent');
+    for (const panel of [planner, plain, list, truncated, silent]) await seedPanel(panel);
+    await fixture.manager.associate({ sessionId: named.session.id }, { paneId: pane.id });
+    const status = { profile: 'planner', state: 'running', checks: { pass: ['S-1'] }, pr: null };
+    const reports = {
+      [planner.id]: { state: 'ready' as const, pr: 412, head: '3f9c2ab', summary: JSON.stringify(status), summaryPath: '/tmp/status.json', reportedAt: '2026-10-17T16:00:00.000Z' },
+      [plain.id]: { state: 'blocked' as const, question: 'Which filename?', summary: 'Waiting on a filename.', reportedAt: '2026-10-17T16:01:00.000Z' },
+      [list.id]: { state: 'done' as const, summary: '["a","b"]', reportedAt: '2026-10-17T16:02:00.000Z' },
+      [truncated.id]: { state: 'ready' as const, summary: '{"long":"…\n[summary truncated]', summaryTruncated: true as const, reportedAt: '2026-10-17T16:03:00.000Z' },
+    };
+    for (const panel of [planner, plain, list, truncated]) {
+      await panelManager.updatePanel(panel.id, { state: { ...panel.state, customState: { ...panel.state.customState, agentReport: reports[panel.id] } } });
+    }
+    liveStates.set(silent.id, 'working');
+    vi.mocked(terminalPanelManager.getTerminalSnapshot).mockImplementation(panelId => panelId === silent.id ? {
+      initialized: true,
+      scrollbackBuffer: '',
+      alternateScreenBuffer: '',
+      isAlternateScreen: false,
+      activityStatus: 'active',
+      lastActivityTime: '2026-10-17T16:05:00.000Z',
+      currentCommand: '',
+    } : null);
+
+    const overview = await fixture.manager.overview({ sessionId: named.session.id });
+    const panels = new Map(overview.panes[0].panels.map(panel => [panel.panelId, panel]));
+
+    expect(panels.get(planner.id)?.report).toEqual({ ...reports[planner.id], data: status });
+    expect(panels.get(plain.id)?.report).toEqual(reports[plain.id]);
+    expect(panels.get(list.id)?.report).toEqual(reports[list.id]);
+    expect(panels.get(truncated.id)?.report).toEqual(reports[truncated.id]);
+    expect(panels.get(silent.id)).toMatchObject({ state: 'working', lastActivityAt: '2026-10-17T16:05:00.000Z' });
+    expect(panels.get(silent.id)).not.toHaveProperty('report');
+    // The per-Pane report keeps its shape: the newest report, its panel, and no data.
+    expect(overview.panes[0].report).toEqual({ ...reports[truncated.id], panelId: truncated.id });
+  });
+
+  it('F-1, F-2: a deeply nested summary leaves the overview readable, and __proto__ keys survive in data', async () => {
+    const fixture = createFixture();
+    const named = await fixture.manager.create({ name: 'Hostile reports' });
+    const pane = paneFixture(fixture, 'hostile-report-pane', { name: 'Hostile Report Pane' });
+    const nested = createPanel('hostile-report-nested', pane.id, 'Nested');
+    const proto = createPanel('hostile-report-proto', pane.id, 'Proto');
+    await seedPanel(nested);
+    await seedPanel(proto);
+    await fixture.manager.associate({ sessionId: named.session.id }, { paneId: pane.id });
+    const nestedReport = normalizeAgentReport({ state: 'ready', summary: `{"x":${'['.repeat(2000)}0${']'.repeat(2000)}}` }, '2026-10-17T16:00:00.000Z');
+    const protoSummary = '{"__proto__":{"state":"changed","__proto__":{"deep":true}},"ok":true}';
+    const protoReport = normalizeAgentReport({ state: 'ready', summary: protoSummary }, '2026-10-17T16:01:00.000Z');
+    expect(nestedReport.summaryTruncated).toBeUndefined();
+    await panelManager.updatePanel(nested.id, { state: { ...nested.state, customState: { ...nested.state.customState, agentReport: nestedReport } } });
+    await panelManager.updatePanel(proto.id, { state: { ...proto.state, customState: { ...proto.state.customState, agentReport: protoReport } } });
+
+    const overview = await fixture.manager.overview({ sessionId: named.session.id });
+    const panels = new Map(overview.panes[0].panels.map(panel => [panel.panelId, panel]));
+
+    expect(panels.get(nested.id)?.report).toEqual(nestedReport);
+    const data = panels.get(proto.id)?.report?.data;
+    expect(data && Object.hasOwn(data, '__proto__')).toBe(true);
+    expect(JSON.stringify(data)).toBe(protoSummary);
+    // The daemon serializes the overview through the JSON transport; the result survives it unchanged.
+    expect(serializeJsonTransport(overview, boundary.json)).toEqual(JSON.parse(JSON.stringify(overview)));
+    expect(JSON.stringify(serializeJsonTransport(overview, boundary.json))).toBe(JSON.stringify(overview));
   });
 
   it('supports exact-name selectors and rejects lost updates with an optimistic revision guard', async () => {
@@ -1145,3 +1459,122 @@ describe('OrchestrationSessionManager', () => {
     expect(fixture.paneChatManager.getOrCreate).not.toHaveBeenCalled();
   });
 });
+
+describe('OrchestrationSessionManager Session order', () => {
+  const start = Date.parse('2026-10-11T10:00:00.000Z');
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Creates Sessions one second apart, so creation order is unambiguous. */
+  async function createInOrder(fixture: ReturnType<typeof createFixture>, names: string[]): Promise<Record<string, string>> {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const ids: Record<string, string> = {};
+    for (const [index, name] of names.entries()) {
+      vi.setSystemTime(start + (index + 1) * 1000);
+      ids[name] = (await fixture.manager.create({ name })).session.id;
+    }
+    return ids;
+  }
+
+  async function namesInOrder(fixture: ReturnType<typeof createFixture>, filter: (session: OrchestrationSessionRecord) => boolean = session => session.archived !== true): Promise<string[]> {
+    const listed = await fixture.manager.list();
+    return listed.sessions.filter(filter).filter(session => session.id !== LEGACY_ORCHESTRATION_SESSION_ID).map(session => session.name);
+  }
+
+  it('lists Sessions oldest first when no order was saved', async () => {
+    const fixture = createFixture();
+    await createInOrder(fixture, ['A', 'B', 'C', 'D']);
+
+    expect(await namesInOrder(fixture)).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('lists and selects in the saved order, and adds a new Session at the bottom', async () => {
+    const fixture = createFixture();
+    const ids = await createInOrder(fixture, ['A', 'B', 'C', 'D']);
+
+    await fixture.manager.reorder([ids.A, ids.D, ids.B, ids.C]);
+
+    expect(await namesInOrder(fixture)).toEqual(['A', 'D', 'B', 'C']);
+    const selected = await fixture.manager.select({ sessionId: ids.B });
+    expect(selected.sessions.map(session => session.name).filter(name => name !== 'Pane Chat')).toEqual(['A', 'D', 'B', 'C']);
+    vi.setSystemTime(start + 60_000);
+    await fixture.manager.create({ name: 'E' });
+    expect(await namesInOrder(fixture)).toEqual(['A', 'D', 'B', 'C', 'E']);
+  });
+
+  it('changes no Session revision, timestamp or activity, and tells clients the order changed', async () => {
+    const fixture = createFixture();
+    const ids = await createInOrder(fixture, ['A', 'B', 'C']);
+    const before = await fixture.manager.list();
+    const changes: unknown[] = [];
+    fixture.manager.on('changed', change => changes.push(change));
+
+    await fixture.manager.reorder([ids.C, ids.A]);
+
+    const after = await fixture.manager.list();
+    const fields = (session: OrchestrationSessionRecord) => [session.id, session.revision, session.updatedAt, session.activity.length];
+    expect(after.sessions.map(fields).sort()).toEqual(before.sessions.map(fields).sort());
+    expect(changes).toEqual([{ sessionId: ids.C, kind: 'reordered' }]);
+  });
+
+  it('moves only the listed Sessions, among the places they already hold', async () => {
+    const fixture = createFixture();
+    const ids = await createInOrder(fixture, ['A', 'B', 'C', 'D', 'E']);
+
+    // A list that shows only B and D (such as Pinned) swaps them; A, C and E stay where they are.
+    await fixture.manager.reorder([ids.D, ids.B]);
+
+    expect(await namesInOrder(fixture)).toEqual(['A', 'D', 'C', 'B', 'E']);
+  });
+
+  it('ignores unknown and repeated ids', async () => {
+    const fixture = createFixture();
+    const ids = await createInOrder(fixture, ['A', 'B', 'C']);
+
+    await fixture.manager.reorder(['missing-session', ids.C, ids.C, ids.A]);
+
+    expect(await namesInOrder(fixture)).toEqual(['C', 'B', 'A']);
+  });
+
+  it('returns a restored Session to the place it had before it was archived', async () => {
+    const fixture = createFixture();
+    const ids = await createInOrder(fixture, ['A', 'B', 'C', 'D']);
+    await fixture.manager.reorder([ids.A, ids.D, ids.B, ids.C]);
+
+    await fixture.manager.update({ sessionId: ids.B }, { archived: true });
+    // A client that sees only the active Sessions reorders them while B is archived.
+    await fixture.manager.reorder([ids.C, ids.A, ids.D]);
+    await fixture.manager.update({ sessionId: ids.B }, { archived: false });
+
+    expect(await namesInOrder(fixture)).toEqual(['C', 'A', 'B', 'D']);
+  });
+
+  it('selects the next Session in the saved order when the selected one is archived', async () => {
+    const fixture = createFixture();
+    const ids = await createInOrder(fixture, ['A', 'B', 'C']);
+    await fixture.manager.reorder([ids.C, ids.B, ids.A, LEGACY_ORCHESTRATION_SESSION_ID]);
+    await fixture.manager.select({ sessionId: ids.C });
+
+    await fixture.manager.update({ sessionId: ids.C }, { archived: true });
+
+    expect((await fixture.manager.list()).selectedSessionId).toBe(ids.B);
+  });
+
+  it('loads a store written before ordering, and one whose order names deleted Sessions', async () => {
+    const first = { ...orchestrationRecord('session-first', 'First'), createdAt: '2026-10-01T00:00:00.000Z' };
+    const second = { ...orchestrationRecord('session-second', 'Second'), createdAt: '2026-10-02T00:00:00.000Z' };
+    const unordered = createFixture('codex', { version: 1, sessions: [second, first] });
+    expect(await namesInOrder(unordered)).toEqual(['First', 'Second']);
+
+    const stale = createFixture('codex', { version: 1, order: ['session-gone', 'session-second', 'session-first'], sessions: [first, second] });
+    expect(await namesInOrder(stale)).toEqual(['Second', 'First']);
+    expect(stale.store.read().order).toEqual(['session-second', 'session-first']);
+  });
+});
+
+function partialRuntime(value: Partial<PaneRuntime>): PaneRuntime {
+  // SAFETY: The test reads only the event sink from the runtime.
+  return value as PaneRuntime;
+}

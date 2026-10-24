@@ -1,10 +1,12 @@
+import { registerRemoteWorkspaceRestore } from '../utils/remoteRestoration';
 import type { CustomCommandResume } from '../../../shared/types/customCommandResume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pencil, RefreshCw, Settings, Terminal, X } from 'lucide-react';
+import { Info, Pencil, RefreshCw, Settings, Terminal, X } from 'lucide-react';
 import { API } from '../utils/api';
 import type { Session } from '../types/session';
 import { PANE_CHAT_AGENT_LABELS, type PaneChatAgent, type PaneChatState } from '../../../shared/types/paneChat';
 import type {
+  OrchestrationActivityKind,
   OrchestrationSessionOverview,
   OrchestrationSessionRecord,
   OrchestrationSessionUpdateInput,
@@ -18,6 +20,7 @@ import { DropOverlay } from './panels/DropOverlay';
 import { SessionWorkspacePanels } from './SessionWorkspacePanels';
 import { SessionTileLayout, type SessionTileContext } from './SessionTileLayout';
 import { Button } from './ui/Button';
+import { SelectionLoading } from './ui/SelectionLoading';
 import { Input } from './ui/Input';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from './ui/Modal';
 import { SessionLaunchFields } from './SessionLaunchFields';
@@ -33,6 +36,7 @@ import {
 import { useSessionWorkspaceLayoutStore } from '../stores/sessionWorkspaceLayoutStore';
 import { useNavigationStore } from '../stores/navigationStore';
 import { useSessionStore } from '../stores/sessionStore';
+import { usePanelStore } from '../stores/panelStore';
 import { useHotkey } from '../hooks/useHotkey';
 import { readDraggedSessionId, startSessionDrag, useDraggedSessionId } from '../utils/sessionDrag';
 import type { DropZone, LayoutDirection } from '../utils/layoutTree';
@@ -138,7 +142,7 @@ export function PaneChatView() {
           <>
             <h2 className="text-base font-semibold text-text-primary">Choose a Session</h2>
             <p className="mt-2 text-sm text-text-secondary">
-              Create a new Session or restore one from Archived to start a chat.
+              Create a new Session or restore one from Archived.
             </p>
           </>
         )}
@@ -163,6 +167,7 @@ export function PaneChatView() {
 function SessionWorkspace() {
   const sessions = useOrchestrationSessionStore(state => state.sessions);
   const selectedSessionId = useOrchestrationSessionStore(state => state.selectedSessionId);
+  const selectionRevision = useOrchestrationSessionStore(state => state.selectionRevision);
   const select = useOrchestrationSessionStore(state => state.select);
   const layout = useSessionWorkspaceLayoutStore(state => state.layout);
   const applyLayout = useSessionWorkspaceLayoutStore(state => state.apply);
@@ -205,12 +210,14 @@ function SessionWorkspace() {
   // still a dependency, so learning the host re-runs the real hydrate.
   useEffect(() => {
     if (activeSessionIds.length === 0) return;
-    void hydrateLayout(activeSessionIds, selectedSessionId).then(hydrated => {
-      if (!hydrated) return;
+    let cancelled = false;
+    void hydrateLayout(activeSessionIds, selectedSessionId, selectionRevision > 0).then(hydrated => {
+      if (!hydrated || cancelled) return;
       const focused = focusedSessionId(hydrated);
       if (activeSessionIds.includes(focused)) selectSession(focused);
     });
-  }, [activeSessionIds, hydrateLayout, remoteHostId, selectSession, selectedSessionId]);
+    return () => { cancelled = true; };
+  }, [activeSessionIds, hydrateLayout, remoteHostId, selectSession, selectedSessionId, selectionRevision]);
 
   // Archiving or deleting a Session retires its tile.
   useEffect(() => {
@@ -348,11 +355,14 @@ function SessionWorkspace() {
     );
   }
 
+  // The displayed tree follows intent in this commit. The passive effect above
+  // only remembers it; it must never expose the outgoing focused workspace.
+  const displayedLayout = selectedSessionId ? showSessionInLayout(layout, selectedSessionId) : layout;
   return (
     <div data-testid="session-tile-layout" className="relative flex min-h-0 flex-1 overflow-hidden bg-bg-primary">
       <SessionTileLayout
-        layout={layout}
-        focusedTileId={focusedSessionTile(layout).id}
+        layout={displayedLayout}
+        focusedTileId={focusedSessionTile(displayedLayout).id}
         renderTile={renderTile}
         onSizesChange={resizeTiles}
       />
@@ -385,9 +395,15 @@ function SessionTile({
   onClose,
 }: SessionTileProps) {
   const sessionId = tile.sessionId;
+  const hostId = useConfigStore(state => state.config ? getActiveRemoteHostId(state.config.remoteDaemon) : undefined);
+  const visit = useOrchestrationSessionStore(state => state.selectionVisits[sessionId] ?? 0);
   const [view, setView] = useState<OrchestrationSessionView<Session> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadingSessionId, setLoadingSessionId] = useState(sessionId);
+  const [loadingHostId, setLoadingHostId] = useState(hostId);
+  const [loadingVisit, setLoadingVisit] = useState(visit);
+  const selectionError = useOrchestrationSessionStore(state => state.selectedSessionId === sessionId ? state.selectionError : null);
   const [dropZone, setDropZone] = useState<DropZone | null>(null);
   const requestGeneration = useRef(0);
   const agentReloadKey = useRef<string | null>(null);
@@ -395,6 +411,9 @@ function SessionTile({
 
   const load = useCallback(async () => {
     const generation = ++requestGeneration.current;
+    setLoadingSessionId(sessionId);
+    setLoadingHostId(hostId);
+    setLoadingVisit(visit);
     setIsLoading(true);
     setError(null);
     try {
@@ -410,7 +429,7 @@ function SessionTile({
     } finally {
       if (generation === requestGeneration.current) setIsLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, hostId, visit]);
 
   useEffect(() => {
     void load();
@@ -479,10 +498,12 @@ function SessionTile({
         'relative flex h-full w-full flex-1 min-w-0 min-h-0 flex-col overflow-hidden bg-bg-primary',
         tiled && isFocused && 'ring-1 ring-inset ring-[color-mix(in_srgb,var(--color-interactive-primary)_30%,transparent)]',
       )}
+      data-session-tile={sessionId}
+      data-session-focused={isFocused}
       onMouseDownCapture={focusThisTile}
       onFocusCapture={focusThisTile}
     >
-      {view ? (
+      {view && view.session.id === sessionId && loadingSessionId === sessionId && loadingHostId === hostId && loadingVisit === visit && !isLoading && !selectionError && !error ? (
         <NamedSessionWorkspace
           // Changing which Session a tile shows starts that Session's workspace
           // fresh, exactly as switching Sessions always has: its inspector, its
@@ -497,10 +518,13 @@ function SessionTile({
       ) : (
         <SessionTileFallback
           name={record?.name}
-          error={error}
-          isLoading={isLoading}
+          error={loadingSessionId === sessionId && loadingHostId === hostId && loadingVisit === visit ? selectionError ?? error : null}
+          isLoading={!selectionError && (loadingSessionId !== sessionId || loadingHostId !== hostId || loadingVisit !== visit || isLoading)}
           chrome={chrome}
-          onRetry={() => void load()}
+          onRetry={() => {
+            if (selectionError) void useOrchestrationSessionStore.getState().select({ sessionId }).catch(() => undefined);
+            void load();
+          }}
         />
       )}
 
@@ -532,10 +556,7 @@ function SessionTileFallback({ name, error, isLoading, chrome, onRetry }: {
       <SessionTileHeader name={name ?? 'Session'} chrome={chrome} />
       <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-center">
         {isLoading ? (
-          <div role="status" aria-live="polite" className="flex items-center gap-2 text-sm text-text-secondary">
-            <RefreshCw aria-hidden="true" className="h-4 w-4 animate-spin" />
-            <span>Opening {name ?? 'Session'}…</span>
-          </div>
+          <SelectionLoading name={name ?? 'Session'} />
         ) : (
           <div>
             <p role="alert" className="text-sm text-text-secondary">{error ?? 'This Session did not open.'}</p>
@@ -663,11 +684,13 @@ function NamedSessionWorkspace({ view, error, chrome, onOverviewUpdate, onRetry 
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [statusAnnouncement, setStatusAnnouncement] = useState('');
+  const showsTrustPrompt = usePanelStore(state => state.agentStatus[view.panel.id] === 'blocked'
+    && state.agentStatusReason[view.panel.id] === 'workspace_trust_prompt');
   const overviewRequestId = useRef(0);
   const overviewRefreshTimer = useRef<number | null>(null);
   const isMounted = useRef(false);
 
-  const refreshOverview = useCallback(async () => {
+  const refreshOverview = useCallback(async (required = false) => {
     const sessionId = view.session.id;
     const requestId = ++overviewRequestId.current;
     const isCurrentRequest = () => isMounted.current && requestId === overviewRequestId.current;
@@ -676,14 +699,20 @@ function NamedSessionWorkspace({ view, error, chrome, onOverviewUpdate, onRetry 
       const response = await API.orchestrationSessions.overview({ sessionId });
       const responseFailure = responseError(response, 'Failed to refresh Session overview');
       if (responseFailure || !response.data) throw responseFailure ?? new Error('Failed to refresh Session overview');
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) {
+        if (required && isMounted.current) throw new Error('Session overview changed during restoration; retrying the current view.');
+        return;
+      }
       setOverview(response.data);
       setOverviewError(null);
     } catch (cause) {
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) { if (required && isMounted.current) throw cause; return; }
       setOverviewError(cause instanceof Error ? cause.message : 'Failed to refresh Session overview');
+      if (required) throw cause;
     }
   }, [view.session.id]);
+
+  useEffect(() => registerRemoteWorkspaceRestore(() => refreshOverview(true)), [refreshOverview]);
 
   const scheduleOverviewRefresh = useCallback(() => {
     if (!isMounted.current || overviewRefreshTimer.current !== null) return;
@@ -786,7 +815,7 @@ function NamedSessionWorkspace({ view, error, chrome, onOverviewUpdate, onRetry 
   );
 
   return (
-    <div className="pane-chat-shell flex-1 flex min-h-0 flex-col overflow-hidden bg-bg-primary">
+    <div data-session-content-id={view.session.id} className="pane-chat-shell flex-1 flex min-h-0 flex-col overflow-hidden bg-bg-primary">
       <LiveRegion>{statusAnnouncement}</LiveRegion>
       <SessionTileHeader name={view.session.name} chrome={chrome} error={error} />
       {showSettings && <SessionSettingsDialog record={view.session} onClose={() => setShowSettings(false)} onSave={saveOverview} />}
@@ -794,6 +823,7 @@ function NamedSessionWorkspace({ view, error, chrome, onOverviewUpdate, onRetry 
         <SessionProvider session={view.internalSession}>
           <SessionWorkspacePanels agentPanel={view.panel} agentPanelIds={Object.values(view.session.panelIds)}
             toolbarActions={sessionControls}
+            stageNotice={showsTrustPrompt && <FolderTrustNotice />}
             chromeInline={chrome.tiled}
             focusWithin={chrome.isFocused}
             overviewContent={<SessionOverviewPanel
@@ -811,6 +841,19 @@ function NamedSessionWorkspace({ view, error, chrome, onOverviewUpdate, onRetry 
             changesContent={<SessionChangesPanel overview={overview} error={overviewError} onRetry={onRetry} />} />
         </SessionProvider>
       </div>
+    </div>
+  );
+}
+
+const FOLDER_TRUST_NOTICE = 'The agent is asking whether to trust this folder. It is Pane\'s own folder for this Session\'s notes, with no project code, so it is safe to trust.';
+
+/** Overlays the top terminal row, which holds only the blank line and rule above the trust prompt, so the terminal keeps its size. */
+function FolderTrustNotice() {
+  return (
+    <div role="status" title={FOLDER_TRUST_NOTICE}
+      className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-7 items-center gap-2 border-b border-interactive/30 bg-surface-secondary px-3 text-xs text-text-primary">
+      <Info className="h-3.5 w-3.5 flex-shrink-0 text-status-info" aria-hidden="true" />
+      <span className="min-w-0 truncate">{FOLDER_TRUST_NOTICE}</span>
     </div>
   );
 }
@@ -863,6 +906,11 @@ function SessionSettingsDialog({ record, onClose, onSave }: {
     </Modal>
   );
 }
+
+// Agent state flips are shown by the status dot; the Activity list keeps Session events.
+const AGENT_STATE_ACTIVITY_KINDS = new Set<OrchestrationActivityKind>(['working', 'blocked', 'idle', 'unknown']);
+
+const OVERVIEW_HEADING = 'mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary';
 
 interface SessionOverviewPanelProps {
   record: OrchestrationSessionRecord;
@@ -922,18 +970,47 @@ function SessionOverviewPanel({ record, overview, error, onRefresh, onUpdate, on
           </>
         ) : null}
 
+        {record.blockers.length > 0 && (
+          <div className="rounded-md border border-status-error/30 bg-status-error/10 px-2 py-2">
+            <h3 className={cn(OVERVIEW_HEADING, 'text-status-error')}>Blockers</h3>
+            <ul className="select-text list-disc space-y-1 pl-4 text-status-error">
+              {record.blockers.map((blocker, index) => <li key={index}>{blocker}</li>)}
+            </ul>
+          </div>
+        )}
+        {record.goal && (
+          <div>
+            <h3 className={OVERVIEW_HEADING}>Goal</h3>
+            <p className="select-text whitespace-pre-wrap text-text-secondary">{record.goal}</p>
+          </div>
+        )}
+        {record.nextAction && (
+          <div>
+            <h3 className={OVERVIEW_HEADING}>Next step</h3>
+            <p className="select-text whitespace-pre-wrap text-text-secondary">{record.nextAction}</p>
+          </div>
+        )}
+        {record.decisions.length > 0 && (
+          <div>
+            <h3 className={OVERVIEW_HEADING}>Decisions</h3>
+            <ul className="select-text list-disc space-y-1 pl-4 text-text-secondary">
+              {record.decisions.map((decision, index) => <li key={index}>{decision}</li>)}
+            </ul>
+          </div>
+        )}
+
         <div>
-          <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Associated Panes</h3>
+          <h3 className={OVERVIEW_HEADING}>Associated Panes</h3>
           {!overview && !error && <p className="text-text-muted">Loading live state…</p>}
           {error && <div className="space-y-1"><p role="alert" className="text-status-error">{error}</p><button type="button" className="underline text-text-secondary" onClick={onRetry}>Retry</button></div>}
-          {overview?.panes.length === 0 && <p className="text-text-muted">This Session has no associated Panes.</p>}
+          {overview?.panes.length === 0 && <p className="text-text-muted">No Panes in this Session yet.</p>}
           {overview?.panes.map(pane => <PaneOverviewCard key={pane.paneId} pane={pane} />)}
         </div>
 
         <div className="border-t border-border-primary pt-3">
-          <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Activity</h3>
+          <h3 className={OVERVIEW_HEADING}>Activity</h3>
           <div className="select-text space-y-2">
-            {(overview?.activity ?? record.activity).slice(0, 12).map(activity => (
+            {(overview?.activity ?? record.activity).filter(activity => !AGENT_STATE_ACTIVITY_KINDS.has(activity.kind)).slice(0, 12).map(activity => (
               <div key={activity.id} className="border-l-2 border-border-primary pl-2">
                 <p className="text-text-secondary">{activity.message}</p>
                 <p className="mt-0.5 text-[10px] text-text-muted">{formatActivityTime(activity.at)} · {activity.source}</p>
@@ -958,8 +1035,8 @@ function SessionChangesPanel({ overview, error, onRetry }: {
   return (
     <div className="space-y-2 p-3 text-[12px] text-text-secondary">
       {error && <div role="alert" className="space-y-1"><p className="text-status-error">{error}</p><button type="button" className="underline" onClick={onRetry}>Retry</button></div>}
-      {!overview && !error && <p className="text-text-muted">Loading linked worktrees…</p>}
-      {overview && panes.length === 0 && <p className="text-text-muted">No linked worktrees.</p>}
+      {!overview && !error && <p className="text-text-muted">Loading Panes…</p>}
+      {overview && panes.length === 0 && <p className="text-text-muted">No Panes in this Session yet.</p>}
       {panes.map(pane => (
         <div key={pane.paneId} className="rounded-md bg-surface-secondary px-2 py-2">
           <div className="flex items-center justify-between gap-2">
@@ -968,7 +1045,7 @@ function SessionChangesPanel({ overview, error, onRetry }: {
               onClick={() => { setActiveSession(pane.paneId); navigateToSessions(); }}>Open Pane</button>}
           </div>
           <p className="mt-1 text-[11px] text-text-tertiary">
-            {pane.missing ? 'Worktree unavailable' : pane.git?.hasUncommittedChanges || pane.git?.hasUntrackedFiles ? 'Uncommitted changes' : 'No uncommitted changes'}
+            {pane.missing ? 'Pane unavailable' : pane.git?.hasUncommittedChanges || pane.git?.hasUntrackedFiles ? 'Uncommitted changes' : 'No uncommitted changes'}
             {pane.branch ? ` · ${pane.branch}` : ''}
           </p>
           {pane.git && (pane.git.ahead || pane.git.behind) ? (

@@ -14,6 +14,8 @@ The tool panel system consists of several key components:
 
 ## Key Implementation Principles
 
+- 1 feature = 1 worktree = 1 branch = 1 Pane; reviews, audits, fixes and QA for it are tabs in that Pane. A Pane owns one worktree and branch; panels (tabs) share it. Agents add review, QA and fix agents for existing work as new panels with `runpane panels create --pane <id>`, never as new Panes. See [Sessions](SESSIONS.md#one-pane-per-feature).
+
 1. **Lazy Initialization**: Panels are created in the database immediately but background processes (like terminal PTY) only start when the panel is first viewed
 2. **State Persistence**: All panel state including terminal scrollback, working directories, and configurations persist across application restarts
 3. **Memory Efficiency**: Inactive panels suspend rendering but maintain background processes
@@ -41,11 +43,13 @@ The tool panel system consists of several key components:
 ## Database Schema
 
 - `tool_panels` table stores panel configuration and state
-- `sessions.active_panel_id` tracks the currently active panel per session
+- `sessions.active_panel_id` is the last-used tab per session: the one any client picked most recently. A client with no memory of a Pane opens it there, and `runpane panels list` reports it as active
 - Foreign key constraints ensure panels are cleaned up when sessions are deleted
 
 ## Event System
 
+- A client's tab click (`panels:set-active`), `runpane panes focus` and opening a Session view update `active_panel_id` and move no other client. A host- or agent-initiated activation (`runpane panels open`, `panels create`/`panes create` with focus, Pane Chat, new-Pane setup, run scripts) sends `panel:activeChanged` (`PanelActivationRequest`), which only clients already showing that Pane follow
+- The remote web and mobile app remembers its own Pane, Session and tab per host in browser storage. Each desktop remembers its own split and tabs per Pane in its local `ui_state` (`paneLayout.<pane id>[@<host profile id>]`) and its own Session in navigation memory; it opens a Pane on `active_panel_id` and the stored `panel_layout` only when it has no memory of it. Tabs missing from its memory join the primary group, except agent-opened ones (`metadata.openPlacement: 'split'`), which go to the side group, inactive
 - Terminal panels emit `terminal:command_executed`, `terminal:exit`, and `files:changed` events
 - Event bus routes events to subscribed panels (planned for future panel types)
 - Events support future inter-panel communication (e.g., diff panels reacting to file changes)

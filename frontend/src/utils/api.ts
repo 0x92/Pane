@@ -5,6 +5,8 @@ import type { UpdateConfigRequest } from '../types/config';
 import type { SessionCreationPreferences } from '../stores/sessionPreferencesStore';
 import type { PaneChatAgent, PaneChatState } from '../../../shared/types/paneChat';
 import type { ScheduledRunInput } from '../../../shared/types/schedule';
+import { startOwnPaneCreation } from './ownPaneCreations';
+import type { MissionControlSnapshotRequest } from '../../../shared/types/missionControl';
 import type {
   OrchestrationAssociationInput,
   OrchestrationSessionCreateInput,
@@ -26,6 +28,7 @@ import type {
   RemotePaneConnectionState,
   RemotePaneConnectionProfile,
 } from '../../../shared/types/remoteDaemon';
+import type { WorkspaceAccessUpdate } from '../../../shared/types/workspaceAccess';
 import type {
   PanePermissionResponse,
 } from '../../../shared/types/daemon';
@@ -99,6 +102,10 @@ export class API {
     async update(selector: OrchestrationSessionSelector, input: OrchestrationSessionUpdateInput): Promise<IPCResponse<OrchestrationSessionRecord>> {
       if (!isElectron()) throw new Error('Electron API not available');
       return window.electronAPI.orchestrationSessions.update(selector, input);
+    },
+    async reorder(sessionIds: string[]): Promise<IPCResponse<OrchestrationSessionListResult>> {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.orchestrationSessions.reorder(sessionIds);
     },
     async setAgent(selector: OrchestrationSessionSelector, agent: PaneChatAgent): Promise<IPCResponse<OrchestrationSessionView<Session>>> {
       if (!isElectron()) throw new Error('Electron API not available');
@@ -196,6 +203,20 @@ export class API {
       return window.electronAPI.schedules.runNow(id);
     },
   };
+  // Mission Control
+  static missionControl = {
+    /** Every agent pane across all sessions and projects. */
+    async listAgents(options?: { includeArchived?: boolean }) {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.missionControl.listAgents(options);
+    },
+    /** Batched plain-text screen snapshots for the visible tiles. */
+    async snapshots(request: MissionControlSnapshotRequest) {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.missionControl.snapshots(request);
+    },
+  };
+
   // Session management
   static sessions = {
     async getAll() {
@@ -225,7 +246,7 @@ export class API {
 
     async create(request: CreateSessionRequest) {
       if (!isElectron()) throw new Error('Electron API not available');
-      return window.electronAPI.sessions.create(request);
+      return window.electronAPI.sessions.create({ ...request, clientRequestId: startOwnPaneCreation() });
     },
 
     async delete(sessionId: string) {
@@ -706,6 +727,26 @@ export class API {
     async updateClientState(updates: Partial<Pick<RemoteDaemonClientSettings, 'activeProfileId' | 'mode'>>) {
       if (!isElectron()) throw new Error('Electron API not available');
       return window.electronAPI.remoteDaemon.updateClientState(updates);
+    },
+
+    async getWorkspaceAccess() {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.remoteDaemon.getWorkspaceAccess();
+    },
+
+    async updateWorkspaceAccess(update: WorkspaceAccessUpdate) {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.remoteDaemon.updateWorkspaceAccess(update);
+    },
+
+    async listTailnetMachines() {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.remoteDaemon.listTailnetMachines();
+    },
+
+    async saveTailnetMachine(input: { name: string; password?: string }) {
+      if (!isElectron()) throw new Error('Electron API not available');
+      return window.electronAPI.remoteDaemon.saveTailnetMachine(input);
     },
 
     onConnectionStateChanged(callback: (state: RemotePaneConnectionState) => void) {

@@ -27,6 +27,65 @@ describe('UIStateManager expanded repositories', () => {
   });
 });
 
+describe('UIStateManager opened Sessions', () => {
+  it('starts with no opened Sessions, so every Session shows collapsed', () => {
+    const manager = new UIStateManager(createUiStateDb());
+    expect(manager.getExpandedState().expandedSessions).toEqual([]);
+  });
+
+  it('keeps each host’s opened Sessions separate from this computer’s', () => {
+    let remoteHostId: string | null = null;
+    const manager = new UIStateManager(createUiStateDb(), () => remoteHostId);
+
+    manager.saveExpandedSessions(['local-session']);
+    remoteHostId = 'host-b';
+    expect(manager.getExpandedState().expandedSessions).toEqual([]);
+    manager.saveExpandedSessions(['remote-session']);
+
+    remoteHostId = null;
+    expect(manager.getExpandedState().expandedSessions).toEqual(['local-session']);
+    remoteHostId = 'host-b';
+    expect(manager.getExpandedState().expandedSessions).toEqual(['remote-session']);
+  });
+
+  it('does not read the old collapsed-Sessions list as opened', () => {
+    const db = createUiStateDb();
+    db.setUIState('treeView.collapsedSessions', JSON.stringify(['old-collapsed']));
+    db.setUIState('treeView.collapsedSessions@host-b', JSON.stringify(['old-remote']));
+    let remoteHostId: string | null = null;
+    const manager = new UIStateManager(db, () => remoteHostId);
+
+    expect(manager.getExpandedState().expandedSessions).toEqual([]);
+    remoteHostId = 'host-b';
+    expect(manager.getExpandedState().expandedSessions).toEqual([]);
+  });
+
+  it('forgets this computer’s opened Sessions on clear', () => {
+    const manager = new UIStateManager(createUiStateDb());
+    manager.saveExpandedSessions(['local-session']);
+
+    manager.clear();
+
+    expect(manager.getExpandedState().expandedSessions).toEqual([]);
+  });
+});
+
+describe('UIStateManager Archived list', () => {
+  it('starts closed, and keeps each host’s open Archived repositories separate', () => {
+    let remoteHostId: string | null = null;
+    const manager = new UIStateManager(createUiStateDb(), () => remoteHostId);
+    expect(manager.getExpandedState().archivedSectionExpanded).toBe(false);
+
+    manager.saveExpandedArchivedProjects([3]);
+    remoteHostId = 'host-b';
+    expect(manager.getExpandedState().expandedArchivedProjects).toEqual([]);
+    manager.saveExpandedArchivedProjects([7]);
+
+    remoteHostId = null;
+    expect(manager.getExpandedState().expandedArchivedProjects).toEqual([3]);
+  });
+});
+
 describe('UIStateManager host navigation memory', () => {
   it('keeps each host’s remembered location separate from this computer’s', () => {
     const manager = new UIStateManager(createUiStateDb());
@@ -48,5 +107,49 @@ describe('UIStateManager host navigation memory', () => {
 
     db.setUIState('navigation.lastLocation', JSON.stringify({ view: 'inbox', projectId: null, paneId: null }));
     expect(manager.getNavigationMemory(null)).toBeNull();
+  });
+});
+
+describe('UIStateManager Pane layout memory', () => {
+  const split = {
+    version: 1 as const,
+    root: {
+      type: 'split' as const, id: 'root', direction: 'row' as const, sizes: [1, 1],
+      children: [
+        { type: 'group' as const, id: 'left', panelIds: ['u'], activePanelId: 'u' },
+        { type: 'group' as const, id: 'right', panelIds: ['page'], activePanelId: 'page' },
+      ],
+    },
+    focusedGroupId: 'left',
+  };
+  const single = {
+    version: 1 as const,
+    root: { type: 'group' as const, id: 'main', panelIds: ['u', 'v'], activePanelId: 'v' },
+  };
+
+  it('keeps each host’s view of a Pane separate, and forgets it on request', () => {
+    const manager = new UIStateManager(createUiStateDb());
+
+    manager.savePaneLayout(null, 'pane-p', split);
+    manager.savePaneLayout('host-b', 'pane-p', single);
+
+    expect(manager.getPaneLayout(null, 'pane-p')).toEqual(split);
+    expect(manager.getPaneLayout('host-b', 'pane-p')).toEqual(single);
+    expect(manager.getPaneLayout(null, 'pane-q')).toBeNull();
+
+    manager.savePaneLayout(null, 'pane-p', null);
+    expect(manager.getPaneLayout(null, 'pane-p')).toBeNull();
+    expect(manager.getPaneLayout('host-b', 'pane-p')).toEqual(single);
+  });
+
+  it('ignores a stored layout it cannot read', () => {
+    const db = createUiStateDb();
+    const manager = new UIStateManager(db);
+
+    db.setUIState('paneLayout.pane-p', 'not json');
+    expect(manager.getPaneLayout(null, 'pane-p')).toBeNull();
+
+    db.setUIState('paneLayout.pane-p', JSON.stringify({ ...single, version: 2 }));
+    expect(manager.getPaneLayout(null, 'pane-p')).toBeNull();
   });
 });

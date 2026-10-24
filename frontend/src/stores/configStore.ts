@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import { API } from '../utils/api';
-import type { AppConfig, UpdateConfigRequest } from '../types/config';
+import type { AppConfig, HtmlFileOpenMode, UpdateConfigRequest } from '../types/config';
 
 interface ConfigStore {
   config: AppConfig | null;
   isLoading: boolean;
   error: string | null;
-  fetchConfig: () => Promise<AppConfig>;
+  fetchConfig: (ownsRequest?: () => boolean) => Promise<AppConfig>;
   updateConfig: (updates: UpdateConfigRequest) => Promise<AppConfig>;
 }
 
@@ -21,26 +21,41 @@ export function isCommandPaletteShortcutEnabled(config: AppConfig | null): boole
   );
 }
 
+/** Mission Control is experimental: every entry point waits for this opt-in. */
+export function isMissionControlEnabled(config: AppConfig | null): boolean {
+  return config?.missionControlEnabled === true;
+}
+
+/** Chat is experimental: agent tabs stay in Terminal until the user opts in. */
+export function isChatEnabled(config: AppConfig | null): boolean {
+  return config?.experimentalChatEnabled === true;
+}
+
+/** What a click on an .html file in Explorer opens; the browser preview unless the user chose source. */
+export function htmlFileOpenModeOf(config: AppConfig | null): HtmlFileOpenMode {
+  return config?.htmlFileOpenMode === 'source' ? 'source' : 'preview';
+}
+
 export const useConfigStore = create<ConfigStore>((set, get) => ({
   config: null,
   isLoading: false,
   error: null,
 
-  fetchConfig: async () => {
-    set({ isLoading: true, error: null });
+  fetchConfig: async (ownsRequest = () => true) => {
+    if (ownsRequest()) set({ isLoading: true, error: null });
     try {
       const response = await API.config.get();
       if (response.success && response.data) {
-        set({ config: response.data, isLoading: false });
+        if (ownsRequest()) set({ config: response.data, isLoading: false });
         return response.data;
       } else {
         const message = response.error || 'Failed to fetch config';
-        set({ error: message, isLoading: false });
+        if (ownsRequest()) set({ error: message, isLoading: false });
         throw new Error(message);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch config';
-      set({ error: message, isLoading: false });
+      if (ownsRequest()) set({ error: message, isLoading: false });
       throw new Error(message);
     }
   },

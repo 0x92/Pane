@@ -4,32 +4,41 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ChevronDown, ChevronUp, PanelRight, Terminal } from 'lucide-react';
 import type { SessionPanelLayout, TerminalPanelState, ToolPanel } from '../../../shared/types/panels';
 import { panelApi } from '../services/panelApi';
+import { isArchivedOrchestrationSession, useOrchestrationSessionStore } from '../stores/orchestrationSessionStore';
+import { useConfigStore } from '../stores/configStore';
+import { readPaneLayout, rememberPaneLayout } from '../utils/paneLayoutMemory';
+import { getActiveRemoteHostId } from '../../../shared/types/remoteDaemon';
 import { usePanelStore } from '../stores/panelStore';
 import { PanelContainer } from './panels/PanelContainer';
 import { PanelTabStrip } from './panels/PanelTabStrip';
 import { SplitLayout } from './panels/SplitLayout';
 import { SessionAddToolMenu, type SessionToolSpec } from './SessionAddToolMenu';
+import { SelectionLoading } from './ui/SelectionLoading';
 import { useOuterPanelResize } from '../hooks/useOuterPanelResize';
 import { OuterResizeSeparator } from './ui/OuterResizeSeparator';
 import { OUTER_PANEL_CONFIGS } from '../utils/outerPanelSizing';
 import {
   activatePanelInLayout,
-  shouldActivateReopenedPanel,
   addPanelToGroup,
   createSingleGroupLayout,
   findGroup,
+  findGroupContainingPanel,
+  movePanel,
   placePanelInSplit,
   primaryGroup,
   reconcile,
   removePanelFromLayout,
+  showPanelInSplit,
+  subsetInsertIndex,
   updateSizes,
+  type DropZone,
 } from '../utils/panelLayout';
 
 const EMPTY_PANELS: ToolPanel[] = [];
 const SESSION_INSPECTOR_TABS = ['overview', 'files', 'changes'] as const;
 type SessionInspectorTab = typeof SESSION_INSPECTOR_TABS[number];
 /** Panels that always live on the Session stage as tabs; Files docks in the inspector. */
-const STAGE_PANEL_TYPES = new Set<ToolPanel['type']>(['editor', 'browser']);
+const STAGE_PANEL_TYPES = new Set<ToolPanel['type']>(['editor', 'browser', 'notes']);
 
 /** A terminal started with a command (an agent or a custom command) is always a tab. */
 function launchesCommand(panel: ToolPanel): boolean {
@@ -65,11 +74,14 @@ export function SessionWorkspacePanels({
   overviewContent,
   changesContent,
   toolbarActions,
+  stageNotice,
   chromeInline = false,
   focusWithin = true,
 }: {
   agentPanel: ToolPanel; agentPanelIds: string[];
   overviewContent: ReactNode; changesContent: ReactNode; toolbarActions?: ReactNode;
+  /** Absolutely positioned over the top of the stage, so showing it never resizes a terminal. */
+  stageNotice?: ReactNode;
   /**
    * Keep this Session's toolbar in its own tile instead of the window title
    * bar. The title bar has one trailing slot, so tiled Sessions would otherwise
@@ -102,15 +114,20 @@ export function SessionWorkspacePanels({
     return () => observer.disconnect();
   }, []);
   const [loaded, setLoaded] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const creating = useRef(false);
   const inLayout = useMemo(() => layoutPanelIds(layout), [layout]);
   const agentPanelIdSet = useMemo(() => new Set(agentPanelIds), [agentPanelIds]);
   const terminal = panels.find(panel => panel.type === 'terminal' && !agentPanelIdSet.has(panel.id) && !isStagePanel(panel, agentPanelIdSet, inLayout));
   const explorer = panels.find(panel => panel.type === 'explorer');
+  // Readiness may arrive while the initial layout is loading, before the
+  // terminal subscribes. Use the live record after this visit's load finishes;
+  // until then the store may still contain a previous visit or host's record.
+  const currentAgentPanel = (loaded && panels.find(panel => panel.id === agentPanel.id)) || agentPanel;
   const tabs = useMemo(
-    () => [agentPanel, ...panels.filter(panel => isStagePanel(panel, agentPanelIdSet, inLayout))],
-    [agentPanel, panels, agentPanelIdSet, inLayout],
+    () => [currentAgentPanel, ...panels.filter(panel => isStagePanel(panel, agentPanelIdSet, inLayout))],
+    [currentAgentPanel, panels, agentPanelIdSet, inLayout],
   );
   const agentPanelId = agentPanel.id;
   // The panel events below outlive the render that subscribed them, so they read
@@ -120,6 +137,26 @@ export function SessionWorkspacePanels({
     agentPanelIdsRef.current = agentPanelIdSet;
   }, [agentPanelIdSet]);
   const persistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pendingLayout = useRef<{ sessionId: string; layout: SessionPanelLayout; hostId: string | null | undefined } | null>(null);
+  // Writes a debounced layout now. Leaving the Session flushes it, so the last
+  // tab or split shown is never lost; an archived Session stays forgotten.
+  const flushLayout = useCallback(() => {
+    clearTimeout(persistTimer.current);
+    const pending = pendingLayout.current;
+    pendingLayout.current = null;
+    if (!pending) return;
+    const record = useOrchestrationSessionStore.getState().sessions.find(session => session.internalSessionId === pending.sessionId);
+    if (record && isArchivedOrchestrationSession(record)) return;
+    // The host keeps it as the last-used layout; this desktop keeps its own.
+    panelApi.setLayout(pending.sessionId, pending.layout).catch(() => {});
+    rememberPaneLayout(pending.hostId, pending.sessionId, pending.layout);
+  }, []);
+  const hostId = useConfigStore(state => state.config ? getActiveRemoteHostId(state.config.remoteDaemon) : undefined);
+  // The host this Session's layout was loaded from, so writes land in its memory.
+  const hostIdRef = useRef(hostId);
+  useEffect(() => {
+    hostIdRef.current = hostId;
+  }, [hostId]);
 
   // Every layout change funnels through here: store, focus mirror, and a
   // debounced save so sash drags do not write per frame.
@@ -137,28 +174,35 @@ export function SessionWorkspacePanels({
       void panelApi.setActivePanel(sessionId, focusedPanelId).catch(() => {});
     }
     clearTimeout(persistTimer.current);
-    persistTimer.current = setTimeout(() => {
-      panelApi.setLayout(sessionId, repaired).catch(() => {});
-    }, 300);
-  }, [sessionId]);
-  useEffect(() => () => clearTimeout(persistTimer.current), []);
+    pendingLayout.current = { sessionId, layout: repaired, hostId: hostIdRef.current };
+    persistTimer.current = setTimeout(flushLayout, 300);
+  }, [sessionId, flushLayout]);
+  useEffect(() => flushLayout, [sessionId, flushLayout]);
 
   useEffect(() => {
     let cancelled = false;
+    setLoaded(false);
+    setError(null);
     void panelApi.loadPanelsForSession(sessionId).then(async saved => {
       if (cancelled) return;
       usePanelStore.getState().setPanels(sessionId, saved);
-      const stored = await panelApi.getLayout(sessionId).catch(() => null);
+      // applyLayout below remembers whatever this desktop shows first.
+      const remembered = await readPaneLayout(hostIdRef.current, sessionId);
+      const stored = remembered ?? await panelApi.getLayout(sessionId);
       if (cancelled) return;
       const base = stored?.version === 1 ? stored : createSingleGroupLayout([agentPanelId], agentPanelId);
       const storedIds = layoutPanelIds(base);
       const stage = (usePanelStore.getState().panels[sessionId] ?? saved)
         .filter(panel => isStagePanel(panel, agentPanelIdsRef.current, storedIds));
-      const splitIds = new Set(stage.filter(panel => panel.metadata?.openPlacement === 'split').map(panel => panel.id));
+      // Agent pages this desktop has never placed (opened while it showed
+      // something else) go beside the conversation, inactive. Tabs already in
+      // its remembered layout keep their place.
+      const splitIds = new Set<string>();
+      for (const panel of stage) if (panel.metadata?.openPlacement === 'split') splitIds.add(panel.id);
       applyLayout(reconcile(base, [agentPanelId, ...stage.map(panel => panel.id)], splitIds).layout);
       setLoaded(true);
-    }).catch(() => {
-      if (!cancelled) setError('Could not load Session tools. Reopen the Session to retry.');
+    }).catch(error => {
+      if (!cancelled) setError(error instanceof Error ? error.message : 'Could not load Session tools');
     });
     const events = window.electronAPI.events;
     const created = events.onPanelCreated(panel => {
@@ -169,20 +213,18 @@ export function SessionWorkspacePanels({
       if (!current || !isStagePanel(panel, agentPanelIdsRef.current, layoutPanelIds(current))) return;
       const focused = findGroup(current.root, current.focusedGroupId ?? '') ?? primaryGroup(current.root);
       // Agents open pages and files beside the conversation by default.
+      // Another client's new tab never moves this one; activation requests do.
       const root = panel.metadata?.openPlacement === 'split'
-        ? placePanelInSplit(current.root, panel.id, panel.state.isActive)
-        : addPanelToGroup(current.root, focused.id, panel.id, { activate: panel.state.isActive });
+        ? placePanelInSplit(current.root, panel.id, false)
+        : addPanelToGroup(current.root, focused.id, panel.id, { activate: false });
       if (root !== current.root) applyLayout({ ...current, root });
     });
     const updated = events.onPanelUpdated(panel => {
-      if (panel.sessionId !== sessionId) return;
-      const previous = usePanelStore.getState().panels[sessionId]?.find(saved => saved.id === panel.id);
-      const shouldFocus = shouldActivateReopenedPanel(panel, previous);
-      usePanelStore.getState().updatePanelState(panel);
-      const current = usePanelStore.getState().layouts[sessionId];
-      if (current && shouldFocus && isStagePanel(panel, agentPanelIdsRef.current, layoutPanelIds(current))) {
-        applyLayout(activatePanelInLayout(current, panel.id));
-      }
+      if (panel.sessionId === sessionId) usePanelStore.getState().updatePanelState(panel);
+    });
+    // Queued until this visit's layout has loaded (the effect below applies it).
+    const activation = events.onPanelActivationRequested(request => {
+      if (request.sessionId === sessionId) usePanelStore.getState().requestActivation(request);
     });
     const deleted = events.onPanelDeleted(event => {
       if (event.sessionId !== sessionId) return;
@@ -197,8 +239,26 @@ export function SessionWorkspacePanels({
       created();
       updated();
       deleted();
+      activation();
     };
-  }, [sessionId, agentPanelId, applyLayout]);
+  }, [sessionId, agentPanelId, applyLayout, retry]);
+
+  const activationRequest = usePanelStore(state => state.activationRequests[sessionId]);
+  useEffect(() => {
+    if (!activationRequest || !loaded) return;
+    const store = usePanelStore.getState();
+    store.clearActivationRequest(sessionId);
+    const current = store.layouts[sessionId];
+    const panel = store.panels[sessionId]?.find(saved => saved.id === activationRequest.panelId);
+    if (!current || !panel) return;
+    if (panel.id !== agentPanelId && !isStagePanel(panel, agentPanelIdsRef.current, layoutPanelIds(current))) return;
+    const focused = findGroup(current.root, current.focusedGroupId ?? '') ?? primaryGroup(current.root);
+    // A split request also moves a tab out of the conversation's group.
+    const root = activationRequest.placement === 'split'
+      ? showPanelInSplit(current.root, panel.id)
+      : addPanelToGroup(current.root, focused.id, panel.id);
+    applyLayout(activatePanelInLayout({ ...current, root }, panel.id));
+  }, [activationRequest, loaded, sessionId, agentPanelId, applyLayout]);
 
   async function toggleTool(type: 'terminal' | 'explorer') {
     if (!loaded || creating.current) return;
@@ -222,6 +282,15 @@ export function SessionWorkspacePanels({
   const addTool = useCallback(async (tool: SessionToolSpec, groupId?: string) => {
     setError(null);
     try {
+      if (tool.type === 'notes') {
+        const state = usePanelStore.getState();
+        const current = state.layouts[sessionId];
+        const existing = state.panels[sessionId]?.find(panel => panel.type === 'notes');
+        if (current && existing && layoutPanelIds(current).has(existing.id)) {
+          applyLayout(activatePanelInLayout(current, existing.id));
+          return;
+        }
+      }
       let initialState: { customState: Pick<TerminalPanelState, 'initialCommand' | 'customResume'> } | undefined;
       if (tool.initialCommand) {
         const customState: Pick<TerminalPanelState, 'initialCommand' | 'customResume'> = { initialCommand: tool.initialCommand };
@@ -235,7 +304,8 @@ export function SessionWorkspacePanels({
       const target = (groupId && findGroup(current.root, groupId))
         || (current.focusedGroupId && findGroup(current.root, current.focusedGroupId))
         || primaryGroup(current.root);
-      applyLayout({ ...current, root: addPanelToGroup(current.root, target.id, panel.id, { activate: true }), focusedGroupId: target.id });
+      // The panel:created event may have inserted it inactive already.
+      applyLayout(activatePanelInLayout({ ...current, root: addPanelToGroup(current.root, target.id, panel.id, { activate: true }) }, panel.id));
     } catch {
       setError('Could not open the tool. Please try again.');
     }
@@ -283,6 +353,41 @@ export function SessionWorkspacePanels({
     if (current) applyLayout({ ...current, root: updateSizes(current.root, splitNodeId, sizes) });
   }, [sessionId, applyLayout]);
   const handleClose = useCallback((panel: ToolPanel) => { void closePanel(panel); }, [closePanel]);
+
+  // Tab drag and drop, the same gesture as a worktree Pane: a group's centre
+  // takes the tab, an edge splits, a strip slot inserts. The state is local to
+  // this mounted Session, so a tiled neighbour never offers itself as a target.
+  const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null);
+  const [dropZones, setDropZones] = useState<Map<string, DropZone | null>>(new Map());
+  const endTabDrag = useCallback(() => {
+    setDraggedPanelId(null);
+    setDropZones(new Map());
+  }, []);
+  const handleDropZoneChange = useCallback((groupId: string, zone: DropZone | null) => {
+    setDropZones(prev => {
+      const next = new Map(prev);
+      if (zone === null) next.delete(groupId);
+      else next.set(groupId, zone);
+      return next;
+    });
+  }, []);
+  const handleDropTab = useCallback((groupId: string, zone: DropZone) => {
+    const current = usePanelStore.getState().layouts[sessionId];
+    endTabDrag();
+    if (!current || !draggedPanelId) return;
+    const source = findGroupContainingPanel(current.root, draggedPanelId);
+    // Its own centre, or a group's only tab onto that group, changes nothing.
+    if (source?.id === groupId && (zone === 'center' || source.panelIds.length === 1)) return;
+    const root = zone === 'center'
+      ? movePanel(current.root, draggedPanelId, { groupId, index: findGroup(current.root, groupId)?.panelIds.length ?? 0 })
+      : movePanel(current.root, draggedPanelId, { groupId, edge: zone });
+    applyLayout({ ...current, root });
+  }, [sessionId, draggedPanelId, applyLayout, endTabDrag]);
+  const handleStripDrop = useCallback((groupId: string, panelId: string, insertIndex: number) => {
+    const current = usePanelStore.getState().layouts[sessionId];
+    endTabDrag();
+    if (current) applyLayout({ ...current, root: movePanel(current.root, panelId, { groupId, index: insertIndex }) });
+  }, [sessionId, applyLayout, endTabDrag]);
   // A single group keeps its tabs in the workspace toolbar, directly under the
   // title bar. Once split, every group owns a strip — the agent tab included —
   // so all tab strips sit on one row and the toolbar row goes away.
@@ -290,13 +395,18 @@ export function SessionWorkspacePanels({
   const primary = layout ? primaryGroup(layout.root) : null;
   const primaryTabs = primary
     ? primary.panelIds.map(id => tabs.find(panel => panel.id === id)).filter((panel): panel is ToolPanel => !!panel)
-    : [agentPanel];
+    : [currentAgentPanel];
   const tabStrip = (
     <div data-testid="session-workspace-tabs" className="flex min-w-0 items-center">
       <PanelTabStrip panels={primaryTabs} activePanelId={primary?.activePanelId ?? agentPanelId} idNamespace={`session-${sessionId}`}
         alwaysShowClose
         onPanelSelect={panel => { if (primary) selectPanel(primary.id, panel); }}
-        onPanelClose={handleClose} />
+        onPanelClose={handleClose}
+        onDragStart={setDraggedPanelId} onDragEnd={endTabDrag}
+        onStripDrop={(panelId, index) => {
+          if (primary) handleStripDrop(primary.id, panelId, subsetInsertIndex(primary.panelIds, primaryTabs.map(panel => panel.id), index));
+        }}
+        isTabDragging={draggedPanelId !== null} draggedPanelId={draggedPanelId} />
     </div>
   );
   const titleBarActions = (
@@ -305,6 +415,14 @@ export function SessionWorkspacePanels({
       {sidebarToggle}
     </>
   );
+
+  if (!loaded) {
+    return <div ref={containerRef} className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
+      {!error ? <SelectionLoading name="Session tools" /> : <div className="p-6 text-text-secondary"><p role="alert">{error}</p>
+        <button type="button" className="mt-3 rounded bg-surface-secondary px-3 py-2 text-text-primary" onClick={() => { setError(null); setRetry(value => value + 1); }}>Retry</button>
+      </div>}
+    </div>;
+  }
 
   return (
     <div ref={containerRef} className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
@@ -320,10 +438,14 @@ export function SessionWorkspacePanels({
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="relative min-h-0 flex-1">
+            {stageNotice}
             {layout && <SplitLayout layout={layout} panels={tabs} focusedGroupId={focusWithin ? layout.focusedGroupId ?? primaryGroup(layout.root).id : ''}
               isMainRepo={false} onSizesChange={resizeSplit} onPanelSelect={selectPanel} onPanelClose={handleClose}
               onFocusGroup={focusGroup} alwaysShowClose keepPermanentTabsInGroups
-              renderAddTool={renderGroupAddTool} />}
+              renderAddTool={renderGroupAddTool}
+              isTabDragging={draggedPanelId !== null} draggedPanelId={draggedPanelId} dropZones={dropZones}
+              onDropZoneChange={handleDropZoneChange} onDropTab={handleDropTab} onDragStart={setDraggedPanelId}
+              onDragEnd={endTabDrag} onStripDrop={handleStripDrop} />}
           </div>
           <div className="flex flex-shrink-0 flex-col border-t border-border-primary" style={{ height: showTerminal ? '35%' : 32 }}>
             <button type="button" disabled={!loaded} aria-label={showTerminal ? 'Collapse terminal' : 'Expand terminal'}

@@ -12,7 +12,7 @@ export type SettingsCategoryId =
   | 'privacy'
   | 'advanced';
 
-export type RemoteAccessSubviewId = 'host-setup' | 'connections' | 'advanced-host';
+export type RemoteAccessSubviewId = 'host-setup' | 'advanced-host';
 
 export type SettingsSettingId =
   | 'automatic-updates'
@@ -20,6 +20,9 @@ export type SettingsSettingId =
   | 'send-feedback'
   | 'start-on-login'
   | 'keep-awake'
+  | 'keep-awake-plugged-in'
+  | 'keep-awake-on-battery'
+  | 'html-file-open-mode'
   | 'theme'
   | 'appearance-mode'
   | 'system-light-theme'
@@ -27,6 +30,7 @@ export type SettingsSettingId =
   | 'high-contrast'
   | 'ui-scale'
   | 'sidebar-pane-rows'
+  | 'attention-inbox'
   | 'terminal-font-family'
   | 'terminal-font-size'
   | 'terminal-power-mode'
@@ -34,6 +38,7 @@ export type SettingsSettingId =
   | 'terminal-reference-line-count'
   | 'terminal-shell'
   | 'default-pane-chat-agent'
+  | 'default-agent-interface'
   | 'mcp-registration'
   | 'mcp-toolsets'
   | 'agent-skill'
@@ -48,24 +53,30 @@ export type SettingsSettingId =
   | 'notification-sound'
   | 'desktop-notifications'
   | 'remote-pane'
+  | 'remote-machines'
+  | 'remote-visibility'
+  | 'remote-password'
+  | 'remote-address'
   | 'remote-host-setup'
   | 'remote-host-mode'
-  | 'remote-connections'
-  | 'remote-connection-code'
   | 'remote-advanced-host'
   | 'remote-paired-connection'
   | 'remote-existing-profile'
   | 'voice-transcription'
+  | 'apns-credentials'
   | 'keyboard-shortcuts'
   | 'command-palette-shortcut'
   | 'kitty-keyboard'
   | 'terminal-shortcuts'
   | 'analytics'
+  | 'browser-data'
   | 'verbose-logging'
   | 'developer-mode'
   | 'journey-timings'
   | 'pty-host'
-  | 'additional-paths';
+  | 'additional-paths'
+  | 'mission-control'
+  | 'experimental-chat';
 
 export interface SettingsTarget {
   category: SettingsCategoryId;
@@ -87,6 +98,7 @@ export type SettingSaveState =
 export const SETTINGS_PREFERENCE_KEYS = {
   autoRenameSessionsToPr: 'auto_rename_sessions_to_pr',
   sidebarPaneRowLayout: 'sidebar_pane_row_layout',
+  sidebarAttentionInbox: 'sidebar_attention_inbox',
   atTerminalPasteMode: 'at_terminal_paste_mode',
   atTerminalLineCount: 'at_terminal_line_count',
 } as const;
@@ -98,6 +110,7 @@ type AtTerminalLineCount = 100 | 300 | 500 | -1;
 export interface SettingsPreferenceValues {
   autoRenameSessionsToPr: boolean;
   sidebarPaneRowLayout: SidebarPaneRowLayout;
+  sidebarAttentionInbox: boolean;
   atTerminalPasteMode: AtTerminalPasteMode;
   atTerminalLineCount: AtTerminalLineCount;
 }
@@ -105,6 +118,7 @@ export interface SettingsPreferenceValues {
 export const DEFAULT_SETTINGS_PREFERENCES: SettingsPreferenceValues = {
   autoRenameSessionsToPr: true,
   sidebarPaneRowLayout: 'single',
+  sidebarAttentionInbox: false,
   atTerminalPasteMode: 'raw',
   atTerminalLineCount: 500,
 };
@@ -118,6 +132,7 @@ export function parseSettingsPreferences(raw: Record<string, string | null | und
   return {
     autoRenameSessionsToPr: raw[SETTINGS_PREFERENCE_KEYS.autoRenameSessionsToPr] !== 'false',
     sidebarPaneRowLayout: normalizeSidebarPaneRowLayout(raw[SETTINGS_PREFERENCE_KEYS.sidebarPaneRowLayout]),
+    sidebarAttentionInbox: raw[SETTINGS_PREFERENCE_KEYS.sidebarAttentionInbox] === 'true',
     atTerminalPasteMode: raw[SETTINGS_PREFERENCE_KEYS.atTerminalPasteMode] === 'embed' ? 'embed' : 'raw',
     atTerminalLineCount: lineCount === 100 || lineCount === 300 || lineCount === 500 || lineCount === -1
       ? lineCount

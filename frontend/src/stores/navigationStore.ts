@@ -42,6 +42,18 @@ interface NavigationState {
   expandProject: (projectId: number) => number[] | null;
   registerProjectIds: (projectIds: number[]) => number[] | null;
 
+  // Sessions whose Pane rows the sidebar shows; every other Session is collapsed.
+  // Only the Session's chevron changes it. Kept here so the choice outlives the
+  // sidebar remounting between its full and compact layouts.
+  expandedSessions: Set<string>;
+  hydrateExpandedSessions: (sessionIds: string[]) => void;
+  toggleSessionExpanded: (sessionId: string) => string[];
+
+  // Repositories open inside the sidebar's Archived list, kept here for the same reason.
+  expandedArchivedProjects: Set<number>;
+  hydrateExpandedArchivedProjects: (projectIds: number[]) => void;
+  toggleArchivedProjectExpanded: (projectId: number) => number[];
+
   // Last sidebar section used to enter the active pane. Cmd/Ctrl+Arrow uses
   // this to keep cycling within Pinned after a pinned-row click.
   sidebarNavigationScope: SidebarNavigationScope;
@@ -53,6 +65,8 @@ interface NavigationState {
   navigateToProject: (projectId: number) => void;
   navigateToSessions: () => void;
   navigateToPaneChat: () => void;
+  navigateToMissionControl: () => void;
+  navigateToSsh: () => void;
 }
 
 export const useNavigationStore = create<NavigationState>((set, get) => ({
@@ -116,6 +130,30 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     return toProjectIdArray(next);
   },
 
+  expandedSessions: new Set<string>(),
+  hydrateExpandedSessions: (sessionIds) => {
+    set({ expandedSessions: new Set(sessionIds) });
+  },
+  toggleSessionExpanded: (sessionId) => {
+    const next = new Set(get().expandedSessions);
+    if (next.has(sessionId)) next.delete(sessionId);
+    else next.add(sessionId);
+    set({ expandedSessions: next });
+    return Array.from(next);
+  },
+
+  expandedArchivedProjects: new Set<number>(),
+  hydrateExpandedArchivedProjects: (projectIds) => {
+    set({ expandedArchivedProjects: new Set(projectIds) });
+  },
+  toggleArchivedProjectExpanded: (projectId) => {
+    const next = new Set(get().expandedArchivedProjects);
+    if (next.has(projectId)) next.delete(projectId);
+    else next.add(projectId);
+    set({ expandedArchivedProjects: next });
+    return toProjectIdArray(next);
+  },
+
   setActiveView: (view) => set({ activeView: view }),
 
   setActiveProjectId: (projectId) => set({ activeProjectId: projectId }),
@@ -132,6 +170,17 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
   navigateToPaneChat: () => set({
     activeView: 'pane-chat',
+    activeProjectId: null
+  }),
+
+  // Mission Control spans every project, so it clears the project scope.
+  navigateToMissionControl: () => set({
+    activeView: 'mission-control',
+    activeProjectId: null
+  }),
+
+  navigateToSsh: () => set({
+    activeView: 'ssh',
     activeProjectId: null
   }),
 }));

@@ -11,6 +11,9 @@ import type { EditorDiffRef, EditorPanelState, SessionPanelLayout, ToolPanel } f
 import { diffRefLabel, sameDiffRef } from '../components/panels/diff/diffScope';
 import { panelApi } from './panelApi';
 import { usePanelStore } from '../stores/panelStore';
+import { useConfigStore } from '../stores/configStore';
+import { rememberPaneLayout } from '../utils/paneLayoutMemory';
+import { getActiveRemoteHostId } from '../../../shared/types/remoteDaemon';
 import { addPanelToGroup, findGroup, findGroupContainingPanel, primaryGroup } from '../utils/panelLayout';
 
 export interface OpenFileInEditorOptions {
@@ -75,10 +78,14 @@ function revealInLayout(sessionId: string, panelId: string): void {
   const next: SessionPanelLayout = { ...layout, root, focusedGroupId: group.id };
   store.setLayout(sessionId, next);
   store.setFocusedGroup(sessionId, group.id);
+  // The host keeps it as the last-used layout; this desktop keeps its own.
   panelApi.setLayout(sessionId, next).catch(() => {});
+  const config = useConfigStore.getState().config;
+  rememberPaneLayout(config ? getActiveRemoteHostId(config.remoteDaemon) : undefined, sessionId, next);
 }
 
-async function activate(sessionId: string, panelId: string): Promise<void> {
+/** Bring a tab to the front: the store, the layout group the tab strip shows, and the host. */
+export async function activatePanel(sessionId: string, panelId: string): Promise<void> {
   usePanelStore.getState().setActivePanel(sessionId, panelId);
   revealInLayout(sessionId, panelId);
   await panelApi.setActivePanel(sessionId, panelId);
@@ -125,7 +132,7 @@ export async function openFileInEditor(options: OpenFileInEditorOptions): Promis
       patch.scrollPosition = undefined;
     }
     if (Object.keys(patch).length > 0) panel = await updateEditorPanel(existing, patch);
-    await activate(sessionId, panel.id);
+    await activatePanel(sessionId, panel.id);
     // An already-mounted editor will not remount, so ask it to move directly.
     // Dispatched after activation so a freshly mounted view has its listener.
     if (cursorPosition) {
@@ -144,7 +151,7 @@ export async function openFileInEditor(options: OpenFileInEditorOptions): Promis
       { filePath, diff, isPreview: true, isDirty: false, cursorPosition, scrollPosition: undefined },
       editorTitleFor(filePath, false, diff),
     );
-    await activate(sessionId, panel.id);
+    await activatePanel(sessionId, panel.id);
     return panel;
   }
 
@@ -155,6 +162,6 @@ export async function openFileInEditor(options: OpenFileInEditorOptions): Promis
     initialState: { customState: withoutUndefined({ filePath, diff, isPreview: !pin, isDirty: false, cursorPosition }) },
   });
   store.addPanel(created);
-  await activate(sessionId, created.id);
+  await activatePanel(sessionId, created.id);
   return created;
 }

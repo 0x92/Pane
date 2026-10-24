@@ -1,9 +1,12 @@
+import { decodeUpdateIntent } from '../../../../shared/remoteClient/updateIntent';
 import { EventEmitter } from 'events';
 import { lookup as defaultLookup, Resolver } from 'dns';
 import http, { type IncomingMessage, type RequestOptions } from 'http';
 import https from 'https';
 import { isIP, type LookupFunction } from 'net';
 import { hostname as getOsHostname } from 'os';
+import WebSocket, { type ClientOptions } from 'ws';
+import { Readable } from 'stream';
 import { noopPaneEventSink, type PaneEventSink } from '../../core/eventSink';
 import type { ConfigManager } from '../../services/configManager';
 import type { AnalyticsManager } from '../../services/analyticsManager';
@@ -18,10 +21,16 @@ import {
   type RemotePaneConnectionStatus,
 } from '../../../../shared/types/remoteDaemon';
 import type { RemoteDaemonEventEnvelope } from '../../../../shared/types/remoteDaemon';
-import { boundary, decodeBoundary } from '../../../../shared/validation/boundaryDecoder';
+import { boundary, decodeBoundary, decodeOptionalBoundary } from '../../../../shared/validation/boundaryDecoder';
 import type { BoundarySchema, JsonValue } from '../../../../shared/validation/boundaryDecoder';
 import { PaneSseParser } from './sseParser';
 import { RemoteInputQueue } from '../../../../shared/remoteInputQueue';
+import { decodeListeningPortsSnapshot, type ListeningPortsSnapshot } from '../../../../shared/types/listeningPorts';
+import { localTargetOf } from '../../../../shared/utils/browserUrl';
+import { createPortTunnel, type PortTunnel } from './portTunnel';
+import { REMOTE_READ_CHANNELS, REMOTE_RESTORE_CHANNELS } from '../../../../shared/remoteClient/readChannels';
+import { RecoveryCycle } from '../../../../shared/remoteClient/recoveryCycle';
+import { PaneError } from '../../../../shared/paneError';
 
 interface RemoteConnectionStateMetadata {
   lastSeenAt?: string | null;
@@ -33,17 +42,18 @@ interface RemotePaneClientOptions {
   heartbeatStaleTimeoutMs?: number;
   reconnectInitialDelayMs?: number;
   reconnectMaxDelayMs?: number;
-  reconnectErrorThreshold?: number;
+  reconnectDurationMs?: number;
   onConnectionStateChange?: (
     status: RemotePaneConnectionStatus,
     errorMessage?: string | null,
     metadata?: RemoteConnectionStateMetadata,
   ) => void;
-  onResyncRequired?: () => void;
+  onResyncRequired?: () => void | Promise<void>;
 }
 
 interface RemotePaneClientConnectOptions {
   retryOnInitialFailure?: boolean;
+  resolveOnReady?: boolean;
 }
 
 interface RemoteInvokeSuccessPayload {
@@ -56,6 +66,7 @@ interface RemoteInvokeErrorPayload {
   error: {
     message: string;
     code?: string;
+    next?: string;
   };
 }
 
@@ -82,6 +93,7 @@ const remoteInvokeResponseSchema: BoundarySchema<RemoteInvokeResponsePayload> = 
     error: boundary.object({
       message: boundary.string,
       code: boundary.optional(boundary.string),
+      next: boundary.optional(boundary.string),
     }),
   }),
 );
@@ -103,12 +115,23 @@ const remoteEventEnvelopeSchema: BoundarySchema<RemoteDaemonEventEnvelope> = bou
 });
 
 const REMOTE_DAEMON_RECONNECT_INITIAL_DELAY_MS = 1_000;
-const REMOTE_DAEMON_RECONNECT_MAX_DELAY_MS = 15_000;
-const REMOTE_DAEMON_RECONNECT_ERROR_THRESHOLD = 5;
+const REMOTE_DAEMON_RECONNECT_MAX_DELAY_MS = 30_000;
 const REMOTE_DAEMON_HEARTBEAT_STALE_TIMEOUT_MS = 20_000;
 const REMOTE_DAEMON_INITIAL_HANDSHAKE_TIMEOUT_MS = 10_000;
 const TAILSCALE_MAGIC_DNS_SERVER = '100.100.100.100';
+const PORTS_LIST_CHANNEL = 'ports:list';
+const PORTS_CHANGED_CHANNEL = 'ports:changed';
+/** How a host's command registry refuses a command it does not have (`commandRegistry.ts`). */
+const UNKNOWN_COMMAND_MESSAGE = 'No Pane daemon command registered';
+const PORTS_LIST_RETRY_MS = 5_000;
+// These view/flow-control operations restore a terminal without submitting work.
 const REMOTE_RUNTIME_ID = createRemoteRuntimeId();
+const MEDIA_RESPONSE_HEADERS = [
+  'content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control',
+  'x-content-type-options', 'content-security-policy',
+  'access-control-allow-origin', 'access-control-expose-headers',
+] as const;
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
 type RemoteRequestOptions = RequestOptions & {
   servername?: string;
@@ -119,21 +142,20 @@ export class RemotePaneClient {
   private readonly eventSink: PaneEventSink;
   private readonly initialHandshakeTimeoutMs: number;
   private readonly heartbeatStaleTimeoutMs: number;
-  private readonly reconnectInitialDelayMs: number;
-  private readonly reconnectMaxDelayMs: number;
-  private readonly reconnectErrorThreshold: number;
+  private readonly recovery: RecoveryCycle;
+  private deadlineTimer: NodeJS.Timeout | null = null;
+  private recoveryStopped = false;
   private readonly onConnectionStateChange?: (
     status: RemotePaneConnectionStatus,
     errorMessage?: string | null,
     metadata?: RemoteConnectionStateMetadata,
   ) => void;
-  private readonly onResyncRequired?: () => void;
+  private readonly onResyncRequired?: () => void | Promise<void>;
   private eventParser = new PaneSseParser();
   private eventRequest: http.ClientRequest | null = null;
   private eventResponse: IncomingMessage | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatStaleTimer: NodeJS.Timeout | null = null;
-  private consecutiveReconnectFailures = 0;
   private lastSeenAt: string | null = null;
   private closedByClient = false;
   /** Set while the system sleeps: no stream, heartbeat or reconnect until resume(). */
@@ -153,28 +175,36 @@ export class RemotePaneClient {
       ?? REMOTE_DAEMON_INITIAL_HANDSHAKE_TIMEOUT_MS;
     this.heartbeatStaleTimeoutMs = options.heartbeatStaleTimeoutMs
       ?? REMOTE_DAEMON_HEARTBEAT_STALE_TIMEOUT_MS;
-    this.reconnectInitialDelayMs = options.reconnectInitialDelayMs
-      ?? REMOTE_DAEMON_RECONNECT_INITIAL_DELAY_MS;
-    this.reconnectMaxDelayMs = options.reconnectMaxDelayMs
-      ?? REMOTE_DAEMON_RECONNECT_MAX_DELAY_MS;
-    this.reconnectErrorThreshold = options.reconnectErrorThreshold
-      ?? REMOTE_DAEMON_RECONNECT_ERROR_THRESHOLD;
+    this.recovery = new RecoveryCycle(Math.random, options.reconnectDurationMs,
+      options.reconnectInitialDelayMs ?? REMOTE_DAEMON_RECONNECT_INITIAL_DELAY_MS,
+      options.reconnectMaxDelayMs ?? REMOTE_DAEMON_RECONNECT_MAX_DELAY_MS);
     this.onConnectionStateChange = options.onConnectionStateChange;
     this.onResyncRequired = options.onResyncRequired;
+  }
+
+  /** A codeless profile without a password relies on Tailscale identity alone. */
+  private authorizationHeader(): { Authorization?: string } {
+    return this.profile.token ? { Authorization: `Bearer ${this.profile.token}` } : {};
   }
 
   isSameProfile(profile: RemotePaneConnectionProfile): boolean {
     return (
       this.profile.id === profile.id &&
-      this.profile.baseUrl === profile.baseUrl &&
+      // A codeless profile's address is looked up at connect, so the saved one may differ.
+      (profile.tailnetMachine
+        ? this.profile.tailnetMachine === profile.tailnetMachine
+        : this.profile.baseUrl === profile.baseUrl) &&
       this.profile.token === profile.token
     );
   }
 
   async connect(options: RemotePaneClientConnectOptions = {}): Promise<void> {
     this.closedByClient = false;
+    this.recoveryStopped = false;
+    this.recovery.reset();
+    this.armDeadline();
     try {
-      await this.openEventStream(false);
+      await this.openEventStream(false, options.resolveOnReady);
     } catch (error) {
       const message = getErrorMessage(error, 'Failed to connect to remote daemon event stream');
       if (options.retryOnInitialFailure ?? true) {
@@ -186,8 +216,21 @@ export class RemotePaneClient {
     }
   }
 
+  async retryNow(): Promise<void> {
+    if (this.closedByClient || this.suspended) return;
+    // An in-flight handshake/restoration already owns this attempt.
+    if (this.eventRequest && !this.reconnectTimer && !this.recoveryStopped) return;
+    this.clearReconnectTimer();
+    if (this.recoveryStopped) { this.recovery.reset(); this.recoveryStopped = false; }
+    this.armDeadline();
+    try { await this.openEventStream(true); }
+    catch (error) { this.scheduleReconnect(getErrorMessage(error, 'Remote host unavailable')); }
+  }
+
   async disconnect(): Promise<void> {
     this.closedByClient = true;
+    this.streamGeneration += 1;
+    this.clearDeadline();
     this.inputQueue.cancel(new Error('Remote Pane disconnected; pending terminal input was discarded'));
     this.clearReconnectTimer();
     this.clearHeartbeatStaleTimer();
@@ -208,6 +251,52 @@ export class RemotePaneClient {
     return this.inputQueue.invoke(channel, args);
   }
 
+  /** One raw byte stream to a forwarded port on the host, signed in like every other request. */
+  openPortStream(port: number): WebSocket {
+    const endpoint = new URL(`ports/${port}`, this.normalizedBaseUrl);
+    const lookup = createTailscaleFallbackLookup(this.profile, endpoint);
+    const options: ClientOptions & { lookup?: LookupFunction } = { headers: this.authorizationHeader() };
+    if (lookup) options.lookup = lookup;
+    endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
+    return new WebSocket(endpoint, options);
+  }
+
+  /** Streams a preview file from the host's /media route, passing the byte range through. */
+  async fetchMedia(file: { sessionId: string; filePath: string }, request: Request): Promise<Response> {
+    const endpoint = new URL('media', this.normalizedBaseUrl);
+    endpoint.searchParams.set('sessionId', file.sessionId);
+    endpoint.searchParams.set('filePath', file.filePath);
+    const requestHeaders: http.OutgoingHttpHeaders = {
+      ...this.authorizationHeader(),
+      'X-Pane-Remote-Runtime-Id': REMOTE_RUNTIME_ID,
+    };
+    const range = request.headers.get('Range');
+    if (range) requestHeaders.Range = range;
+    return await new Promise<Response>((resolve, reject) => {
+      const outgoing = createRequest(endpoint, this.buildRequestOptions(endpoint, {
+        method: request.method === 'HEAD' ? 'HEAD' : 'GET',
+        signal: request.signal,
+        headers: requestHeaders,
+      }), (response) => {
+        const status = response.statusCode ?? 502;
+        const headers = new Headers();
+        for (const name of MEDIA_RESPONSE_HEADERS) {
+          const value = decodeOptionalBoundary(response.headers[name], boundary.string);
+          if (value !== undefined) headers.set(name, value);
+        }
+        if (request.method === 'HEAD' || NULL_BODY_STATUSES.has(status)) {
+          response.resume();
+          resolve(new Response(null, { status, headers }));
+          return;
+        }
+        // SAFETY: Node's toWeb adapter produces a byte stream from the HTTP response.
+        resolve(new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, { status, headers }));
+      });
+      outgoing.on('error', reject);
+      outgoing.end();
+    });
+  }
+
   /** Drops the event stream for system sleep so it neither times out nor retries. */
   suspend(): void {
     if (this.closedByClient || this.suspended) return;
@@ -222,54 +311,63 @@ export class RemotePaneClient {
     this.eventRequest = null;
   }
 
-  /** Reconnects after system sleep with a fresh retry budget. */
+  /** Sleep does not extend an outage that was already in progress. */
   resume(): void {
     if (this.closedByClient || !this.suspended) return;
     this.suspended = false;
-    this.consecutiveReconnectFailures = 0;
+    if (this.recoveryStopped) return;
+    if (!this.recovery.remainingMs) { this.expireRecovery(); return; }
+    this.armDeadline();
     void this.openEventStream(true).catch((error) => {
-      this.consecutiveReconnectFailures += 1;
       this.scheduleReconnect(getErrorMessage(error, 'Failed to reconnect to remote daemon event stream'));
     });
   }
 
   private async invokeRequest(channel: string, args: unknown[], signal?: AbortSignal): Promise<JsonValue | undefined> {
     const endpoint = buildRemoteEndpoint(this.normalizedBaseUrl, 'invoke');
-    let response: JsonResponse;
+    let payload: RemoteInvokeResponsePayload;
+    const generation = this.streamGeneration;
     try {
-      response = await requestJson(endpoint, this.buildRequestOptions(endpoint, {
-        method: 'POST',
-        signal,
+      const response = await requestJson(endpoint, this.buildRequestOptions(endpoint, {
+        method: 'POST', signal,
         headers: {
-          Authorization: `Bearer ${this.profile.token}`,
+          ...this.authorizationHeader(),
           'Content-Type': 'application/json; charset=utf-8',
           'X-Pane-Remote-Runtime-Id': REMOTE_RUNTIME_ID,
         },
       }), JSON.stringify({ channel, args }));
+      if (response.statusCode === 401 || response.statusCode === 403) {
+        this.stopRecovery('The host rejected your credentials. Open connection settings to sign in again.');
+        throw new PaneError('ERR_REMOTE_AUTH', 'The host rejected your credentials.', 'Open connection settings to sign in again.');
+      }
+      payload = parseJsonResponse(response, 'Remote daemon returned an invalid invoke response', remoteInvokeResponseSchema);
     } catch (error) {
-      if (signal?.aborted) throw error;
-      const message = getErrorMessage(error, 'Failed to invoke remote daemon');
-      this.handleUnexpectedDisconnect(message, true);
-      throw error;
+      if (error instanceof PaneError) throw error;
+      const isRead = REMOTE_READ_CHANNELS.has(channel);
+      const failure = new PaneError(isRead ? 'ERR_REMOTE_TRANSPORT' : 'ERR_REMOTE_DELIVERY_UNKNOWN',
+        isRead ? 'Remote connection interrupted: the host response was incomplete. Pane is reconnecting.'
+          : 'Delivery unknown: the remote response was interrupted. The action may have completed; it was not replayed.',
+        'Wait for reconnection and check the destination before trying again.');
+      if (!signal?.aborted && generation === this.streamGeneration && !this.closedByClient) {
+        this.handleUnexpectedDisconnect(failure.message, true);
+      }
+      throw failure;
+    }
+    if (generation !== this.streamGeneration || this.closedByClient) {
+      throw new PaneError('ERR_REMOTE_STALE_RESPONSE', REMOTE_READ_CHANNELS.has(channel) ? 'Remote connection interrupted: the host changed before its response arrived.' : `Delivery unknown: ${this.profile.label} changed connection before the response arrived.`, 'Check the original destination before trying again.');
     }
 
-    const payload = parseJsonResponse(
-      response,
-      'Remote daemon returned an invalid invoke response',
-      remoteInvokeResponseSchema,
-    );
-
     if (!payload.ok) {
-      throw new Error(payload.error.message);
+      throw new PaneError(payload.error.code ?? 'ERR_REMOTE_DAEMON_REQUEST_FAILED', payload.error.message, payload.error.next);
     }
 
     return payload.result;
   }
 
-  private async openEventStream(isReconnect: boolean): Promise<void> {
+  private async openEventStream(isReconnect: boolean, resolveOnReady = false): Promise<void> {
     this.clearReconnectTimer();
     const generation = ++this.streamGeneration;
-    const isStale = (): boolean => generation !== this.streamGeneration;
+    const isStale = (): boolean => generation !== this.streamGeneration || this.closedByClient || this.recoveryStopped;
     this.onConnectionStateChange?.(isReconnect ? 'reconnecting' : 'connecting', null, {
       lastSeenAt: this.lastSeenAt,
     });
@@ -322,16 +420,18 @@ export class RemotePaneClient {
       };
 
       handshakeTimer = setTimeout(() => {
+        if (isStale()) { resolve(); return; }
+        if (settled) { this.handleUnexpectedDisconnect('Workspace restoration timed out', true); return; }
         rejectBeforeReady(
           `Timed out waiting for remote daemon ready event after ${this.initialHandshakeTimeoutMs}ms`,
           true,
         );
-      }, this.initialHandshakeTimeoutMs);
+      }, Math.min(this.initialHandshakeTimeoutMs, this.recovery.remainingMs));
 
       request = createRequest(endpoint, this.buildRequestOptions(endpoint, {
         method: 'GET',
         headers: {
-          Authorization: `Bearer ${this.profile.token}`,
+          ...this.authorizationHeader(),
           Accept: 'text/event-stream',
           'X-Pane-Client-Label': this.profile.label,
           'X-Pane-Client-Device-Label': getRemoteClientDeviceLabel(),
@@ -339,10 +439,18 @@ export class RemotePaneClient {
         },
       }), async (response) => {
         if (response.statusCode !== 200) {
-          const body = await readResponseBody(response);
-          const message = extractRemoteErrorMessage(body)
-            ?? `Remote daemon event stream failed with status ${response.statusCode ?? 'unknown'}`;
-          rejectBeforeReady(message);
+          try {
+            const body = await readResponseBody(response);
+            if (isStale()) { resolve(); return; }
+            const message = extractRemoteErrorMessage(body)
+              ?? `Remote daemon event stream failed with status ${response.statusCode ?? 'unknown'}`;
+            rejectBeforeReady(message, true);
+            if (response.statusCode === 401 || response.statusCode === 403) {
+              this.stopRecovery('The host rejected your credentials. Open connection settings to sign in again.');
+            }
+          } catch (error) {
+            rejectBeforeReady(getErrorMessage(error, 'Remote response interrupted'), true);
+          }
           return;
         }
 
@@ -359,19 +467,26 @@ export class RemotePaneClient {
           const events = this.eventParser.push(chunk);
           for (const event of events) {
             if (event.event === 'ready') {
-              readyReceived = true;
-              clearHandshakeTimer();
-              const lastSeenAt = this.markRemoteSeen();
-              this.consecutiveReconnectFailures = 0;
+              if (readyReceived) continue;
               const readyPayload = parseRemoteReadyEventPayload(event.data);
-              if (readyPayload?.resync === 'refetch-state-after-reconnect') {
-                this.onResyncRequired?.();
-              }
-              this.onConnectionStateChange?.('connected', null, { lastSeenAt });
-              if (!settled) {
-                settled = true;
-                resolve();
-              }
+              if (!readyPayload) { rejectBeforeReady('Invalid remote ready event', true); return; }
+              readyReceived = true;
+              this.markRemoteSeen();
+              if (resolveOnReady && !settled) { settled = true; resolve(); }
+              this.onConnectionStateChange?.('restoring', null, { lastSeenAt: this.lastSeenAt });
+              void Promise.resolve().then(() => this.onResyncRequired?.()).then(() => {
+                if (!isStale()) {
+                  clearHandshakeTimer();
+                  this.clearDeadline();
+                  this.recovery.reset();
+                  this.onConnectionStateChange?.('connected', null, { lastSeenAt: this.lastSeenAt });
+                }
+                if (!settled) { settled = true; resolve(); }
+              }, error => {
+                const message = getErrorMessage(error, 'Remote restoration failed');
+                if (settled && !isStale()) this.handleUnexpectedDisconnect(message, true);
+                else rejectBeforeReady(message, true);
+              });
               continue;
             }
 
@@ -401,7 +516,7 @@ export class RemotePaneClient {
 
         response.on('error', (error) => {
           const message = getErrorMessage(error, 'Remote daemon event stream errored');
-          if (readyReceived) {
+          if (readyReceived && settled) {
             if (!isStale()) this.handleUnexpectedDisconnect(message, false);
             return;
           }
@@ -411,7 +526,7 @@ export class RemotePaneClient {
 
         response.on('end', () => {
           const message = 'Remote daemon event stream ended';
-          if (readyReceived) {
+          if (readyReceived && settled) {
             if (!isStale()) this.handleUnexpectedDisconnect(message, false);
             return;
           }
@@ -421,7 +536,7 @@ export class RemotePaneClient {
 
         response.on('close', () => {
           const message = 'Remote daemon event stream closed';
-          if (readyReceived) {
+          if (readyReceived && settled) {
             if (!isStale()) this.handleUnexpectedDisconnect(message, false);
             return;
           }
@@ -461,6 +576,7 @@ export class RemotePaneClient {
   }
 
   private handleUnexpectedDisconnect(message: string, destroyStream: boolean): void {
+    this.streamGeneration += 1;
     this.inputQueue.cancel(new Error(message));
     const activeResponse = this.eventResponse;
     const activeRequest = this.eventRequest;
@@ -487,30 +603,44 @@ export class RemotePaneClient {
     this.scheduleReconnect(message);
   }
 
+  private clearDeadline(): void {
+    if (this.deadlineTimer) clearTimeout(this.deadlineTimer);
+    this.deadlineTimer = null;
+  }
+
+  private armDeadline(): void {
+    if (this.deadlineTimer || this.recoveryStopped) return;
+    this.deadlineTimer = setTimeout(() => this.expireRecovery(), this.recovery.remainingMs);
+  }
+
+  private expireRecovery(): void {
+    this.stopRecovery('Could not reconnect within five minutes. Your workspace is kept. Choose Retry now or switch machine.');
+  }
+
+  private stopRecovery(message: string): void {
+    this.recoveryStopped = true;
+    this.streamGeneration += 1;
+    this.clearDeadline();
+    this.clearReconnectTimer();
+    this.clearHeartbeatStaleTimer();
+    this.eventResponse?.destroy();
+    this.eventRequest?.destroy();
+    this.onConnectionStateChange?.('error', message, { lastSeenAt: this.lastSeenAt });
+  }
+
   private scheduleReconnect(message: string): void {
-    if (this.closedByClient || this.suspended || this.reconnectTimer) {
-      return;
-    }
-
-    if (this.consecutiveReconnectFailures >= this.reconnectErrorThreshold) {
-      this.onConnectionStateChange?.('error', message, { lastSeenAt: this.lastSeenAt });
-      return;
-    }
-
+    if (this.closedByClient || this.suspended || this.recoveryStopped || this.reconnectTimer) return;
+    this.armDeadline();
+    const delay = this.recovery.nextDelay();
+    if (delay === null) { this.expireRecovery(); return; }
     this.onConnectionStateChange?.('reconnecting', message, { lastSeenAt: this.lastSeenAt });
-    const attempt = this.consecutiveReconnectFailures;
-    const reconnectDelayMs = Math.min(
-      this.reconnectInitialDelayMs * (2 ** attempt),
-      this.reconnectMaxDelayMs,
-    );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.openEventStream(true).catch((error) => {
-        const nextMessage = getErrorMessage(error, 'Failed to reconnect to remote daemon event stream');
-        this.consecutiveReconnectFailures += 1;
-        this.scheduleReconnect(nextMessage);
+      if (!this.recovery.remainingMs) { this.expireRecovery(); return; }
+      void this.openEventStream(true).catch(error => {
+        this.scheduleReconnect(getErrorMessage(error, 'Failed to reconnect to remote daemon event stream'));
       });
-    }, reconnectDelayMs);
+    }, delay);
   }
 
   private clearReconnectTimer(): void {
@@ -545,14 +675,33 @@ export class RemotePaneClient {
 interface RemotePaneClientControllerOptions {
   configManager: ConfigManager;
   rendererEventSink: PaneEventSink;
+  rendererIds?: () => number[];
   analyticsManager?: Pick<AnalyticsManager, 'track'>;
+  /** Looks up a codeless profile's machine on its tailnet; see `tailnetMachine`. */
+  resolveTailnetMachineUrl?: (machine: TailnetMachineRef) => Promise<string>;
 }
 
 export class RemotePaneClientController extends EventEmitter {
   private configManager: ConfigManager | null = null;
   private rendererEventSink: PaneEventSink = noopPaneEventSink;
   private analyticsManager: Pick<AnalyticsManager, 'track'> | undefined;
+  private resolveTailnetMachineUrl: ((machine: TailnetMachineRef) => Promise<string>) | undefined;
   private activeClient: RemotePaneClient | null = null;
+  private rendererIds: () => number[] = () => [];
+  private restoreSequence = 0;
+  private pendingRestore: {
+    id: number; waiting: Set<number>; resolve: () => void; reject: (error: Error) => void;
+  } | null = null;
+  private activationCommitted: (() => void) | null = null;
+  private connectionGeneration = 0;
+  /** Mirrors the active host's forwarded ports onto this machine's loopback. */
+  private portTunnel: PortTunnel | null = null;
+  /** Tunnel syncs run one at a time, in the order the host's lists arrived. */
+  private portTunnelSync: Promise<unknown> = Promise.resolve();
+  /** The host's last Ports list, with where this desktop reaches each port. */
+  private tunnelledSnapshot: ListeningPortsSnapshot | null = null;
+  /** One pending re-read after the host failed to list its ports. */
+  private portsListRetry: NodeJS.Timeout | null = null;
   private state = createDefaultRemotePaneConnectionState();
   private configListenerAttached = false;
   private remoteRuntimeUsageTracked = false;
@@ -574,9 +723,11 @@ export class RemotePaneClientController extends EventEmitter {
       this.configListenerAttached = false;
     }
 
+    this.rendererIds = options.rendererIds ?? (() => []);
     this.configManager = options.configManager;
     this.rendererEventSink = options.rendererEventSink;
     this.analyticsManager = options.analyticsManager;
+    this.resolveTailnetMachineUrl = options.resolveTailnetMachineUrl;
     this.configManager.on('config-updated', this.configUpdatedListener);
     this.configListenerAttached = true;
 
@@ -598,6 +749,21 @@ export class RemotePaneClientController extends EventEmitter {
     return this.state.mode === 'remote';
   }
 
+  /**
+   * Points a host link to a forwarded port, such as one in terminal output, at where this desktop
+   * reaches it. Null for a host loopback port without a tunnel here, including before the host's
+   * Ports list arrives: opening it would reach this computer's own service instead.
+   */
+  toLocalUrl(url: string): string | null {
+    if (!this.isRemoteModeActive()) return url;
+    const target = localTargetOf(url, this.tunnelledSnapshot);
+    return target.kind === 'load' ? target.url : null;
+  }
+
+  getActiveRemoteClient(): RemotePaneClient | null {
+    return this.isRemoteModeActive() ? this.activeClient : null;
+  }
+
   shouldForwardLocalRendererEvent(channel: string): boolean {
     return !this.isRemoteModeActive() || !isPaneDaemonEventChannel(channel);
   }
@@ -606,7 +772,7 @@ export class RemotePaneClientController extends EventEmitter {
     channel: string,
     args: unknown[],
     invokeLocal: () => Promise<Result>,
-  ): Promise<Result | JsonValue | undefined> {
+  ): Promise<Result | JsonValue | ListeningPortsSnapshot | undefined> {
     if (!this.isRemoteModeActive()) {
       return invokeLocal();
     }
@@ -615,7 +781,22 @@ export class RemotePaneClientController extends EventEmitter {
       throw new Error(this.state.lastError ?? 'Remote Pane client is not connected');
     }
 
-    const result = await this.activeClient.invoke(channel, args);
+    const client = this.activeClient;
+    if (this.state.status !== 'connected' && !REMOTE_READ_CHANNELS.has(channel)
+      && !REMOTE_RESTORE_CHANNELS.has(channel)) {
+      throw new PaneError('ERR_REMOTE_OFFLINE', 'Remote connection interrupted: the action was not sent while the workspace is disconnected.', 'Wait for restoration before submitting it.');
+    }
+    let result: JsonValue | ListeningPortsSnapshot | undefined;
+    if (channel === PORTS_LIST_CHANNEL) {
+      result = await this.listTunnelledPorts(client);
+    } else {
+      try {
+        result = await client.invoke(channel, args);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes(UNKNOWN_COMMAND_MESSAGE)) throw hostOutdatedError(client.profile.label, channel);
+        throw error;
+      }
+    }
     if (!this.remoteRuntimeUsageTracked) {
       this.remoteRuntimeUsageTracked = true;
       trackRemotePaneEvent(this.analyticsManager, 'remote_pane_remote_runtime_used', {
@@ -632,8 +813,14 @@ export class RemotePaneClientController extends EventEmitter {
   }
 
   async activateProfile(profile: RemotePaneConnectionProfile): Promise<RemotePaneConnectionState> {
+    if (this.activeClient?.isSameProfile(profile)) {
+      const machine = tailnetMachineRef(profile);
+      if (this.state.status === 'error' && machine) await this.reresolveTailnetMachine(profile, machine, this.activeClient);
+      await this.activeClient?.retryNow();
+      return this.getConnectionState();
+    }
     try {
-      await this.connectProfile(profile, { retryOnInitialFailure: false });
+      await this.connectProfile(profile, { retryOnInitialFailure: false, resolveOnReady: true });
       return this.getConnectionState();
     } catch (error) {
       await this.syncToConfig().catch((syncError) => {
@@ -641,6 +828,35 @@ export class RemotePaneClientController extends EventEmitter {
       });
       throw error;
     }
+  }
+
+  /** Called only after the selected host's config is committed. */
+  commitActivation(): void {
+    this.activationCommitted?.();
+    this.activationCommitted = null;
+  }
+
+  acknowledgeRestore(rendererId: number, restoreId: number, error?: string): void {
+    const pending = this.pendingRestore;
+    if (!pending || pending.id !== restoreId || !pending.waiting.has(rendererId)) return;
+    if (error) {
+      this.pendingRestore = null;
+      pending.reject(new Error('Workspace restoration failed. Pane will retry.'));
+      return;
+    }
+    pending.waiting.delete(rendererId);
+    if (!pending.waiting.size) { this.pendingRestore = null; pending.resolve(); }
+  }
+
+  private restoreRenderers(hostChanged: boolean): Promise<void> {
+    this.pendingRestore?.reject(new Error('Restoration superseded'));
+    const id = ++this.restoreSequence;
+    const waiting = new Set(this.rendererIds());
+    const result = waiting.size ? new Promise<void>((resolve, reject) => {
+      this.pendingRestore = { id, waiting, resolve, reject };
+    }) : Promise.resolve();
+    this.rendererEventSink.send('remote-daemon:resync-required', { hostChanged, restoreId: id });
+    return result;
   }
 
   /** Pauses the remote connection while the system sleeps. */
@@ -654,6 +870,7 @@ export class RemotePaneClientController extends EventEmitter {
   }
 
   async switchToLocalMode(): Promise<RemotePaneConnectionState> {
+    this.connectionGeneration += 1;
     await this.disconnectActiveClient();
     this.setConnectionState(createDefaultRemotePaneConnectionState());
     return this.getConnectionState();
@@ -693,7 +910,7 @@ export class RemotePaneClientController extends EventEmitter {
         mode: 'remote',
         activeProfileId: activeProfile.id,
         activeProfileLabel: activeProfile.label,
-        activeBaseUrl: activeProfile.baseUrl,
+        activeBaseUrl: this.activeClient.profile.baseUrl,
       });
       return;
     }
@@ -701,11 +918,40 @@ export class RemotePaneClientController extends EventEmitter {
     await this.connectProfile(activeProfile, { retryOnInitialFailure: true });
   }
 
+  /**
+   * A codeless connection that fails may have lost its machine to a tailnet switch: look it up
+   * again, reconnect if it moved within its tailnet, or say why it is gone.
+   */
+  private async reresolveTailnetMachine(
+    savedProfile: RemotePaneConnectionProfile,
+    machine: TailnetMachineRef,
+    client: RemotePaneClient,
+  ): Promise<void> {
+    if (!this.resolveTailnetMachineUrl) return;
+    try {
+      const baseUrl = await this.resolveTailnetMachineUrl(machine);
+      if (this.activeClient !== client || baseUrl === client.profile.baseUrl) return;
+      await this.connectProfile(savedProfile, { retryOnInitialFailure: true });
+    } catch (error) {
+      if (this.activeClient !== client) return;
+      this.setConnectionState({ ...this.state, status: 'error', lastError: getErrorMessage(error, `Could not find ${machine.name}`) });
+    }
+  }
+
   private async connectProfile(
-    profile: RemotePaneConnectionProfile,
+    savedProfile: RemotePaneConnectionProfile,
     options: RemotePaneClientConnectOptions,
   ): Promise<void> {
+    const generation = ++this.connectionGeneration;
     await this.disconnectActiveClient();
+    const machine = tailnetMachineRef(savedProfile);
+    const profile = machine && this.resolveTailnetMachineUrl
+      ? { ...savedProfile, baseUrl: await this.resolveTailnetMachineUrl(machine) }
+      : savedProfile;
+    if (generation !== this.connectionGeneration) return;
+    const commit = options.resolveOnReady && this.rendererIds().length > 0
+      ? new Promise<void>(resolve => { this.activationCommitted = resolve; })
+      : Promise.resolve();
     trackRemotePaneEvent(this.analyticsManager, 'remote_pane_client_connect_started', {
       surface: 'desktop',
       role: 'client',
@@ -716,9 +962,28 @@ export class RemotePaneClientController extends EventEmitter {
       client_kind: 'desktop',
     });
 
+    let hostChanged = options.resolveOnReady === true;
     const client = new RemotePaneClient(profile, {
-      eventSink: this.rendererEventSink,
+      eventSink: {
+        send: (channel, ...args) => {
+          if (this.activeClient !== client) return;
+          if (channel === 'remote:update-intent') {
+            const updateIntent = decodeUpdateIntent(args[0]);
+            if (updateIntent) this.setConnectionState({ ...this.state, updateIntent });
+          }
+          if (channel === PORTS_CHANGED_CHANNEL) {
+            void this.publishTunnelledPorts(client, args[0]);
+            return;
+          }
+          this.rendererEventSink.send(channel, ...args);
+        },
+      },
       onConnectionStateChange: (status, errorMessage, metadata) => {
+        if (this.activeClient !== client) return;
+        if (status === 'error' || status === 'reconnecting') {
+          this.pendingRestore?.reject(new Error('Connection interrupted'));
+          this.pendingRestore = null;
+        }
         if (status === 'connected') {
           trackRemotePaneEvent(this.analyticsManager, 'remote_pane_client_connected', {
             surface: 'desktop',
@@ -746,28 +1011,26 @@ export class RemotePaneClientController extends EventEmitter {
           activeProfileId: profile.id,
           activeProfileLabel: profile.label,
           activeBaseUrl: profile.baseUrl,
+          updateIntent: status === 'connected' ? null : this.state.updateIntent,
           lastError: errorMessage ?? null,
           lastSeenAt: metadata?.lastSeenAt ?? this.getLastSeenAtForProfile(profile.id, status),
         });
       },
-      onResyncRequired: () => {
-        this.rendererEventSink.send('remote-daemon:resync-required');
+      onResyncRequired: async () => {
+        await commit;
+        if (this.activeClient !== client) return;
+        await this.restoreRenderers(hostChanged);
+        hostChanged = false;
+        void this.refreshTunnelledPorts(client);
       },
     });
 
     this.activeClient = client;
+    this.portTunnel = createPortTunnel(port => client.openPortStream(port));
     try {
       await client.connect({
         retryOnInitialFailure: options.retryOnInitialFailure,
-      });
-      this.setConnectionState({
-        mode: 'remote',
-        status: 'connected',
-        activeProfileId: profile.id,
-        activeProfileLabel: profile.label,
-        activeBaseUrl: profile.baseUrl,
-        lastError: null,
-        lastSeenAt: this.getLastSeenAtForProfile(profile.id, 'connected'),
+        resolveOnReady: options.resolveOnReady,
       });
     } catch (error) {
       if (options.retryOnInitialFailure && this.activeClient === client) {
@@ -782,7 +1045,7 @@ export class RemotePaneClientController extends EventEmitter {
         });
         this.setConnectionState({
           mode: 'remote',
-          status: 'reconnecting',
+          status: this.state.status === 'error' ? 'error' : 'reconnecting',
           activeProfileId: profile.id,
           activeProfileLabel: profile.label,
           activeBaseUrl: profile.baseUrl,
@@ -820,9 +1083,88 @@ export class RemotePaneClientController extends EventEmitter {
     }
   }
 
+  /**
+   * Tunnels every port in a host's Ports list and returns the list with where each port is
+   * reachable here. Null for a list of an unknown shape, or from a client that is no longer active.
+   */
+  private async tunnelPorts<Value>(client: RemotePaneClient, value: Value): Promise<ListeningPortsSnapshot | null> {
+    const snapshot = decodeListeningPortsSnapshot(value);
+    const tunnel = this.portTunnel;
+    if (!snapshot || !tunnel || this.activeClient !== client) return null;
+    // When host and client share a machine, the host also lists this desktop's own tunnel
+    // listeners; tunnelling those would connect each one back to itself.
+    const hostPorts = snapshot.ports
+      .filter(port => !(snapshot.host === getOsHostname() && port.pid === process.pid))
+      .map(port => port.port);
+    const sync = this.portTunnelSync.then(() => tunnel.sync(hostPorts));
+    this.portTunnelSync = sync.catch(error => console.warn('[Pane port tunnel] sync_failed:', error));
+    const localPorts = await sync;
+    const tunnelled: ListeningPortsSnapshot = {
+      ...snapshot,
+      ports: snapshot.ports.map(port => {
+        const localPort = localPorts.get(port.port);
+        return localPort === undefined ? port : { ...port, localPort };
+      }),
+    };
+    if (this.activeClient === client) this.tunnelledSnapshot = tunnelled;
+    return tunnelled;
+  }
+
+  /**
+   * The host's Ports list with local ports. A host older than port detection gets an empty list
+   * marked `unsupportedHost`, so its tabs load as before. When a current host fails to read its
+   * ports, tabs keep the last list, or an empty one until a retry succeeds; the tunnel is untouched.
+   */
+  private async listTunnelledPorts(client: RemotePaneClient): Promise<JsonValue | ListeningPortsSnapshot | undefined> {
+    let listed: JsonValue | undefined;
+    try {
+      listed = await client.invoke(PORTS_LIST_CHANNEL, []);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes(UNKNOWN_COMMAND_MESSAGE)) {
+        const unsupported: ListeningPortsSnapshot = { host: client.profile.label, ports: [], unsupportedHost: true };
+        if (this.activeClient === client) this.tunnelledSnapshot = unsupported;
+        return unsupported;
+      }
+      console.warn('[Pane port tunnel] list_failed:', error);
+      this.portsListRetry ??= setTimeout(() => {
+        this.portsListRetry = null;
+        if (this.activeClient === client) void this.refreshTunnelledPorts(client);
+      }, PORTS_LIST_RETRY_MS);
+      this.portsListRetry.unref?.();
+      return this.tunnelledSnapshot ?? { host: client.profile.label, ports: [] };
+    }
+    return await this.tunnelPorts(client, listed) ?? listed;
+  }
+
+  private async publishTunnelledPorts<Value>(client: RemotePaneClient, value: Value): Promise<void> {
+    try {
+      const snapshot = await this.tunnelPorts(client, value);
+      if (snapshot && this.activeClient === client) this.rendererEventSink.send(PORTS_CHANGED_CHANNEL, snapshot);
+    } catch (error) {
+      console.warn('[Pane port tunnel] publish_failed:', error);
+    }
+  }
+
+  /** Tunnels the host's ports on every (re)connect, before any tab asks for them. */
+  private async refreshTunnelledPorts(client: RemotePaneClient): Promise<void> {
+    try {
+      const snapshot = decodeListeningPortsSnapshot(await this.listTunnelledPorts(client));
+      if (snapshot && this.activeClient === client) this.rendererEventSink.send(PORTS_CHANGED_CHANNEL, snapshot);
+    } catch (error) {
+      console.warn('[Pane port tunnel] list_failed:', error);
+    }
+  }
+
   private async disconnectActiveClient(): Promise<void> {
+    this.commitActivation();
+    this.pendingRestore?.reject(new Error('Connection changed'));
+    this.pendingRestore = null;
     const client = this.activeClient;
     this.activeClient = null;
+    const tunnel = this.portTunnel;
+    this.portTunnel = null;
+    this.tunnelledSnapshot = null;
+    await tunnel?.close();
     if (client) {
       await client.disconnect();
       trackRemotePaneEvent(this.analyticsManager, 'remote_pane_client_disconnected', {
@@ -856,6 +1198,18 @@ export class RemotePaneClientController extends EventEmitter {
 }
 
 export const remotePaneClientController = new RemotePaneClientController();
+
+/** A codeless profile's machine: its Tailscale name on the tailnet it was saved on. */
+export interface TailnetMachineRef {
+  name: string;
+  domain: string;
+}
+
+function tailnetMachineRef(profile: RemotePaneConnectionProfile): TailnetMachineRef | null {
+  return profile.tailnetMachine && profile.tailnetDomain
+    ? { name: profile.tailnetMachine, domain: profile.tailnetDomain }
+    : null;
+}
 
 function normalizeBaseUrl(baseUrl: string): URL {
   const normalized = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
@@ -991,6 +1345,7 @@ async function requestJson(
       }).catch(reject);
     });
 
+    request.setTimeout(15_000, () => request.destroy(new Error('Remote response timed out')));
     request.on('error', reject);
     request.write(body);
     request.end();
@@ -1006,17 +1361,31 @@ async function readResponseBody(response: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** The host's own refusal says to update "Pane", which reads as this desktop; name the host instead. */
+function hostOutdatedError(hostLabel: string, channel: string): PaneError {
+  return new PaneError(
+    'ERR_HOST_OUTDATED',
+    `${hostLabel} runs an older Pane that does not have this command (${channel}). Nothing was changed.`,
+    `Update Pane on ${hostLabel} (run \`runpane update\` there), then try again.`,
+  );
+}
+
 function parseJsonResponse<Value>(
   response: JsonResponse,
   fallbackMessage: string,
   schema: BoundarySchema<Value>,
 ): Value {
-  try {
-    return decodeBoundary(JSON.parse(response.body), schema);
-  } catch (error) {
-    throw new Error(
-      `${fallbackMessage}: ${getErrorMessage(error, 'Unknown JSON parse failure')}`,
-    );
+  let value: unknown;
+  try { value = JSON.parse(response.body); }
+  catch (error) {
+    if (!response.body.trim() || (error instanceof SyntaxError && /end of JSON|Unterminated/i.test(error.message)) || response.statusCode >= 500) {
+      throw new Error(fallbackMessage);
+    }
+    throw new PaneError('ERR_REMOTE_PROTOCOL', 'The host returned an invalid response. The result cannot be confirmed.', 'Check host and client version compatibility.');
+  }
+  try { return decodeBoundary(value, schema); }
+  catch {
+    throw new PaneError('ERR_REMOTE_PROTOCOL', 'The host returned an incompatible response. The result cannot be confirmed.', 'Check host and client version compatibility.');
   }
 }
 

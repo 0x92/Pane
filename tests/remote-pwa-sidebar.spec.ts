@@ -24,6 +24,22 @@ test('a phone creates a Session from the drawer and lands in its agent chat', as
   await expect(page.getByRole('group', { name: 'Sessions' }).getByRole('button', { name: 'Open Session New chat' })).toBeVisible();
 });
 
+test('Start pinned puts a new Session in Pinned and is remembered on this device', async ({ page }) => {
+  await openConnectedRemotePwa(page);
+  const sheet = page.getByRole('dialog', { name: 'Create Session' });
+  await page.getByRole('button', { name: 'New Session' }).click();
+  await expect(sheet.getByRole('checkbox', { name: 'Start pinned' })).not.toBeChecked();
+  await sheet.getByLabel('Session name (optional)').fill('Pinned at birth');
+  await sheet.getByText('Start pinned', { exact: true }).click();
+  await sheet.getByRole('button', { name: 'Create Session' }).click();
+  await expect(sheet).toBeHidden();
+  await expect(page.getByRole('group', { name: 'Pinned' }).getByRole('button', { name: 'Open Session Pinned at birth' })).toBeVisible();
+
+  await page.reload();
+  await page.getByRole('button', { name: 'New Session' }).click();
+  await expect(sheet.getByRole('checkbox', { name: 'Start pinned' })).toBeChecked();
+});
+
 test('New Pane without a repository starts in the default repository and keeps the picker', async ({ page }) => {
   await openConnectedRemotePwa(page);
   await page.getByRole('button', { name: 'New Pane', exact: true }).click();
@@ -44,28 +60,85 @@ test('pinned Sessions and pinned panes share the Pinned section', async ({ page 
   await page.getByRole('button', { name: 'Pin Session Release prep' }).click();
   await expect(pinned.getByRole('button', { name: 'Open Session Release prep' })).toBeVisible();
   await page.getByRole('group', { name: 'Repositories' }).getByRole('button', { name: 'Pin pane' }).first().click();
-  // Pinned panes are labelled with their repository, as on desktop.
-  await expect(paneRow(page, 'pane/scrub Sentry request bodies')).toBeVisible();
+  // Pinned panes keep their own name and show the repository beside it, as on desktop.
+  await expect(pinned.getByRole('button', { name: /^scrub Sentry request bodies/ })).toContainText('pane');
   await pinned.getByRole('button', { name: 'Open Session Release prep' }).click();
   await expect(page.getByRole('tab', { name: 'Claude', exact: true })).toHaveAttribute('aria-selected', 'true');
+});
+
+test('a phone opens a Session by tapping its icon, not only its name', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openConnectedRemotePwa(page, { orchestrationSessionNames: ['Release prep'] });
+
+  await page.getByRole('button', { name: 'Open remote panes' }).click();
+  const row = page.getByRole('group', { name: 'Sessions' }).getByRole('button', { name: 'Open Session Release prep' });
+  const box = await row.locator('xpath=..').boundingBox();
+  if (!box) throw new Error('Session row has no box');
+  // The leading chat icon of a Session without Panes, at the row's left edge.
+  await page.mouse.click(box.x + 20, box.y + box.height / 2);
+  await expect(page.getByRole('tab', { name: 'Claude', exact: true })).toHaveAttribute('aria-selected', 'true');
+});
+
+const archiveSession = async (page: Page, name: string) => {
+  await page.getByRole('button', { name: `More actions for ${name}` }).click();
+  await page.getByRole('menuitem', { name: 'Archive Session' }).click();
+};
+
+test('a pane opens on the host\'s active tab only when the phone can show it, with desktop-only tabs last', async ({ page }) => {
+  await openConnectedRemotePwa(page, {
+    panelTitles: ['Diff', 'claude', 'Explorer', 'shell'],
+    panelTypes: ['diff', 'terminal', 'explorer', 'terminal'],
+    activePanelIndex: 0,
+  });
+  await expect(page.getByRole('tab')).toHaveText(['claude', 'Explorer', 'shell', 'Diff']);
+  await expect(page.getByRole('tab', { name: 'claude', exact: true })).toHaveAttribute('aria-selected', 'true');
+});
+
+test('archiving a Session from its row menu can be undone from the toast', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openConnectedRemotePwa(page, { orchestrationSessionNames: ['Release prep'] });
+  await page.getByRole('button', { name: 'Open remote panes' }).click();
+
+  await archiveSession(page, 'Release prep');
+  await expect(page.getByRole('button', { name: 'Open Session Release prep' })).toHaveCount(0);
+  await page.getByRole('status').filter({ hasText: 'Archived Release prep' }).getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByRole('group', { name: 'Sessions' }).getByRole('button', { name: 'Open Session Release prep' })).toBeVisible();
+});
+
+test('reopening keeps the last host through an outage and Disconnect returns to the connect form', async ({ page }) => {
+  await openConnectedRemotePwa(page);
+  await page.reload();
+  await expect(page.getByRole('tablist', { name: 'Remote tool panels' })).toBeVisible();
+
+  const health = 'http://anim-pane.test/remote/browser/health';
+  await page.route(health, route => route.abort());
+  await page.reload();
+  // Startup failure keeps the selected host and its bounded recovery cycle.
+  await expect(page.getByRole('button', { name: 'Disconnect' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Connect', exact: true })).toHaveCount(0);
+  await page.unroute(health);
+  await expect(page.getByRole('tablist', { name: 'Remote tool panels' })).toBeVisible({ timeout: 25_000 });
+  await page.getByRole('button', { name: 'Disconnect' }).click();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeVisible();
 });
 
 test('archived Sessions and panes are restored from the Archived section', async ({ page }) => {
   page.on('dialog', dialog => void dialog.accept());
   await openConnectedRemotePwa(page, { orchestrationSessionNames: ['Release prep'] });
 
-  await page.getByRole('button', { name: 'Archive Session Release prep' }).click();
+  await archiveSession(page, 'Release prep');
   await expect(page.getByRole('button', { name: 'Open Session Release prep' })).toHaveCount(0);
   await page.getByRole('group', { name: 'Repositories' }).getByRole('button', { name: 'Archive pane' }).first().click();
   await expect(paneRow(page, 'scrub Sentry request bodies')).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Archived', exact: true }).click();
+  await page.getByRole('button', { name: /^Archived/ }).click();
   await page.getByRole('button', { name: 'Restore Session Release prep' }).click();
   await expect(page.getByRole('group', { name: 'Sessions' }).getByRole('button', { name: 'Open Session Release prep' })).toBeVisible();
   await page.getByRole('button', { name: 'Restore scrub Sentry request bodies' }).click();
 
   await expect(page.getByRole('group', { name: 'Repositories' }).getByRole('button', { name: /^scrub Sentry request bodies/ })).toBeVisible();
-  await expect(page.getByRole('group', { name: 'Archived' })).toContainText('No archived panes');
+  await expect(page.getByRole('group', { name: 'Archived' })).toContainText('Nothing archived');
 });
 
 test('collapsed sections stay collapsed on this device after a reload', async ({ page }) => {
@@ -74,7 +147,6 @@ test('collapsed sections stay collapsed on this device after a reload', async ({
   await expect(paneRow(page, 'scrub Sentry request bodies')).toBeHidden();
 
   await page.reload();
-  await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Repositories', exact: true })).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByRole('button', { name: 'Sessions', exact: true })).toHaveAttribute('aria-expanded', 'true');
   await expect(paneRow(page, 'scrub Sentry request bodies')).toBeHidden();
@@ -93,4 +165,132 @@ test('changes made on the host while the connection was down appear when it retu
 
   await expect(paneRow(page, 'server-side funnel events')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open Session Release prep' })).toHaveCount(0);
+});
+
+test('Back past a Session still opening keeps the Pane it lands on', async ({ page }) => {
+  await openConnectedRemotePwa(page, { orchestrationSessionNames: ['Release prep'] });
+  const paneTab = page.getByRole('tab', { name: 'shell', exact: true });
+  const sessionTab = page.getByRole('tab', { name: 'Claude', exact: true });
+  // SAFETY: the PWA writes its history entries as `{ paneRemote: { view } }`.
+  const historyView = () => page.evaluate(() => (window.history.state as { paneRemote?: { view: string | null } } | null)?.paneRemote?.view);
+  const back = () => page.evaluate(() => new Promise<void>(resolve => {
+    window.addEventListener('popstate', () => resolve(), { once: true });
+    window.history.back();
+  }));
+
+  // History: Pane A, Session S, Pane A.
+  await expect(paneTab).toBeVisible();
+  await page.getByRole('button', { name: 'Open Session Release prep' }).click();
+  await expect(sessionTab).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('group', { name: 'Repositories' }).getByRole('button', { name: /^scrub Sentry request bodies/ }).click();
+  await expect(paneTab).toBeVisible();
+  await expect.poll(historyView).toBe('pane:anim-remote-0');
+
+  // Hold Session S's next open until both Backs have landed.
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('http://anim-pane.test/**', async (route) => {
+    if (route.request().postData()?.includes('"orchestration-sessions:get"')) await held;
+    await route.fallback();
+  });
+  const sessionOpened = page.waitForResponse(response => response.request().postData()?.includes('"orchestration-sessions:get"') ?? false);
+
+  await back();
+  await back();
+  release();
+  await sessionOpened;
+  await page.waitForTimeout(300);
+
+  await expect(paneTab).toBeVisible();
+  await expect(sessionTab).toHaveCount(0);
+  expect(await historyView()).toBe('pane:anim-remote-0');
+});
+
+test('a Session shows its recorded blockers on its row and above its chat', async ({ page }) => {
+  const host = await openConnectedRemotePwa(page, { orchestrationSessionNames: ['Release prep'] });
+  host.sessions[0].blockers = ['Waiting on the signing certificate'];
+  await page.getByRole('button', { name: 'Refresh remote sessions' }).click();
+
+  const row = page.getByRole('group', { name: 'Sessions' }).getByRole('button', { name: 'Open Session Release prep' });
+  await expect(row).toContainText('Blocked: Waiting on the signing certificate');
+  await row.click();
+  await expect(page.getByRole('region', { name: 'Blockers' })).toContainText('Waiting on the signing certificate');
+});
+
+/** Gives each mock Session one Pane, so its row has a chevron and nested Pane rows. */
+async function openWithSessionPanes(page: Page) {
+  const host = await openConnectedRemotePwa(page, { orchestrationSessionNames: ['Release prep', 'Billing fix'] });
+  host.sessions[0].associations = [{ paneId: 'anim-remote-1', panelIds: [], attachedAt: new Date(0).toISOString() }];
+  host.sessions[1].associations = [{ paneId: 'anim-remote-2', panelIds: [], attachedAt: new Date(0).toISOString() }];
+  await page.getByRole('button', { name: 'Refresh remote sessions' }).click();
+  return host;
+}
+
+const sessionsGroup = (page: Page) => page.getByRole('group', { name: 'Sessions' });
+const sessionToggle = (page: Page, name: string) => sessionsGroup(page).getByRole('button', { name: new RegExp(`^(Show|Hide) panes in ${name}$`) });
+
+test('Sessions start collapsed and this device remembers which ones were opened', async ({ page }) => {
+  await openWithSessionPanes(page);
+  const releaseToggle = sessionToggle(page, 'Release prep');
+  const billingToggle = sessionToggle(page, 'Billing fix');
+
+  await expect(releaseToggle).toHaveAccessibleName('Show panes in Release prep');
+  await expect(releaseToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(billingToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(sessionsGroup(page).getByRole('button', { name: /^server-side funnel events/ })).toBeHidden();
+  await expect(sessionsGroup(page).getByRole('button', { name: /^sms opt-in consent at signup/ })).toBeHidden();
+
+  // Opening a Session does not expand it; only the chevron does.
+  await sessionsGroup(page).getByRole('button', { name: 'Open Session Release prep' }).click();
+  await expect(page.getByRole('tab', { name: 'Claude', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(releaseToggle).toHaveAttribute('aria-expanded', 'false');
+
+  await releaseToggle.click();
+  await expect(releaseToggle).toHaveAccessibleName('Hide panes in Release prep');
+  await expect(releaseToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(sessionsGroup(page).getByRole('button', { name: /^server-side funnel events/ })).toBeVisible();
+
+  await page.reload();
+  await expect(releaseToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(sessionsGroup(page).getByRole('button', { name: /^server-side funnel events/ })).toBeVisible();
+  await expect(billingToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(sessionsGroup(page).getByRole('button', { name: /^sms opt-in consent at signup/ })).toBeHidden();
+  // Stored per host, by Session id alone.
+  expect(await page.evaluate(() => window.localStorage.getItem('pane.remotePwa.expandedSessions@anim-host')))
+    .toBe(JSON.stringify(['__orchestration_session_mock-0__']));
+
+  // Pinning the Session shows it open under Pinned too.
+  await page.getByRole('button', { name: 'Pin Session Release prep' }).click();
+  await expect(page.getByRole('group', { name: 'Pinned' }).getByRole('button', { name: 'Hide panes in Release prep' })).toHaveAttribute('aria-expanded', 'true');
+});
+
+test('another host\'s opened Sessions do not open this host\'s', async ({ page }) => {
+  // The mock serves one host, so this stands in for switching hosts: the other host's choice is stored under its own key.
+  await page.addInitScript(() => {
+    window.localStorage.setItem('pane.remotePwa.expandedSessions@other-host', JSON.stringify(['__orchestration_session_mock-0__']));
+  });
+  await openWithSessionPanes(page);
+  await expect(sessionToggle(page, 'Release prep')).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('the Session toggle still works for the visit when storage is unavailable', async ({ page }) => {
+  await page.addInitScript(() => {
+    const { getItem, setItem } = Storage.prototype;
+    Storage.prototype.getItem = function (key: string) {
+      if (key.startsWith('pane.remotePwa.expandedSessions')) throw new DOMException('Storage disabled', 'SecurityError');
+      return getItem.call(this, key);
+    };
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key.startsWith('pane.remotePwa.expandedSessions')) throw new DOMException('Storage disabled', 'SecurityError');
+      setItem.call(this, key, value);
+    };
+  });
+  await openWithSessionPanes(page);
+  const releaseToggle = sessionToggle(page, 'Release prep');
+  await expect(releaseToggle).toHaveAttribute('aria-expanded', 'false');
+  await releaseToggle.click();
+  await expect(releaseToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(sessionsGroup(page).getByRole('button', { name: /^server-side funnel events/ })).toBeVisible();
+  await releaseToggle.click();
+  await expect(releaseToggle).toHaveAttribute('aria-expanded', 'false');
 });

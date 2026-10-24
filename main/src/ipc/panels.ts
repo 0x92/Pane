@@ -5,12 +5,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { PaneCommandRegistry, PaneCommandValue } from '../daemon/commandRegistry';
+import { pathToFileURL } from 'url';
+import { rejectWithPaneErrorText, type PaneCommandRegistry, type PaneCommandValue } from '../daemon/commandRegistry';
 import { getPaneWebviewContextMap } from '../core/runtime';
 import { panelManager } from '../services/panelManager';
 import { terminalPanelManager } from '../services/terminalPanelManager';
+import { getMobilePushSender } from '../daemon/mobilePushSender';
 import { databaseService } from '../services/database';
-import { CreatePanelRequest, PanelEventType, SessionPanelLayout, ToolPanel, type PanelLayoutNode } from '../../../shared/types/panels';
+import { BrowserPanelState, CreatePanelRequest, PanelEventType, SessionPanelLayout, ToolPanel, decodeSessionPanelLayout } from '../../../shared/types/panels';
 import type { AppServices } from './types';
 import type { PanelAgentStatusEvent } from '../../../shared/types/agentStatus';
 import { PANE_CHAT_SESSION_ID } from '../../../shared/types/paneChat';
@@ -18,37 +20,14 @@ import { getAppSubdirectory } from '../utils/appDirectory';
 import { sanitizeTerminalOutput } from '../utils/terminalOutputSanitizer';
 import { getWSLHome, linuxToUNCPath, posixJoin, windowsPathToWSLMount } from '../utils/wslUtils';
 import { boundary, decodeBoundary, type BoundarySchema } from '../../../shared/validation/boundaryDecoder';
+import { PaneError, paneErrorText, reasonOf } from '../../../shared/paneError';
 import { readBrowserPanelFile } from '../services/browserPanelFiles';
 import { prepareRemoteBrowserFiles } from '../daemon/client/remoteBrowserFiles';
+import { clearPaneBrowserData } from '../services/browserData';
+import { assertRawTerminal } from './runpaneChat';
+import { ChunkedUploadStore, type UploadStart } from '../services/chunkedUploadStore';
 
 const execFileAsync = promisify(execFile);
-
-const panelLayoutNodeSchema: BoundarySchema<PanelLayoutNode> = {
-  decode(cursor) {
-    return boundary.union(
-      boundary.object({
-        type: boundary.literal('group'),
-        id: boundary.string,
-        panelIds: boundary.array(boundary.string),
-        activePanelId: boundary.nullable(boundary.string),
-      }),
-      boundary.object({
-        type: boundary.literal('split'),
-        id: boundary.string,
-        direction: boundary.enumeration('row', 'column'),
-        children: boundary.array(panelLayoutNodeSchema),
-        sizes: boundary.array(boundary.number),
-      }),
-    ).decode(cursor);
-  },
-};
-
-const sessionPanelLayoutSchema: BoundarySchema<SessionPanelLayout> = boundary.object({
-  version: boundary.literal(1),
-  root: panelLayoutNodeSchema,
-  focusedGroupId: boundary.optional(boundary.string),
-  zoomedGroupId: boundary.optional(boundary.nullable(boundary.string)),
-});
 
 /**
  * Check if a session's project is WSL-enabled and convert path if needed.
@@ -107,6 +86,80 @@ async function readCleanTerminalScrollback(panelId: string, lines: number): Prom
   if (persistedScrollback === null || persistedScrollback === '') return null;
 
   return sanitizeTerminalOutput(persistedScrollback).split('\n').slice(-lines).join('\n');
+}
+
+const MAX_PASTE_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Save a pasted or uploaded image to the session's images folder and return
+ * its path with an image number for UI ordering.
+ */
+async function landPastedImage(sessionId: string, buffer: Buffer, mimeType: string) {
+  // Initialize counter from existing files on disk if not cached.
+  // Note: this counts files in the host-side .pane/images/ for backwards compat —
+  // it's just a counter for UI ordering, not a strict inventory of saved files.
+  const hostImagesDir = getAppSubdirectory('images');
+  if (!existsSync(hostImagesDir)) {
+    await fs.mkdir(hostImagesDir, { recursive: true });
+  }
+  if (!sessionImageCounters.has(sessionId)) {
+    const existing = readdirSync(hostImagesDir)
+      .filter(f => f.startsWith(`${sessionId}_`));
+    sessionImageCounters.set(sessionId, existing.length);
+  }
+
+  const count = (sessionImageCounters.get(sessionId) ?? 0) + 1;
+  const timestamp = Date.now();
+  const randomStr = Math.random().toString(36).substring(2, 9);
+  const extension = MIME_EXTENSIONS[mimeType] ?? 'png';
+  const filename = `${sessionId}_${count}_${timestamp}_${randomStr}.${extension}`;
+
+  if (buffer.length > MAX_PASTE_BYTES) {
+    throw new Error('Image too large (max 50 MB)');
+  }
+
+  const resolvedPath = await saveFileForSession(sessionId, 'images', filename, buffer);
+
+  // Commit counter only after successful save
+  sessionImageCounters.set(sessionId, count);
+
+  return { filePath: resolvedPath, imageNumber: count };
+}
+
+/** Save a pasted or uploaded file (any type) to the session's files folder and return its path. */
+async function landPastedFile(sessionId: string, buffer: Buffer, originalFileName: string) {
+  const extMatch = originalFileName.match(/\.([a-zA-Z0-9]+)$/);
+  const extension = extMatch ? extMatch[1].toLowerCase() : 'bin';
+  const timestamp = Date.now();
+  const randomStr = Math.random().toString(36).substring(2, 9);
+  const filename = `${sessionId}_${timestamp}_${randomStr}.${extension}`;
+
+  if (buffer.length > MAX_PASTE_BYTES) {
+    throw new Error('File too large (max 50 MB)');
+  }
+
+  const resolvedPath = await saveFileForSession(sessionId, 'files', filename, buffer);
+  return { filePath: resolvedPath };
+}
+
+const uploadStartSchema: BoundarySchema<UploadStart> = boundary.object({
+  uploadId: boundary.nonEmptyString,
+  sessionId: boundary.nonEmptyString,
+  fileName: boundary.nonEmptyString,
+  mimeType: boundary.string,
+  size: boundary.number,
+  md5: boundary.string,
+});
+const uploadChunkSchema = boundary.object({
+  uploadId: boundary.nonEmptyString,
+  offset: boundary.number,
+  base64: boundary.string,
+});
+
+let chunkedUploads: ChunkedUploadStore | null = null;
+function uploadStore(): ChunkedUploadStore {
+  chunkedUploads ??= new ChunkedUploadStore({ dir: getAppSubdirectory('uploads') });
+  return chunkedUploads;
 }
 
 /**
@@ -366,8 +419,70 @@ async function readClipboardImageFallback(sessionId: string): Promise<{ filePath
   return { filePath: resolveImagePathForSession(filePath, sessionId), imageNumber: count };
 }
 
+const openHtmlFileRequestSchema = boundary.object({ sessionId: boundary.string, filePath: boundary.string });
+const worktreePathResultSchema = boundary.object({
+  success: boundary.boolean,
+  path: boundary.optional(boundary.string),
+  error: boundary.optional(boundary.string),
+});
+
+/**
+ * Show a worktree HTML file in a browser tab: the tab already showing it, or
+ * else a new one. A tab showing anything else is never retargeted. The host
+ * resolves the file inside the Session's worktree (the `file:getPath` boundary)
+ * and makes the file:// grant itself, so a remote desktop can preview worktree
+ * pages while its own panels:create/panels:update still cannot point a tab at a file.
+ */
+async function openHtmlFileInBrowserPanel(commandRegistry: PaneCommandRegistry, raw: PaneCommandValue): Promise<ToolPanel> {
+  const { sessionId, filePath } = decodeBoundary(raw, openHtmlFileRequestSchema);
+  if (!/\.html?$/i.test(filePath)) {
+    throw new PaneError(
+      'ERR_HTML_PREVIEW_FILE_TYPE',
+      `Pane can only open .html or .htm files in a browser tab, and "${filePath}" is neither. No tab was opened.`,
+      'Choose an .html or .htm file in this worktree.',
+    );
+  }
+  const resolved = decodeBoundary(await commandRegistry.invoke('file:getPath', [{ sessionId, filePath }]), worktreePathResultSchema);
+  if (!resolved.success || !resolved.path) {
+    throw new PaneError(
+      'ERR_HTML_PREVIEW_OUTSIDE_WORKTREE',
+      `Pane cannot open "${filePath}" because it is not a file in this Session's worktree (${resolved.error ?? 'unresolved path'}). No tab was opened.`,
+      'Choose an HTML file inside the worktree.',
+    );
+  }
+  const fullPath = resolved.path;
+  const stat = await fs.stat(fullPath).catch((cause: unknown) => {
+    throw new PaneError(
+      'ERR_HTML_PREVIEW_MISSING',
+      `Pane cannot open "${filePath}" because it could not be read: ${reasonOf(cause)}. No tab was opened.`,
+      'Check that the file still exists in the worktree, then open it again.',
+    );
+  });
+  if (!stat.isFile()) {
+    throw new PaneError(
+      'ERR_HTML_PREVIEW_NOT_FILE',
+      `Pane cannot open "${filePath}" because it is not a regular file. No tab was opened.`,
+      'Choose an HTML file inside the worktree.',
+    );
+  }
+  const currentUrl = pathToFileURL(fullPath).href;
+  const open = panelManager.getPanelsForSession(sessionId).find((panel) =>
+    // SAFETY: The browser panel type discriminator establishes BrowserPanelState.
+    panel.type === 'browser' && (panel.state.customState as BrowserPanelState | undefined)?.currentUrl === currentUrl);
+  if (open) return open;
+  // A client's own new tab moves no other client, as with panels:create.
+  return panelManager.createPanel({
+    sessionId,
+    type: 'browser',
+    title: path.basename(fullPath),
+    initialState: { customState: { currentUrl } },
+    announceActivation: false,
+  }, { hostFileGrant: true });
+}
+
 const DAEMON_PANEL_CHANNELS = [
   'panels:read-browser-file',
+  'panels:open-html-file',
   'panels:create',
   'panels:delete',
   'panels:update',
@@ -384,6 +499,7 @@ const DAEMON_PANEL_CHANNELS = [
   'panels:send-terminal-input',
   'panels:shouldAutoCreate',
   'terminal:input',
+  'terminal:reply',
   'terminal:resize',
   'terminal:getState',
   'terminal:saveState',
@@ -397,6 +513,10 @@ const DAEMON_PANEL_CHANNELS = [
   'terminal:paste-image',
   'terminal:save-scrollback',
   'terminal:paste-file',
+  'terminal:upload-start',
+  'terminal:upload-chunk',
+  'terminal:upload-commit',
+  'terminal:upload-cancel',
 ] as const;
 
 export function registerPanelHandlers(
@@ -407,11 +527,25 @@ export function registerPanelHandlers(
   commandRegistry.register('panels:read-browser-file', async (panelId: string, url: string) => {
     return readBrowserPanelFile(panelManager.getPanel(panelId), url);
   });
+  commandRegistry.register('panels:open-html-file', async (request: PaneCommandValue) => {
+    try {
+      return { success: true, data: await openHtmlFileInBrowserPanel(commandRegistry, request) };
+    } catch (error) {
+      console.error('[IPC] Failed to open HTML file in a browser panel:', error);
+      return {
+        success: false,
+        error: error instanceof PaneError ? paneErrorText(error) : error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
   ipcMain.handle('browser-panel:prepare-file', (_event, panelId: string) => prepareRemoteBrowserFiles(panelId));
+  // Browser data lives on the machine showing the browser, so this is never forwarded to a remote host.
+  ipcMain.handle('browser-data:clear', () => rejectWithPaneErrorText(clearPaneBrowserData()));
   // Panel CRUD operations
   commandRegistry.register('panels:create', async (request: CreatePanelRequest) => {
     try {
-      const panel = await panelManager.createPanel(request);
+      // A client's own new tab moves no other client.
+      const panel = await panelManager.createPanel({ ...request, announceActivation: false });
       return { success: true, data: panel };
     } catch (error) {
       console.error('[IPC] Failed to create panel:', error);
@@ -421,8 +555,15 @@ export function registerPanelHandlers(
   
   commandRegistry.register('panels:delete', async (panelId: string) => {
     try {
-      // Clean up terminal process if it's a terminal panel
       const panel = panelManager.getPanel(panelId);
+      // Refuse before teardown. `deletePanel` declines permanent panels but
+      // returns quietly, so destroying the terminal first would kill the
+      // process, leave the panel in place, and still report success.
+      if (panel?.metadata.permanent) {
+        return { success: false, error: 'This panel cannot be closed.' };
+      }
+
+      // Clean up terminal process if it's a terminal panel
       if (panel?.type === 'terminal') {
         await terminalPanelManager.destroyTerminal(panelId, { saveState: false });
       }
@@ -489,7 +630,7 @@ export function registerPanelHandlers(
   
   commandRegistry.register('panels:set-active', async (sessionId: string, panelId: string) => {
     try {
-      await panelManager.setActivePanel(sessionId, panelId);
+      await panelManager.rememberActivePanel(sessionId, panelId);
       return { success: true };
     } catch (error) {
       console.error('[IPC] Failed to set active panel:', error);
@@ -507,13 +648,14 @@ export function registerPanelHandlers(
       const raw = databaseService.getSessionPanelLayout(sessionId);
       if (!raw) return { success: true, data: null };
       try {
-        const parsed = decodeBoundary(JSON.parse(raw), sessionPanelLayoutSchema);
-        return { success: true, data: parsed };
+        // The same decoder reads each desktop's own layout memory.
+        const parsed = decodeSessionPanelLayout(JSON.parse(raw));
+        if (parsed) return { success: true, data: parsed };
       } catch {
         // Malformed JSON should never brick a session
-        console.warn('[IPC] Corrupt panel_layout JSON for session', sessionId);
-        return { success: true, data: null };
       }
+      console.warn('[IPC] Corrupt panel_layout JSON for session', sessionId);
+      return { success: true, data: null };
     } catch (error) {
       console.error('[IPC] Failed to get panel layout:', error);
       return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -666,9 +808,18 @@ export function registerPanelHandlers(
   
   // Terminal-specific handlers (internal use)
   commandRegistry.register('terminal:input', async (panelId: string, data: string) => {
+    // Desktop, phone and remote web all type through here, so it is always a person.
+    getMobilePushSender(services.configManager).observeInput(panelId, data);
+    services.orchestrationSessionManager?.observeInput(panelId, data);
     return terminalPanelManager.writeToTerminal(panelId, data);
   });
   
+  // A reply to a query the agent asked its terminal, from a viewer that may not
+  // be the one allowed to answer. terminalPanelManager holds the designation.
+  commandRegistry.register('terminal:reply', async (panelId: string, data: string, viewerId?: string) => {
+    return terminalPanelManager.writeTerminalReply(panelId, data, viewerId);
+  });
+
   commandRegistry.register('terminal:resize', async (
     panelId: string,
     cols: number,
@@ -679,6 +830,7 @@ export function registerPanelHandlers(
   });
   
   commandRegistry.register('terminal:getState', async (panelId: string) => {
+    assertRawTerminal(panelId);
     return terminalPanelManager.getTerminalState(panelId);
   });
 
@@ -710,16 +862,13 @@ export function registerPanelHandlers(
   // output cadence can drop to OUTPUT_BATCH_INTERVAL_HIDDEN while hidden.
   // No-op when the panel's PTY isn't in the map (pre-init / post-destroy).
   commandRegistry.register('terminal:setVisibility', async (panelId: string, isVisible: boolean, viewerId?: string) => {
-    const scopedViewerId = viewerId?.includes(':')
-      ? viewerId
-      : viewerId
-        ? `local:${viewerId}`
-        : undefined;
-    terminalPanelManager.setVisibility(panelId, !!isVisible, scopedViewerId);
+    // Scoping lives in terminalPanelManager, so registration and ack cannot
+    // disagree about how a bare id is spelled.
+    terminalPanelManager.setVisibility(panelId, !!isVisible, viewerId);
   });
 
-  commandRegistry.register('terminal:ack', async (panelId: string, bytesConsumed: number) => {
-    terminalPanelManager.acknowledgeBytes(panelId, bytesConsumed);
+  commandRegistry.register('terminal:ack', async (panelId: string, bytesConsumed: number, viewerId?: string) => {
+    terminalPanelManager.acknowledgeBytes(panelId, bytesConsumed, viewerId);
   });
 
   // Reset flow control state (for recovering from stuck terminals)
@@ -729,11 +878,13 @@ export function registerPanelHandlers(
 
   // Get alternate screen state for TUI detection on panel mount
   commandRegistry.register('terminal:getAltScreenState', async (panelId: string) => {
+    assertRawTerminal(panelId);
     return terminalPanelManager.getAltScreenState(panelId);
   });
 
   commandRegistry.register('terminal:getScrollbackClean', async (panelId: string, lines: number) => {
     try {
+      assertRawTerminal(panelId);
       const content = await readCleanTerminalScrollback(panelId, lines);
       if (content === null) {
         return { success: false, error: `No scrollback available for panel ${panelId}` };
@@ -757,46 +908,11 @@ export function registerPanelHandlers(
     dataUrl: string,
     mimeType: string
   ) => {
-    // Initialize counter from existing files on disk if not cached.
-    // Note: this counts files in the host-side .pane/images/ for backwards compat —
-    // it's just a counter for UI ordering, not a strict inventory of saved files.
-    const hostImagesDir = getAppSubdirectory('images');
-    if (!existsSync(hostImagesDir)) {
-      await fs.mkdir(hostImagesDir, { recursive: true });
-    }
-    if (!sessionImageCounters.has(sessionId)) {
-      const existing = readdirSync(hostImagesDir)
-        .filter(f => f.startsWith(`${sessionId}_`));
-      sessionImageCounters.set(sessionId, existing.length);
-    }
-
-    // Increment counter
-    const count = (sessionImageCounters.get(sessionId) ?? 0) + 1;
-
-    const timestamp = Date.now();
-    const randomStr = Math.random().toString(36).substring(2, 9);
-    const extension = MIME_EXTENSIONS[mimeType] ?? 'png';
-    const filename = `${sessionId}_${count}_${timestamp}_${randomStr}.${extension}`;
-
-    // Decode base64
     const base64Data = dataUrl.split(',')[1];
     if (!base64Data) {
       throw new Error('Invalid image data URL');
     }
-    const buffer = Buffer.from(base64Data, 'base64');
-
-    // Backend size validation: same 50MB cap as terminal:paste-file, since this
-    // handler also just saves the bytes to disk and returns the resolved path
-    if (buffer.length > 50 * 1024 * 1024) {
-      throw new Error('Image too large (max 50 MB)');
-    }
-
-    const resolvedPath = await saveFileForSession(sessionId, 'images', filename, buffer);
-
-    // Commit counter only after successful save
-    sessionImageCounters.set(sessionId, count);
-
-    return { filePath: resolvedPath, imageNumber: count };
+    return landPastedImage(sessionId, Buffer.from(base64Data, 'base64'), mimeType);
   });
 
   // Fallback clipboard image check for platforms where browser clipboardData
@@ -850,27 +966,32 @@ export function registerPanelHandlers(
     dataUrl: string,
     originalFileName: string
   ) => {
-    // Derive extension from original filename
-    const extMatch = originalFileName.match(/\.([a-zA-Z0-9]+)$/);
-    const extension = extMatch ? extMatch[1].toLowerCase() : 'bin';
-
-    const timestamp = Date.now();
-    const randomStr = Math.random().toString(36).substring(2, 9);
-    const filename = `${sessionId}_${timestamp}_${randomStr}.${extension}`;
-
     const base64Data = dataUrl.split(',')[1];
     if (!base64Data) {
       throw new Error('Invalid data URL');
     }
-    const buffer = Buffer.from(base64Data, 'base64');
-
-    if (buffer.length > 50 * 1024 * 1024) {
-      throw new Error('File too large (max 50 MB)');
-    }
-
-    const resolvedPath = await saveFileForSession(sessionId, 'files', filename, buffer);
-    return { filePath: resolvedPath };
+    return landPastedFile(sessionId, Buffer.from(base64Data, 'base64'), originalFileName);
   });
+
+  // Uploads from a phone on a slow link arrive in chunks and land exactly
+  // like a paste: images through landPastedImage, anything else through
+  // landPastedFile. See ChunkedUploadStore for resume and retry.
+  commandRegistry.register('terminal:upload-start', (input: PaneCommandValue) =>
+    uploadStore().start(decodeBoundary(input, uploadStartSchema)));
+  commandRegistry.register('terminal:upload-chunk', (uploadId: PaneCommandValue, offset: PaneCommandValue, base64: PaneCommandValue) => {
+    const chunk = decodeBoundary({ uploadId, offset, base64 }, uploadChunkSchema);
+    return uploadStore().append(chunk.uploadId, chunk.offset, chunk.base64);
+  });
+  commandRegistry.register('terminal:upload-commit', (uploadId: PaneCommandValue) =>
+    uploadStore().commit(decodeBoundary(uploadId, boundary.nonEmptyString), async (record, bytes) => {
+      // Image types an agent can attach land as images; anything else (HEIC, video) keeps its own extension.
+      const landed = record.mimeType in MIME_EXTENSIONS
+        ? await landPastedImage(record.sessionId, bytes, record.mimeType)
+        : await landPastedFile(record.sessionId, bytes, record.fileName);
+      return landed.filePath;
+    }));
+  commandRegistry.register('terminal:upload-cancel', (uploadId: PaneCommandValue) =>
+    uploadStore().cancel(decodeBoundary(uploadId, boundary.nonEmptyString)));
 
   // Check if a panel type should be auto-created (not previously closed by user)
   commandRegistry.register('panels:shouldAutoCreate', async (sessionId: string, panelType: string) => {

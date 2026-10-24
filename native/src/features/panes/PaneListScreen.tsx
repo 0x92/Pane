@@ -38,7 +38,7 @@ import { StatusBadge } from './StatusBadge';
 export function PaneListScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const { connection } = useDaemon();
+  const { client, connection } = useDaemon();
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const projects = useProjects();
@@ -62,7 +62,8 @@ export function PaneListScreen() {
     projects: projects.data ?? [],
     sessions: sessions.unavailable ? 'unavailable' : sessions.data?.sessions ?? (sessions.isError ? [] : undefined),
     sessionsError: sessions.isError && !sessions.unavailable ? sessions.error.message : undefined,
-    archivedProjects: archived.data ?? (archived.isError ? [] : undefined),
+    archivedProjects: archived.data,
+    archivedError: archived.isError ? archived.error.message : undefined,
     expanded,
     collapsedSessions,
     query,
@@ -171,7 +172,7 @@ export function PaneListScreen() {
         );
       case 'note':
         return item.danger
-          ? <Notice danger message={item.text} action={{ title: 'Try again', onPress: () => void sessions.refetch() }} />
+          ? <Notice danger message={item.text} action={{ title: 'Try again', onPress: () => void (item.retry === 'archived' ? archived.refetch() : sessions.refetch()) }} />
           : <SidebarNote testID={item.key} text={item.text} />;
     }
   };
@@ -184,7 +185,7 @@ export function PaneListScreen() {
           <Icon ios="apple.terminal" android="terminal" size={20} color={theme.colors.accent} />
           <Text variant="headline" accessibilityRole="header" numberOfLines={1} style={styles.brandTitle}>Remote Pane</Text>
         </View>
-        <ConnectionStatus status={connection.status} />
+        <ConnectionStatus updateIntent={connection.updateIntent} status={connection.status} onRetry={() => client.retryNow()} />
         <View style={styles.headerActions}>
           <IconButton label="Refresh remote sessions" testID="panes-refresh" onPress={() => void refresh()}>
             <RefreshIcon spinning={loading || refreshing} />

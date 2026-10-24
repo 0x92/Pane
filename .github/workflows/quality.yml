@@ -38,8 +38,11 @@ jobs:
             - 'scripts/generate-runpane-contract.js'
             - 'scripts/sync-runpane-package-versions.js'
             - 'scripts/test-runpane-contract.js'
+            - 'scripts/test-runpane-node-runtime.js'
             - 'scripts/test-runpane-mcp.js'
             - 'scripts/test-runpane-package-smoke.js'
+            - 'scripts/test-runpane-workspace.js'
+            - 'scripts/test-runpane-handoff.js'
             - 'scripts/fixtures/**'
             - '.github/workflows/quality.yml'
           main:
@@ -86,6 +89,17 @@ jobs:
     - name: Run frontend unit tests
       run: CI=1 pnpm --filter frontend test
 
+    # Catches hand edits to the generated contract files (docs, TS, Python,
+    # fixture). It needs no dependencies, and runs even if the tests above
+    # failed so it never hides behind them.
+    - name: Check runpane contract generated files
+      if: ${{ !cancelled() }}
+      run: |
+        node scripts/generate-runpane-contract.js --check || {
+          echo "::error title=runpane contract drift::Generated runpane contract files differ from contracts/runpane/contract.json. Edit contract.json, not the generated files, then run: node scripts/generate-runpane-contract.js and commit the result."
+          exit 1
+        }
+
     - name: Finish type checking
       if: ${{ !cancelled() }}
       run: scripts/ci-background.sh wait typecheck
@@ -114,9 +128,11 @@ jobs:
 
   # Runs beside quality-checks so the Electron smoke path does not wait on
   # typecheck, lint, and unit tests.
+  # Pinned: ubuntu-latest is Ubuntu 26.04, which Playwright 1.54.1 cannot
+  # install browser dependencies for. Move back once Playwright supports it.
   functional-smoke:
     name: Functional Smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout code
@@ -139,6 +155,9 @@ jobs:
 
     - name: Configure Electron sandbox
       run: |
+        # Electron 42+ fetches its binary on first use and logs that to stdout,
+        # so fetch it first to keep require('electron') printing only the path.
+        node node_modules/electron/install.js
         electron_path="$(node -p "require('electron')")"
         electron_dir="$(dirname "${electron_path}")"
         sudo chown root "${electron_dir}/chrome-sandbox"
@@ -150,6 +169,11 @@ jobs:
     - name: Finish Playwright browser dependencies install
       run: scripts/ci-background.sh wait playwright
 
+    - name: Verify renderer selection races
+      run: pnpm test:renderer-selection
+      env:
+        PANE_DIR: ${{ runner.temp }}/pane-renderer-selection
+
     - name: Verify sandboxed Electron preload
       run: xvfb-run -a pnpm exec electron scripts/smoke-sandboxed-preload.cjs
 
@@ -160,8 +184,10 @@ jobs:
 
   # Published wrapper CLIs (npm + PyPI). Runs only when wrapper/contract files
   # change on a PR; always runs on pushes to main. Each OS is tested once at
-  # the runtime floors (Node 20 / Python 3.8) and once at current (Node 22 /
-  # Python 3.13) instead of the full Node x Python cross product.
+  # the runtime floors (Node 22.23.4 / Python 3.8) and once at current (Node 24.22.1 /
+  # Python 3.13) instead of the full Node x Python cross product. The Linux
+  # floor entry is pinned to ubuntu-24.04: setup-python has no Python 3.8 build
+  # for Ubuntu 26.04 (ubuntu-latest).
   runpane-wrapper-tests:
     name: Runpane Wrapper (${{ matrix.os }}, Node ${{ matrix.node-version }}, Python ${{ matrix.python-version }})
     needs: changes
@@ -171,12 +197,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, node-version: '20.0.0', python-version: '3.8' }
-          - { os: ubuntu-latest, node-version: '22.18.0', python-version: '3.13' }
-          - { os: macos-latest, node-version: '20.0.0', python-version: '3.8' }
-          - { os: macos-latest, node-version: '22.18.0', python-version: '3.13' }
-          - { os: windows-2022, node-version: '20.0.0', python-version: '3.8' }
-          - { os: windows-2022, node-version: '22.18.0', python-version: '3.13' }
+          - { os: ubuntu-24.04, node-version: '22.23.4', python-version: '3.8' }
+          - { os: ubuntu-latest, node-version: '24.22.1', python-version: '3.13' }
+          - { os: macos-latest, node-version: '22.23.4', python-version: '3.8' }
+          - { os: macos-latest, node-version: '24.22.1', python-version: '3.13' }
+          - { os: windows-2022, node-version: '22.23.4', python-version: '3.8' }
+          - { os: windows-2022, node-version: '24.22.1', python-version: '3.13' }
 
     steps:
     - name: Checkout code
@@ -204,11 +230,20 @@ jobs:
     - name: Run wrapper contract tests
       run: node scripts/test-runpane-contract.js
 
+    - name: Check patched Node runtime guard
+      run: node --test scripts/test-runpane-node-runtime.js
+
     - name: Run MCP server tests
       run: node --test scripts/test-runpane-mcp.js
 
     - name: Run package manager smoke tests
       run: node scripts/test-runpane-package-smoke.js
+
+    - name: Run workspace routing tests
+      run: node --test scripts/test-runpane-workspace.js
+
+    - name: Run handoff tests
+      run: node --test scripts/test-runpane-handoff.js
 
   # Ubuntu is already covered by quality-checks above; this job only adds the
   # other platforms, and only when main-process code (or its deps) changed.

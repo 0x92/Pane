@@ -30,7 +30,11 @@
         "tests/**/*.ts",
         "playwright*.ts"
       ],
+      "ignoreUnresolved": ["/usr/bin/time"],
       "ignoreDependencies": [
+        "original-fs",
+        "npm",
+        "@agentclientprotocol/sdk",
         "@anthropic-ai/sdk",
         "@lydell/node-pty",
         "@modelcontextprotocol/sdk",
@@ -66,11 +70,13 @@
         "src/daemon/headless.ts",
         "src/ptyHost/ptyHostMain.ts",
         "src/services/mcpPermissionBridge.ts",
+        "src/services/agentChat/hookWriter.ts",
         "src/**/*.test.ts",
         "src/**/__tests__/**/*.ts",
         "build-mcp-bridge.js"
       ],
       "project": ["src/**/*.ts", "build-mcp-bridge.js"],
+      "ignoreUnresolved": ["/bin/sh"],
       "ignoreBinaries": [
         "fc-list",
         "system_profiler",
@@ -89,13 +95,15 @@
       "entry": [
         "src/cli.ts",
         "src/doctor.ts",
+        "src/handoff.ts",
         "src/installers.ts",
         "src/releases.ts",
         "src/telemetry.ts",
         "scripts/mark-executable.js"
       ],
       "project": ["src/**/*.ts", "scripts/**/*.js"],
-      "ignoreBinaries": ["ditto"]
+      "ignoreBinaries": ["ditto"],
+      "ignoreUnresolved": ["/usr/bin/codesign", "/usr/bin/ditto", "/usr/sbin/spctl", "/usr/libexec/PlistBuddy", "/usr/bin/otool"]
     },
     "mobile": {
       "entry": ["capacitor.config.ts", "src/**/*.test.ts", "scripts/**/*.mjs"],

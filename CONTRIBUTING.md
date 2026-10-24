@@ -10,7 +10,7 @@ Pane is an open source project created by [Dcouple Inc](https://dcouple.ai). Dco
 
 ## Getting Started
 
-You need Node 22.18 or newer (`.nvmrc` pins 22.18.0) and pnpm 10. If you don't
+You need patched Node 22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ (26.x), and pnpm 10. `.nvmrc` pins 22.23.4. If you don't
 have pnpm 10, `corepack enable` provides the version pinned in `package.json`.
 
 1. Fork the repository on GitHub and clone your fork.
@@ -52,6 +52,18 @@ and `backend-debug.log` in the repository root. Both are reset at startup.
 A dev build is the same app as an installed Pane, and by default it shares that
 install's data:
 
+- **OS startup integration is not isolated** by a separate Pane data directory
+  or Chromium profile. Startup calls `syncAutoStartOnBoot`: the default enables
+  login registration, and disabling it can remove an existing Linux autostart entry. Windows/macOS login settings can
+  also change. Native QA needs a separate OS environment or a test-runtime guard
+  for this integration before launch; setting `autoStartOnBoot: false` is not an
+  isolation mechanism.
+- **Analytics** are on by default in a fresh data directory. Setting
+  `analytics.enabled: false` in config alone does not prevent the first-render
+  default policy from enabling analytics when neither `analytics_consent_shown`
+  nor `analytics_default_applied` records a choice. Native QA must establish an
+  explicit analytics choice and its persisted preference before the first UI
+  render, or isolate analytics with a test-runtime guard.
 - **Pane data** (`sessions.db`, `config.json`, skills) lives in `~/.pane`
   unless you set `PANE_DIR` or pass `--pane-dir`. Always set one for `pnpm dev`,
   Playwright runs and scripts. Keep the path short, like `~/.pane_test`: a long
@@ -59,7 +71,10 @@ install's data:
 - **Electron's browser profile** (localStorage, cache, cookies) is not covered
   by `PANE_DIR`. An unpackaged build uses the same profile folder as the
   installed app (`~/Library/Application Support/Pane` on macOS). `pnpm dev`
-  and `pnpm electron-dev`, and therefore Playwright, can't change it. To isolate
+  and `pnpm electron-dev`, and therefore Playwright, can't change it. That
+  includes the browser tab logins in `Partitions/pane-browser`, so an
+  unisolated dev build is signed in wherever the installed app is, and its
+  Settings → Privacy → Clear browser data signs the installed app out. To isolate
   it, build once and launch Electron yourself with `--user-data-dir`:
   ```bash
   pnpm run build:frontend && pnpm run build:main
@@ -69,12 +84,14 @@ install's data:
   ```
   `NODE_ENV=production` loads the built renderer from `frontend/dist`, so no
   Vite server is needed. Rebuild after changes.
-- **Analytics** are on by default in a fresh data directory. To keep test runs
-  out of the product analytics, create `<PANE_DIR>/config.json` with
-  `{"analytics": {"enabled": false}}` before the first launch.
 - A copy of a real `sessions.db` makes the dev build reconcile reserve worktrees
   in the real repositories it lists. Use a fresh data directory unless you need
   real data.
+
+The renderer selection race tests run with `PANE_DIR=/tmp/pane_test pnpm test:renderer-selection`.
+They mount the production sidebar and views in Chromium with a controllable Electron transport;
+they do not launch Electron or use a Pane data directory. Install Chromium with
+`pnpm exec playwright install chromium` first.
 
 ### Native modules
 
@@ -111,7 +128,7 @@ pnpm test:ci:minimal
   `OPENROUTER_API_KEY` set, one main test fails (#721). Unset it for the run.
 - Playwright tests live in `tests/*.spec.ts`. Install the browser once with
   `pnpm exec playwright install chromium`. `pnpm test:ci:minimal` runs the suite
-  CI runs: smoke, health check, accessibility and settings.
+  CI runs: smoke, health check, accessibility, settings, remote sidebar and file-preview lifecycle regressions.
 - The tests load the renderer from Vite in Chromium, with a mocked Electron API
   (`tests/electronApiMock.ts`). To start Vite, Playwright runs `pnpm electron-dev`
   on port `4521`, which also opens an Electron window against your data
@@ -121,6 +138,10 @@ pnpm test:ci:minimal
   ```bash
   PANE_DIR=~/.pane_test PLAYWRIGHT_PORT=4522 pnpm test -- tests/smoke.spec.ts
   ```
+- File editor/preview lifecycle regressions can also run without a dev app or
+  daemon: `pnpm exec playwright test -c playwright.file-preview.config.ts`.
+  They mount the real components with controlled IPC and replace only Monaco's
+  UI adapter, so deferred reads, autosave and preview cleanup execute normally.
 - Add Playwright tests for user-visible flows, and mock external services
   where you can.
 
@@ -135,6 +156,19 @@ pnpm test:ci:minimal
 - To measure dropped frames while terminal output streams, see the header of
   `tests/terminal-frames.perf.spec.ts`.
 
+Terminal timing diagnostics are opt-in. Set `PANE_TERMINAL_TIMING=1` before
+launching an isolated app to log bounded main-process event-loop delay and PTY
+write-call durations every ten seconds. In renderer DevTools, set
+`localStorage.setItem('pane:terminalTiming', '1')` and reload; read
+`window.paneTerminalTiming.snapshot()` for input IPC round-trip, output parsing,
+write-to-next-render notification, and renderer event-loop delay. Remove that
+storage key and reload to disable. Each metric retains at most 128 numeric
+samples and a count; no keystrokes, output, or panel identifiers are captured.
+Input round-trip ends when the input handler returns (PTY-host writes may still
+be queued), and xterm render notification is not physical display presentation.
+These independent intervals do not identify an output chunk as an input echo.
+Background browser timer throttling can affect event-loop samples.
+
 ## Code Style
 
 - TypeScript throughout; no explicit `any` (use a specific type, or `unknown`
@@ -146,6 +180,30 @@ pnpm test:ci:minimal
 - Two-space indentation. `camelCase` for variables and functions, `PascalCase`
   for React components and types, `kebab-case` for other filenames.
 - There is no formatter or commit hook; follow the surrounding code.
+
+## How Pane reports errors
+
+Every failure, refusal, skip or fallback tells a person or an agent what
+happened, why, what changed, and what to do next.
+
+- `message` is sentences: what happened, the underlying reason (quoted, not
+  replaced), and what was or was not changed ("Nothing was changed.", "The
+  Pane was kept."). `next` is the step to take: the exact command or setting.
+- When a destructive step is unsure, keep the data and say so.
+- Main and daemon handlers throw `PaneError(code, message, next)` from
+  `shared/paneError.ts`; `reasonOf(error)` quotes a cause inside a sentence.
+  The daemon socket and HTTP API send `{ code, message, next }`. Electron IPC
+  keeps only text, so the renderer gets `<message> Next: <next>`.
+- The `runpane` CLI throws `RunpaneError` (`packages/runpane/src/errors.ts`)
+  and prints every failure one way: the message and a `Next:` line on stderr,
+  and with `--json` also `{ "ok": false, "error": { "code", "message", "next" } }`
+  on stdout, exit 1. MCP tools return the message, `Next:` and `Code:` lines.
+- A fallback that changes behavior says so in its result, for example with a
+  `reason` field.
+- The renderer shows a reason without Electron's "Error invoking remote
+  method" wrapper (`ipcErrorMessage`, `useErrorStore.showError`), and a user
+  action that fails shows an error instead of only logging it.
+- Messages never include secrets, tokens or credentials. Paths and ids are fine.
 
 ## Making Changes
 
@@ -188,7 +246,8 @@ Releases, CI and deploys are covered in [RUNBOOK.md](RUNBOOK.md).
 ### Manual Testing
 
 Test UI and packaging changes in a packaged build for your platform
-(`pnpm build:mac`, `pnpm build:linux` or `pnpm build:win:x64`; output in
+(`pnpm build:mac`, `pnpm build:linux:x64` on x64 Linux,
+`pnpm build:linux:arm64` on ARM64 Linux, or `pnpm build:win:x64`; output in
 `dist-electron/`). The packaged app can show problems that development mode
 hides. Check that you can create a pane, run an agent, use git operations and
 run scripts, and that settings persist after a restart.
@@ -250,3 +309,5 @@ rebuilding unrelated transitive modules such as `msgpackr-extract`.
 The rebuild targets the host architecture. Use `npm rebuild
 better-sqlite3-multiple-ciphers` for Node tests, then `pnpm electron:rebuild`
 before running Electron again; only one ABI can be installed at a time.
+
+For native update/reconnect QA, set `PANE_DISABLE_OS_INTEGRATION=1` as well as an isolated `PANE_DIR` and `--user-data-dir`. This disables login-item, URL-protocol, MCP-registration, and managed home-skill writes (including removal when the setting is off). Use an isolated app/install target; it does not make a real user installation a safe test target. Close every test app and supervisor after collecting evidence.

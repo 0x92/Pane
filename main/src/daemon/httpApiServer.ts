@@ -1,8 +1,10 @@
 import http, { type IncomingMessage, type ServerResponse } from 'http';
-import { pipeline, type Duplex, type Writable } from 'stream';
+import { pipeline as pipelineCallback, Readable, type Duplex, type Writable } from 'stream';
+import type { ReadableStream as NodeReadableStream } from 'stream/web';
+import { pipeline } from 'stream/promises';
 import { constants as zlibConstants, createGzip, gzip } from 'zlib';
-import type { AddressInfo } from 'net';
-import WebSocket, { type RawData, WebSocketServer } from 'ws';
+import net, { type AddressInfo } from 'net';
+import WebSocket, { createWebSocketStream, type RawData, WebSocketServer } from 'ws';
 import { createFanoutEventSink, noopPaneEventSink, type PaneEventSink } from '../core/eventSink';
 import type { ConfigManager } from '../services/configManager';
 import {
@@ -11,11 +13,14 @@ import {
 } from '../services/remoteAnalytics';
 import { terminalPanelManager } from '../services/terminalPanelManager';
 import type { PaneCommandRegistry } from './commandRegistry';
-import { authenticateRemoteDaemonBearerToken } from './auth';
+import { authenticateRemoteDaemonBearerToken, authenticateWorkspaceRequest, type WorkspaceAccessPolicy } from './auth';
+
+export type { WorkspaceAccessPolicy } from './auth';
 import { isPaneDaemonEventChannel } from './server';
 import {
   createDefaultRemoteDaemonConfig,
   getRemoteDaemonHostConfigValidationError,
+  NATIVE_APP_WEBSOCKET_ORIGIN,
   type RemoteDaemonConnectedClient,
   type RemoteDaemonConfig,
   type RemoteDaemonEventEnvelope,
@@ -24,9 +29,11 @@ import {
 } from '../../../shared/types/remoteDaemon';
 import { remoteHostRuntimeStateStore } from './remoteHostRuntimeState';
 import { getRemotePwaAssetResponse } from './pwaStaticAssets';
-import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
+import { boundary, decodeBoundary, decodeOptionalBoundary } from '../../../shared/validation/boundaryDecoder';
 import type { BoundarySchema, JsonValue } from '../../../shared/validation/boundaryDecoder';
 import { serializeJsonTransport } from './jsonTransport';
+import { toPaneDaemonError } from '../../../shared/paneError';
+import { streamWorktreePreview } from '../services/mediaStream';
 
 interface RemoteHttpAddress {
   host: string;
@@ -54,6 +61,21 @@ interface ConnectedRemoteEventClient {
   connectedAt: string;
   lastSeenAt: string;
   heartbeatTimer: NodeJS.Timeout;
+  /** What a workspace client signed in with, checked again before each event it receives. */
+  workspaceCredentials: WorkspaceCredentials | null;
+}
+
+/** Who signed in, kept so access can be checked again after the request was admitted. */
+type AdmittedIdentity = Pick<ConnectedRemoteEventClient, 'remoteClientId' | 'remoteClientTokenHash' | 'workspaceCredentials'>;
+
+interface WorkspaceRefusal {
+  statusCode: number;
+  error: { message: string; code: string };
+}
+
+interface WorkspaceCredentials {
+  login: string | string[] | undefined;
+  authorization: string | string[] | undefined;
 }
 
 interface RemoteInvokeSuccessPayload {
@@ -66,6 +88,7 @@ interface RemoteInvokeErrorPayload {
   error: {
     message: string;
     code: string;
+    next?: string;
   };
 }
 
@@ -101,12 +124,15 @@ type RemoteRequestAuthResult =
 
 const MAX_UNAUTHENTICATED_REQUEST_BODY_BYTES = 1024 * 1024;
 const MAX_AUTHENTICATED_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_REMOTE_DAEMON_HEARTBEAT_INTERVAL_MS = 5_000;
 const REMOTE_VISIBILITY_VIEWER_STALE_MS = 15 * 60 * 1000;
 const MIN_GZIP_BODY_BYTES = 1024;
 const GZIP_HEADERS = { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } as const;
 const DEEPGRAM_LISTEN_ENDPOINT = 'wss://api.deepgram.com/v1/listen';
 const VOICE_DEEPGRAM_STREAM_PATH = '/voice/deepgram-stream';
+/** `/ports/<port>`: a WebSocket that carries raw TCP bytes to that host loopback port. */
+const PORT_STREAM_PATH = /^\/ports\/(\d{1,5})$/;
 const DEEPGRAM_STREAMING_KEYTERMS = [
   'Doozy',
   'Pane',
@@ -166,7 +192,26 @@ const REMOTE_DAEMON_CORS_HEADERS = {
 interface PaneRemoteHttpApiServerOptions {
   heartbeatIntervalMs?: number;
   analyticsSink?: RemotePaneAnalyticsSink;
+  /** Serve workspaces on loopback behind Tailscale Serve, trusting the Tailscale logins `access` allows. */
+  workspace?: WorkspaceIdentityOptions;
+  /** Whether a port is in the host's forwarded list; port streams reach only those. Without it, none. */
+  isForwardedPort?(port: number): boolean;
 }
+
+interface WorkspaceIdentityOptions {
+  listenPort: number;
+  /**
+   * Tailscale Serve's target path, secret per launch. Serve prefixes every request with it, so
+   * another OS user who finds the loopback port cannot call it directly.
+   */
+  pathSecret: string;
+  /** Who may connect right now; null refuses every request. */
+  access(): WorkspaceAccessPolicy | null;
+}
+
+/** Commands that act on the whole machine: workspace identity only, never pairing tokens. */
+const WORKSPACE_ONLY_CHANNEL_PREFIX = 'runpane:machine:';
+const WORKSPACE_LISTEN_HOST = '127.0.0.1';
 
 type RemoteHttpConfig = Pick<ReturnType<ConfigManager['getConfig']>, 'deepgramApiKey' | 'remoteDaemon'>;
 
@@ -188,12 +233,18 @@ class RemoteDaemonBadRequestError extends Error {
 export class PaneRemoteHttpApiServer {
   private server: http.Server | null = null;
   private voiceDeepgramWss: WebSocketServer | null = null;
+  private portStreamWss: WebSocketServer | null = null;
+  /** Open port streams and who opened them; each one closes when its caller loses access. */
+  private readonly portStreams = new Map<WebSocket, AdmittedIdentity>();
+  private portStreamCheckTimer: NodeJS.Timeout | null = null;
   private readonly eventClients = new Map<string, ConnectedRemoteEventClient>();
   private readonly daemonEventSink: PaneEventSink;
   private address: RemoteHttpAddress | null = null;
   private nextClientConnectionId = 1;
   private readonly heartbeatIntervalMs: number;
   private readonly analyticsSink?: RemotePaneAnalyticsSink;
+  private readonly workspace?: WorkspaceIdentityOptions;
+  private readonly isForwardedPort: (port: number) => boolean;
 
   constructor(
     private readonly commandRegistry: PaneCommandRegistry,
@@ -202,6 +253,8 @@ export class PaneRemoteHttpApiServer {
   ) {
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_REMOTE_DAEMON_HEARTBEAT_INTERVAL_MS;
     this.analyticsSink = options.analyticsSink;
+    this.workspace = options.workspace;
+    this.isForwardedPort = options.isForwardedPort ?? (() => false);
     this.daemonEventSink = createFanoutEventSink([
       {
         send: (channel, ...args) => {
@@ -216,7 +269,7 @@ export class PaneRemoteHttpApiServer {
           };
 
           for (const [clientConnectionId, client] of this.eventClients) {
-            if (!this.shouldKeepEventClient(client.remoteClientId, client.remoteClientTokenHash)) {
+            if (!this.isStillAdmitted(client)) {
               this.dropEventClient(clientConnectionId);
               continue;
             }
@@ -255,7 +308,14 @@ export class PaneRemoteHttpApiServer {
       this.dropEventClient(clientConnectionId);
     }
 
-    return clientConnectionIds.length;
+    const streams = [...this.portStreams.entries()]
+      .filter(([, identity]) => !clientIdSet || (identity.remoteClientId !== null && clientIdSet.has(identity.remoteClientId)))
+      .map(([stream]) => stream);
+    for (const stream of streams) {
+      stream.terminate();
+    }
+
+    return clientConnectionIds.length + streams.length;
   }
 
   async start(): Promise<void> {
@@ -263,15 +323,9 @@ export class PaneRemoteHttpApiServer {
       throw new Error('Remote daemon HTTP API server is already running');
     }
 
-    const hostConfig = this.getRemoteConfig().host.config;
-    if (!hostConfig.enabled) {
-      throw new Error('Remote daemon HTTP API server is disabled in config');
-    }
-
-    const hostConfigError = getRemoteDaemonHostConfigValidationError(hostConfig);
-    if (hostConfigError) {
-      throw new Error(hostConfigError);
-    }
+    const listen = this.workspace
+      ? { host: WORKSPACE_LISTEN_HOST, port: this.workspace.listenPort }
+      : this.getValidatedPairingListenAddress();
 
     const server = http.createServer((request, response) => {
       void this.handleRequest(request, response).catch((error) => {
@@ -290,8 +344,12 @@ export class PaneRemoteHttpApiServer {
         response.destroy(error instanceof Error ? error : new Error(message));
       });
     });
+    // Phones on slow links send uploads in chunks that can take minutes each;
+    // Node's default 300 s per request would cut one off on a bad link.
+    server.requestTimeout = REQUEST_TIMEOUT_MS;
     const voiceDeepgramWss = new WebSocketServer({ noServer: true });
     this.voiceDeepgramWss = voiceDeepgramWss;
+    this.portStreamWss = new WebSocketServer({ noServer: true });
     server.on('upgrade', (request, socket, head) => {
       void this.handleUpgrade(request, socket, head).catch((error) => {
         writeRawHttpError(socket, 500, error instanceof Error ? error.message : String(error));
@@ -311,7 +369,7 @@ export class PaneRemoteHttpApiServer {
 
       server.once('error', handleError);
       server.once('listening', handleListening);
-      server.listen(hostConfig.listenPort, hostConfig.listenHost);
+      server.listen(listen.port, listen.host);
     });
 
     server.on('error', (error) => {
@@ -325,23 +383,40 @@ export class PaneRemoteHttpApiServer {
 
     this.server = server;
     this.address = {
-      host: hostConfig.listenHost,
+      host: listen.host,
       port: address.port,
     };
+  }
+
+  private getValidatedPairingListenAddress(): RemoteHttpAddress {
+    const hostConfig = this.getRemoteConfig().host.config;
+    if (!hostConfig.enabled) {
+      throw new Error('Remote daemon HTTP API server is disabled in config');
+    }
+
+    const hostConfigError = getRemoteDaemonHostConfigValidationError(hostConfig);
+    if (hostConfigError) {
+      throw new Error(hostConfigError);
+    }
+    return { host: hostConfig.listenHost, port: hostConfig.listenPort };
   }
 
   async stop(): Promise<void> {
     const server = this.server;
     this.server = null;
     this.address = null;
-    const voiceDeepgramWss = this.voiceDeepgramWss;
+    if (this.portStreamCheckTimer) clearInterval(this.portStreamCheckTimer);
+    this.portStreamCheckTimer = null;
+    const webSocketServers = [this.voiceDeepgramWss, this.portStreamWss];
     this.voiceDeepgramWss = null;
-    if (voiceDeepgramWss) {
-      for (const client of voiceDeepgramWss.clients) {
+    this.portStreamWss = null;
+    for (const wss of webSocketServers) {
+      if (!wss) continue;
+      for (const client of wss.clients) {
         client.terminate();
       }
       await new Promise<void>((resolve) => {
-        voiceDeepgramWss.close(() => resolve());
+        wss.close(() => resolve());
       });
     }
 
@@ -357,7 +432,19 @@ export class PaneRemoteHttpApiServer {
   }
 
   private async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    if (this.workspace) {
+      const refusal = this.admitWorkspace(request, this.workspace.pathSecret);
+      if (refusal) {
+        writeRawHttpError(socket, refusal.statusCode, refusal.error.message, refusal.error.code);
+        return;
+      }
+    }
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+    const portMatch = PORT_STREAM_PATH.exec(url.pathname);
+    if (portMatch) {
+      this.handlePortStreamUpgrade(request, socket, head, Number(portMatch[1]), url);
+      return;
+    }
     if (url.pathname !== VOICE_DEEPGRAM_STREAM_PATH) {
       socket.destroy();
       return;
@@ -384,6 +471,64 @@ export class PaneRemoteHttpApiServer {
     wss.handleUpgrade(request, socket, head, (client) => {
       this.handleDeepgramProxySocket(client, deepgramApiKey);
     });
+  }
+
+  /**
+   * Connects an authenticated client to a host loopback port in the forwarded list and copies raw
+   * bytes both ways, one WebSocket per TCP connection the client accepted.
+   */
+  private handlePortStreamUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer, port: number, url: URL): void {
+    const auth = this.authenticateRequest(request, url.searchParams.get('access_token'));
+    if (!auth.ok) {
+      writeRawHttpError(socket, auth.statusCode, auth.error.message, auth.error.code);
+      return;
+    }
+    if (!this.isForwardedPort(port)) {
+      writeRawHttpError(socket, 403, `Port ${port} is not forwarded from this host`, 'ERR_PORT_NOT_FORWARDED');
+      return;
+    }
+    const wss = this.portStreamWss;
+    if (!wss) {
+      writeRawHttpError(socket, 503, 'Port forwarding is not available');
+      return;
+    }
+    const identity: AdmittedIdentity = {
+      remoteClientId: auth.client?.id ?? null,
+      remoteClientTokenHash: auth.client?.tokenHash ?? null,
+      workspaceCredentials: this.workspace
+        ? {
+          login: request.headers['tailscale-user-login'],
+          authorization: getAuthorizationHeaderForRequest(request, url.searchParams.get('access_token')),
+        }
+        : null,
+    };
+    wss.handleUpgrade(request, socket, head, (client) => {
+      this.portStreams.set(client, identity);
+      this.portStreamCheckTimer ??= setInterval(() => this.closeRevokedPortStreams(), this.heartbeatIntervalMs);
+      this.portStreamCheckTimer.unref?.();
+      // By name, so a service on either IPv4 or IPv6 loopback answers.
+      const upstream = net.connect({ host: 'localhost', port });
+      const stream = createWebSocketStream(client);
+      pipelineCallback(stream, upstream, stream, () => {
+        upstream.destroy();
+        client.terminate();
+      });
+      client.once('close', () => {
+        upstream.destroy();
+        this.portStreams.delete(client);
+        if (this.portStreams.size === 0 && this.portStreamCheckTimer) {
+          clearInterval(this.portStreamCheckTimer);
+          this.portStreamCheckTimer = null;
+        }
+      });
+    });
+  }
+
+  /** A removed pairing code, narrower visibility or a new password closes streams already open. */
+  private closeRevokedPortStreams(): void {
+    for (const [stream, identity] of this.portStreams) {
+      if (!this.isStillAdmitted(identity)) stream.terminate();
+    }
   }
 
   private handleDeepgramProxySocket(client: WebSocket, deepgramApiKey: string): void {
@@ -452,6 +597,13 @@ export class PaneRemoteHttpApiServer {
   }
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (this.workspace) {
+      const refusal = this.admitWorkspace(request, this.workspace.pathSecret);
+      if (refusal) {
+        this.writeJson(response, refusal.statusCode, { ok: false, error: refusal.error } satisfies RemoteInvokeErrorPayload);
+        return;
+      }
+    }
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
 
     if (request.method === 'OPTIONS') {
@@ -472,6 +624,11 @@ export class PaneRemoteHttpApiServer {
 
     if (url.pathname === '/events') {
       this.handleEventStreamRequest(request, response, url);
+      return;
+    }
+
+    if (url.pathname === '/media') {
+      await this.handleMediaRequest(request, response, url);
       return;
     }
 
@@ -519,12 +676,36 @@ export class PaneRemoteHttpApiServer {
       throw error;
     }
 
-    const auth = headerAuth.ok
-      ? headerAuth
-      : this.authenticateRequest(request, invokeRequest.token);
+    // The header check only sizes the upload; access can change while the body arrives.
+    const auth = this.authenticateRequest(request, headerAuth.ok ? undefined : invokeRequest.token);
     if (!auth.ok) {
       this.writeJson(response, auth.statusCode, auth);
       return;
+    }
+    if (!this.workspace && invokeRequest.channel.startsWith(WORKSPACE_ONLY_CHANNEL_PREFIX)) {
+      this.writeJson(response, 403, {
+        ok: false,
+        error: {
+          message: 'Machine commands are available only to the owner\'s own devices through runpane workspace.',
+          code: 'ERR_WORKSPACE_ONLY_COMMAND',
+        },
+      } satisfies RemoteInvokeErrorPayload);
+      return;
+    }
+
+    // Discovery probes peers as this computer's owner, so only that same identity may
+    // request its view. A paired client or another tailnet user must use their own computer.
+    if (invokeRequest.channel === 'runpane:workspaces:machines') {
+      if (!this.workspaceOwnerLogin(request)) {
+        this.writeJson(response, 403, {
+          ok: false,
+          error: {
+            message: 'Find computers using an address on your own Tailscale login.',
+            code: 'ERR_WORKSPACE_DISCOVERY_OWNER_REQUIRED',
+          },
+        } satisfies RemoteInvokeErrorPayload);
+        return;
+      }
     }
 
     try {
@@ -544,20 +725,42 @@ export class PaneRemoteHttpApiServer {
         } satisfies RemoteInvokeErrorPayload);
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      const code = message.includes('No Pane daemon command registered')
-        ? 'ERR_UNKNOWN_CHANNEL'
-        : 'ERR_REMOTE_DAEMON_REQUEST_FAILED';
-      const statusCode = code === 'ERR_UNKNOWN_CHANNEL' ? 404 : 500;
-
-      this.writeJson(response, statusCode, {
+      const failure = toPaneDaemonError(error, 'ERR_REMOTE_DAEMON_REQUEST_FAILED');
+      this.writeJson(response, failure.code === 'ERR_UNKNOWN_CHANNEL' ? 404 : 500, {
         ok: false,
-        error: {
-          message,
-          code,
-        },
+        error: failure,
       } satisfies RemoteInvokeErrorPayload);
     }
+  }
+
+  /** File previews for remote desktops; Range passes through so media can seek. */
+  private async handleMediaRequest(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      this.writeMethodNotAllowed(response, 'GET');
+      return;
+    }
+    const auth = this.authenticateRequest(request);
+    if (!auth.ok) {
+      this.writeJson(response, auth.statusCode, auth);
+      return;
+    }
+    const abort = new AbortController();
+    response.once('close', () => abort.abort());
+    const range = request.headers.range;
+    const media = await streamWorktreePreview(this.commandRegistry, {
+      sessionId: url.searchParams.get('sessionId') ?? '',
+      filePath: url.searchParams.get('filePath') ?? '',
+    }, new Request(url, { method: request.method, headers: range ? { Range: range } : {}, signal: abort.signal }));
+    const headers: http.OutgoingHttpHeaders = {};
+    media.headers.forEach((value, name) => { headers[name] = value; });
+    response.writeHead(media.status, withCorsHeaders(headers));
+    if (!media.body) {
+      response.end();
+      return;
+    }
+    // SAFETY: the DOM and Node typings describe the same WHATWG ReadableStream.
+    // A client that stops reading (a seek) closes the response; that ends the file read.
+    await pipeline(Readable.fromWeb(media.body as NodeReadableStream<Uint8Array>), response).catch(() => {});
   }
 
   private handleHealthRequest(request: IncomingMessage, response: ServerResponse): void {
@@ -631,6 +834,12 @@ export class PaneRemoteHttpApiServer {
       connectedAt,
       lastSeenAt: connectedAt,
       heartbeatTimer,
+      workspaceCredentials: this.workspace
+        ? {
+          login: request.headers['tailscale-user-login'],
+          authorization: getAuthorizationHeaderForRequest(request, url.searchParams.get('access_token')),
+        }
+        : null,
     };
     this.eventClients.set(clientConnectionId, connectedClient);
     this.publishConnectedClients();
@@ -645,7 +854,38 @@ export class PaneRemoteHttpApiServer {
     response.on('close', cleanup);
   }
 
+  /**
+   * Strips Serve's secret path prefix, or returns why the request is refused: direct loopback
+   * callers and every browser request are.
+   */
+  private admitWorkspace(request: IncomingMessage, pathSecret: string): WorkspaceRefusal | null {
+    const prefix = `/${pathSecret}`;
+    const rawUrl = request.url ?? '/';
+    if (rawUrl !== prefix && !rawUrl.startsWith(`${prefix}/`) && !rawUrl.startsWith(`${prefix}?`)) {
+      return { statusCode: 404, error: { message: 'Not found', code: 'ERR_REMOTE_DAEMON_HTTP_NOT_FOUND' } };
+    }
+    // Serve signs every request from the owner's devices, including ones a web page sends from
+    // the owner's browser; only Pane and the runpane CLI, which send no Origin, and the native
+    // app, whose WebSockets send an Origin no browser can, may use workspaces.
+    const origin = request.headers.origin;
+    if ((origin !== undefined && origin !== NATIVE_APP_WEBSOCKET_ORIGIN) || request.method === 'OPTIONS') {
+      return {
+        statusCode: 403,
+        error: { message: 'Workspaces answer the runpane CLI, not browsers.', code: 'ERR_WORKSPACE_BROWSER_REFUSED' },
+      };
+    }
+    request.url = rawUrl.slice(prefix.length) || '/';
+    return null;
+  }
+
   private authenticateRequest(request: IncomingMessage, token?: string | null): RemoteRequestAuthResult {
+    if (this.workspace) {
+      return authenticateWorkspaceRequest(
+        request.headers['tailscale-user-login'],
+        getAuthorizationHeaderForRequest(request, token),
+        this.workspace.access(),
+      );
+    }
     const remoteConfig = this.getRemoteConfig();
     if (!remoteConfig.host.config.enabled) {
       return {
@@ -737,7 +977,16 @@ export class PaneRemoteHttpApiServer {
     }));
   }
 
-  private shouldKeepEventClient(remoteClientId: string | null, remoteClientTokenHash: string | null): boolean {
+  private isStillAdmitted(client: AdmittedIdentity): boolean {
+    const { remoteClientId, remoteClientTokenHash, workspaceCredentials } = client;
+    if (this.workspace) {
+      // Narrower visibility or a new password applies to clients that are already connected.
+      return workspaceCredentials !== null && authenticateWorkspaceRequest(
+        workspaceCredentials.login,
+        workspaceCredentials.authorization,
+        this.workspace.access(),
+      ).ok;
+    }
     const remoteConfig = this.getRemoteConfig();
     if (!remoteConfig.host.config.enabled) {
       return false;
@@ -798,6 +1047,8 @@ export class PaneRemoteHttpApiServer {
   }
 
   private publishConnectedClients(): void {
+    // The host's connected-client list belongs to the paired transport; this one would replace it.
+    if (this.workspace) return;
     remoteHostRuntimeStateStore.setConnectedClients(this.getConnectedClientSnapshots());
   }
 
@@ -813,24 +1064,44 @@ export class PaneRemoteHttpApiServer {
     }));
   }
 
+  /** The request's Tailscale login when it is this workspace's owner, else null. */
+  private workspaceOwnerLogin(request: IncomingMessage): string | null {
+    const login = decodeOptionalBoundary(request.headers['tailscale-user-login'], boundary.string)?.trim().toLowerCase();
+    const owner = this.workspace?.access()?.ownerLogin;
+    return owner && login === owner.toLowerCase() ? login : null;
+  }
+
   private getInvokeArgsForRequest(
     invokeRequest: RemoteInvokeRequest,
     auth: Extract<RemoteRequestAuthResult, { ok: true }>,
     request: IncomingMessage,
   ): JsonValue[] {
     const args = [...invokeRequest.args];
-    if (invokeRequest.channel.startsWith('mobile:push-')) {
+    const sharesKeys = invokeRequest.channel.startsWith('credentials:shared:');
+    if (sharesKeys && this.workspace) {
+      // Keys belong to the owner: a teammate this workspace lets in may neither read nor replace them.
+      const owner = this.workspaceOwnerLogin(request);
+      if (!owner) {
+        throw new RemoteDaemonBadRequestError(
+          'ERR_SHARED_CREDENTIALS_OWNER_REQUIRED',
+          'Only this computer\'s owner can share keys with it. Sign in to Tailscale as the owner, or set the key on this computer.',
+          403,
+        );
+      }
+      return [args[0] ?? null, { clientId: `tailnet:${owner}` }];
+    }
+    if (invokeRequest.channel.startsWith('mobile:push-') || sharesKeys) {
       if (!auth.client) {
         throw new RemoteDaemonBadRequestError(
-          'ERR_MOBILE_PUSH_PAIRING_REQUIRED',
-          'Mobile notifications require an authenticated paired host.',
+          sharesKeys ? 'ERR_SHARED_CREDENTIALS_PAIRING_REQUIRED' : 'ERR_MOBILE_PUSH_PAIRING_REQUIRED',
+          sharesKeys ? 'Sharing keys requires a paired device.' : 'Mobile notifications require an authenticated paired host.',
           403,
         );
       }
       // The second argument is server-owned, even if the client supplied extra args.
       return [args[0] ?? null, { clientId: auth.client.id }];
     }
-    if (invokeRequest.channel !== 'terminal:setVisibility') {
+    if (invokeRequest.channel !== 'terminal:setVisibility' && invokeRequest.channel !== 'terminal:ack') {
       return args;
     }
 
@@ -948,11 +1219,16 @@ function acceptsGzip(request: IncomingMessage): boolean {
 // every write still delivers each SSE event immediately.
 function createSseGzipStream(response: ServerResponse): Writable {
   const gzipStream = createGzip({ flush: zlibConstants.Z_SYNC_FLUSH });
-  pipeline(gzipStream, response, () => {});
+  pipelineCallback(gzipStream, response, () => {});
   return gzipStream;
 }
 
-function writeRawHttpError(socket: Duplex, statusCode: number, message: string): void {
+function writeRawHttpError(
+  socket: Duplex,
+  statusCode: number,
+  message: string,
+  code = 'ERR_REMOTE_DAEMON_WEBSOCKET_FAILED',
+): void {
   if (!socket.writable) {
     socket.destroy();
     return;
@@ -962,7 +1238,7 @@ function writeRawHttpError(socket: Duplex, statusCode: number, message: string):
     ok: false,
     error: {
       message,
-      code: 'ERR_REMOTE_DAEMON_WEBSOCKET_FAILED',
+      code,
     },
   });
   socket.write(
@@ -982,6 +1258,8 @@ function getHttpStatusText(statusCode: number): string {
       return 'Unauthorized';
     case 403:
       return 'Forbidden';
+    case 404:
+      return 'Not Found';
     case 500:
       return 'Internal Server Error';
     case 503:

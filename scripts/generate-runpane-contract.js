@@ -330,8 +330,9 @@ function renderMarkdown(contract) {
   lines.push('');
 
   lines.push('## Compatibility Floors', '');
-  lines.push(`The npm wrapper should run on Node.js \`${contract.compatibility.node}\` and newer. The root Electron app`);
-  lines.push('may require a newer Node.js version for development and packaging.', '');
+  lines.push(`The npm wrapper requires Node.js \`${contract.compatibility.node}\`, matching the root development baseline.`);
+  lines.push('The CLI rejects unsupported runtimes before dispatching commands and before staging an independent updater runtime.', '');
+  lines.push('The Pane-managed CLI also accepts the audited Electron 43.8.3 / embedded Node 24.22.0 pair, whose CA backport passed actual TLS probes. This does not support standalone Node 24.22.0; independent updater runtimes must satisfy the standalone ranges.', '');
   lines.push(`The PyPI wrapper should run on Python \`${contract.compatibility.python}\` and newer. Keep runtime dependencies`);
   lines.push('out of the wrapper unless a compatibility test covers the new dependency.', '');
 
@@ -389,7 +390,8 @@ function renderMarkdown(contract) {
   lines.push(contract.docs.daemonFlagNote, '');
 
   lines.push('## Machine-Readable Schemas', '');
-  lines.push('Stable `--json` response schemas live in `contracts/runpane/contract.json` under `jsonSchemas`.');
+  lines.push('Stable `--json` response schemas live in `contracts/runpane/contract.json` under `jsonSchemas`.', '');
+  lines.push('A failed command exits 1 and prints its message and a `Next:` line to stderr. With `--json` it also prints `jsonSchemas.error` to stdout: `{ "ok": false, "error": { "code": "...", "message": "...", "next": "..." } }`. Branch on `code`; `next` is the step to take when one is known. A command whose result has its own `ok: false` shape, such as an archive refusal or `panels last-message` without a transcript, prints that result instead, and `watch` reports failures as WATCH ERROR lines with exit 2.', '');
   lines.push('OpenAPI should be generated later from the stable local HTTP/API subset of the same contract, not maintained as a second source of truth.', '');
 
   lines.push('## Download Attribution', '');

@@ -4,19 +4,26 @@ import type { RemotePaneConnectionProfile, RemotePaneConnectionStatus } from '..
 
 interface RemoteStatusBarProps {
   profile: RemotePaneConnectionProfile;
+  /** The open Pane or Session. The header falls back to the host when nothing is open. */
+  openName: string | null;
   status: RemotePaneConnectionStatus;
   lastError: string | null;
+  updateIntent?: import('../../../../shared/remoteClient/updateIntent').RemoteUpdateIntent | null;
   lastSeenAt: string | null;
   onDisconnect: () => void;
+  onRetry: () => void;
   onOpenSidebar: () => void;
 }
 
 export function RemoteStatusBar({
   profile,
+  openName,
   status,
   lastError,
   lastSeenAt,
+  updateIntent,
   onDisconnect,
+  onRetry,
   onOpenSidebar,
 }: RemoteStatusBarProps) {
   const connected = status === 'connected';
@@ -27,7 +34,9 @@ export function RemoteStatusBar({
     ? 'bg-status-success'
     : status === 'error' ? 'bg-status-error' : 'bg-status-warning';
   const statusLabel = getStatusLabel(status);
-  const title = connected ? profile.label : `${statusLabel} ${profile.label}`;
+  const hostLabel = connected ? profile.label : `${statusLabel} ${profile.label}`;
+  const title = openName ?? hostLabel;
+  const hostDetail = openName ? `${hostLabel} · ${profile.baseUrl}` : profile.baseUrl;
   const [announcement, setAnnouncement] = useState('');
   const previousAnnouncementRef = useRef('');
 
@@ -70,11 +79,12 @@ export function RemoteStatusBar({
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-text-primary">{title}</p>
           <p className="truncate text-xs text-text-tertiary">
-            {lastError || profile.baseUrl}
+            {lastError || (updateIntent ? `Updating remote Pane. Session saved; reconnecting automatically. Operation ${updateIntent.id}, checkpoint confirmed.` : hostDetail)}
             {lastSeenAt ? ` · seen ${formatLastSeen(lastSeenAt)}` : ''}
           </p>
         </div>
       </div>
+      {(status === 'error' || status === 'reconnecting') && <button type="button" onClick={onRetry} className="shrink-0 rounded-md border border-border-primary px-3 py-2 text-sm text-text-primary">Retry now</button>}
       <button
         type="button"
         onClick={onDisconnect}
@@ -94,6 +104,8 @@ function getStatusLabel(status: RemotePaneConnectionStatus): string {
       return 'Connected to';
     case 'connecting':
       return 'Connecting to';
+    case 'restoring':
+      return 'Restoring workspace on';
     case 'reconnecting':
       return 'Reconnecting to';
     case 'error':

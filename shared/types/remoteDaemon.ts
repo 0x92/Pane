@@ -5,7 +5,7 @@ import type { BoundarySchema, JsonObject, JsonValue } from '../validation/bounda
 
 export type RemoteDaemonTransport = 'http+sse';
 export type RemoteDaemonClientMode = 'local' | 'remote';
-export type RemotePaneConnectionStatus = 'local' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+export type RemotePaneConnectionStatus = 'local' | 'connecting' | 'connected' | 'restoring' | 'reconnecting' | 'error';
 export type RemoteSetupChannel = 'stable' | 'nightly';
 export type RemoteSetupTunnelPreference = 'auto' | 'tailscale' | 'ssh' | 'manual';
 export type RemoteSetupDataDirectoryMode = 'current' | 'isolated';
@@ -53,6 +53,15 @@ export interface RemoteDaemonConnectedClient {
   lastSeenAt: string;
 }
 
+/** What Settings shows about this host's tailnet: a problem and its fix, or that the host moved. */
+export interface RemoteHostTailnetNotice {
+  tone: 'warning' | 'info';
+  title: string;
+  message: string;
+  /** A command the message asks for, shown on its own so it can be copied. */
+  command?: string;
+}
+
 export interface RemoteDaemonHostRuntimeState {
   enabled: boolean;
   status: RemoteDaemonHostRuntimeStatus;
@@ -61,6 +70,7 @@ export interface RemoteDaemonHostRuntimeState {
   lastError: string | null;
   connectedClients: RemoteDaemonConnectedClient[];
   executableHealth: RemoteDaemonExecutableHealth;
+  tailnetNotice: RemoteHostTailnetNotice | null;
   updatedAt: string;
 }
 
@@ -76,9 +86,17 @@ export interface RemotePaneConnectionProfile {
   id: string;
   label: string;
   baseUrl: string;
+  /** The pairing token, or for a codeless profile the machine's password; empty when it has none. */
   token: string;
   transport: RemoteDaemonTransport;
   tunnel?: PaneRemoteConnectionImportPayload['tunnel'];
+  /**
+   * Set for a codeless connection over Tailscale: the machine's Tailscale name, looked up at each
+   * connect. Names are unique only within a tailnet, so `tailnetDomain` (its MagicDNS domain,
+   * such as `tail1234.ts.net`) pins the profile, and its password, to the tailnet it was saved on.
+   */
+  tailnetMachine?: string;
+  tailnetDomain?: string;
 }
 
 export interface RemoteDaemonHostAccess {
@@ -251,6 +269,15 @@ export interface RemotePwaTerminalShortcut {
   enabled: boolean;
 }
 
+/** What `remote:settings:update` accepts from a paired phone; the host refuses any other field. */
+export interface RemoteSettingsPatch {
+  /** Replaces the whole list. */
+  terminalShortcuts?: RemotePwaTerminalShortcut[];
+  deepgramApiKey?: string;
+  openRouterApiKey?: string;
+  falApiKey?: string;
+}
+
 export interface RemotePwaCustomCommand {
   name: string;
   command: string;
@@ -289,9 +316,12 @@ export interface RemotePwaAffordances {
   voiceTranscription: RemotePwaVoiceTranscriptionAffordance;
   /** Hosts older than the PWA's Sessions support omit this. */
   sessionAgents?: RemotePwaSessionAgents;
+  /** The host's experimental Chat flag. Hosts older than the flag omit this. */
+  chatEnabled?: boolean;
 }
 
 export interface RemotePaneConnectionState {
+  updateIntent?: import('../remoteClient/updateIntent').RemoteUpdateIntent | null;
   mode: RemoteDaemonClientMode;
   status: RemotePaneConnectionStatus;
   activeProfileId: string | null;
@@ -336,6 +366,13 @@ export function decodeRemoteHeartbeatPayload<Value>(value: Value): RemoteDaemonH
 export function decodeRemoteDaemonEventEnvelope<Value>(value: Value): RemoteDaemonEventEnvelope {
   return decodeBoundary(value, remoteDaemonEventEnvelopeSchema);
 }
+
+/**
+ * The Origin the native app sends on its WebSockets. React Native always sends an Origin on a
+ * WebSocket and workspaces refuse browser origins, so the app names itself with a value no browser
+ * can send: browsers send only "null" or scheme://host.
+ */
+export const NATIVE_APP_WEBSOCKET_ORIGIN = 'runpane-native-app';
 
 export const DEFAULT_REMOTE_DAEMON_HOST_CONFIG: RemoteDaemonHostConfig = {
   enabled: false,
@@ -402,6 +439,7 @@ export function createDefaultRemoteDaemonHostRuntimeState(): RemoteDaemonHostRun
     lastError: null,
     connectedClients: [],
     executableHealth: createUnknownRemoteDaemonExecutableHealth(),
+    tailnetNotice: null,
     updatedAt: '1970-01-01T00:00:00.000Z',
   };
 }
@@ -436,14 +474,29 @@ const remoteTunnelSchema: BoundarySchema<NonNullable<PaneRemoteConnectionImportP
   selected: boundary.boolean,
   tailscaleIp: boundary.optional(boundary.nonEmptyString),
 });
-const remoteProfileSchema: BoundarySchema<RemotePaneConnectionProfile> = boundary.object({
+const remoteProfileFieldsSchema: BoundarySchema<RemotePaneConnectionProfile> = boundary.object({
   id: boundary.nonEmptyString,
   label: boundary.nonEmptyString,
   baseUrl: boundary.nonEmptyString,
-  token: boundary.nonEmptyString,
+  token: boundary.string,
   transport: boundary.literal('http+sse'),
   tunnel: boundary.optional(remoteTunnelSchema),
+  tailnetMachine: boundary.optional(boundary.nonEmptyString),
+  tailnetDomain: boundary.optional(boundary.nonEmptyString),
 });
+/** Only a codeless profile may have no token; Tailscale identity stands in for it. */
+const remoteProfileSchema: BoundarySchema<RemotePaneConnectionProfile> = {
+  decode(cursor) {
+    const profile = remoteProfileFieldsSchema.decode(cursor);
+    if (!profile.token && !profile.tailnetMachine) {
+      return cursor.child('token', profile.token).fail('expected a non-empty string');
+    }
+    if (profile.tailnetMachine && !profile.tailnetDomain) {
+      return cursor.child('tailnetDomain', profile.tailnetDomain).fail('a codeless profile needs its tailnet');
+    }
+    return profile;
+  },
+};
 const remoteImportSchema = boundary.object({
   v: boundary.literal(1),
   label: boundary.nonEmptyString,

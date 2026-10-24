@@ -1,3 +1,5 @@
+import { RemoteConnectionBanner } from './components/RemoteConnectionBanner';
+import { TailnetHttpsBanner } from './components/TailnetHttpsBanner';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useIPCEvents } from './hooks/useIPCEvents';
 import { useNotifications } from './hooks/useNotifications';
@@ -29,11 +31,13 @@ import { ResumeSessionsDialog } from './components/ResumeSessionsDialog';
 import { useErrorStore } from './stores/errorStore';
 import { useSessionStore } from './stores/sessionStore';
 import { subscribePanelStatus } from './services/panelStatusSync';
+import { subscribeAttentionInbox, useAttentionInboxStore } from './stores/attentionInboxStore';
 import { useConfigStore } from './stores/configStore';
 import { usePanelStore } from './stores/panelStore';
 import { API } from './utils/api';
-import { startHostNavigationMemoryWrites } from './utils/hostNavigationMemory';
+import { restoreSessionSelection, startHostNavigationMemoryWrites } from './utils/hostNavigationMemory';
 import { createVisibilityAwareInterval } from './utils/performanceUtils';
+import { useWindowActive } from './hooks/useWindowActive';
 import { ContextMenuProvider } from './contexts/ContextMenuContext';
 
 import { CommandPalette } from './components/CommandPalette';
@@ -86,6 +90,7 @@ function App() {
   const [isSupportPaneOpen, setIsSupportPaneOpen] = useState(false);
   const [hasCheckedOnboarding, setHasCheckedOnboarding] = useState(false);
   const [completedOnboardingThisSession, setCompletedOnboardingThisSession] = useState(false);
+  const { visible: windowVisible, focused: windowFocused } = useWindowActive();
   const analyticsCheckStarted = useRef(false);
   const analyticsIdentityPromise = useRef<Promise<AnalyticsIdentity | undefined> | null>(null);
   const appFirstOpenedCaptured = useRef(false);
@@ -153,6 +158,35 @@ function App() {
 
   // Subscribe to live statuses and reconcile the daemon baseline on attach/reconnect.
   useEffect(() => subscribePanelStatus(), []);
+  useEffect(() => {
+    void useAttentionInboxStore.getState().loadEnabled();
+    return subscribeAttentionInbox();
+  }, []);
+
+  /**
+   * Forget a pane's status when the pane itself goes.
+   *
+   * `SessionView` already reconciles the *active* session's panel list, but a
+   * pane deleted in a background session — from RunPane, from Mission Control,
+   * from a remote daemon — leaves its status entries behind: the sidebar keeps
+   * a "needs input" badge for a pane that no longer exists, and Mission Control
+   * keeps a tile waiting on output that will never come. Archiving a session
+   * deletes its panes without a per-panel event, so it is handled the same way
+   * from the session side.
+   */
+  useEffect(() => {
+    const events = window.electronAPI?.events;
+    const unsubscribePanel = events?.onPanelDeleted?.((data) => {
+      usePanelStore.getState().forgetPanel(data.panelId);
+    });
+    const unsubscribeSession = events?.onSessionDeleted?.((session) => {
+      usePanelStore.getState().forgetSession(session.id);
+    });
+    return () => {
+      unsubscribePanel?.();
+      unsubscribeSession?.();
+    };
+  }, []);
 
   useEffect(() => {
     const clearViewedCompletedActivity = (event: Event) => {
@@ -233,6 +267,16 @@ function App() {
     },
   });
 
+  // mod+shift+n is New Project, so New Session is palette-only.
+  // OrchestrationSessionNav owns the Create Session dialog and opens it on this event.
+  useHotkey({
+    id: 'new-orchestration-session',
+    label: 'New Session',
+    keys: '',
+    category: 'navigation',
+    action: () => window.dispatchEvent(new Event('open-create-orchestration-session')),
+  });
+
   useHotkey({
     id: 'new-project',
     label: 'New Project',
@@ -250,7 +294,11 @@ function App() {
   }, [fetchConfig]);
 
   // Remember where the user is on the active host, so a host switch can return here.
-  useEffect(() => startHostNavigationMemoryWrites(), []);
+  useEffect(() => {
+    const stopWrites = startHostNavigationMemoryWrites();
+    void restoreSessionSelection();
+    return stopWrites;
+  }, []);
 
   // Detect unclean shutdown from previous session and notify user
   useEffect(() => {
@@ -463,32 +511,18 @@ function App() {
     const handleSessionSwitch = () => runCleanup();
     window.addEventListener('session-switched', handleSessionSwitch);
 
-    // Pause animations when window is hidden to save battery
-    const handleVisibilityChange = () => {
-      document.documentElement.classList.toggle('window-hidden', document.hidden);
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    // Also pause animations on window blur — document.hidden rarely fires for a
-    // visible-but-unfocused window (notably on macOS), so gate on the focus event too.
-    window.electronAPI.window?.isFocused?.()
-      .then((focused) => {
-        document.documentElement.classList.toggle('window-blurred', !focused);
-      })
-      .catch(() => {
-        // Default to focused if the focus query is unavailable.
-      });
-    const cleanupFocusChanged = window.electronAPI.events.onWindowFocusChanged((focused) => {
-      document.documentElement.classList.toggle('window-blurred', !focused);
-    });
-
     return () => {
       cleanupDispose();
       window.removeEventListener('session-switched', handleSessionSwitch);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      cleanupFocusChanged();
     };
   }, []);
+
+  // Pause animations while the window is hidden or in the background, which is
+  // the same pair of signals Mission Control idles on.
+  useEffect(() => {
+    document.documentElement.classList.toggle('window-hidden', !windowVisible);
+    document.documentElement.classList.toggle('window-blurred', !windowFocused);
+  }, [windowVisible, windowFocused]);
 
   // Check if onboarding should be shown after analytics defaults are resolved.
   useEffect(() => {
@@ -793,7 +827,10 @@ function App() {
       <div className="pane-app-shell relative h-screen flex flex-col overflow-hidden bg-bg-primary">
         <div className={isSettingsOpen ? 'hidden' : 'contents'}>
           <WindowTitleBar projects={projects} sidebarWidth={sidebarWidth} sidebarCollapsed={sidebarCollapsed} controlsSlotRef={setTitleBarControlsSlot} />
+          {/* Settings draws its own title-bar spacer, which the window controls overlap. */}
+          <TailnetHttpsBanner />
         </div>
+        <RemoteConnectionBanner onSettings={() => openSettings({ category: 'remote-access' })} />
         <div className="pane-main-layout flex flex-1 min-h-0">
         <MainProcessLogger />
         {isSettingsOpen && (
@@ -821,7 +858,7 @@ function App() {
             onAboutClick={() => setIsAboutOpen(true)}
             onSettingsClick={() => openSettings()}
             onRemoteSettingsClick={() => openSettings({ category: 'remote-access' })}
-            onManageRemoteConnectionsClick={() => openSettings({ category: 'remote-access', subview: 'connections' })}
+            onManageRemoteConnectionsClick={() => openSettings({ category: 'remote-access' })}
             width={sidebarWidth}
             onResize={startResize}
             collapsed={sidebarCollapsed}

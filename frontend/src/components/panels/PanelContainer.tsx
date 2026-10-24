@@ -2,6 +2,8 @@ import React, { Suspense, lazy, useEffect, useMemo, useRef } from 'react';
 import { PanelContainerProps } from '../../types/panelComponents';
 import { ErrorBoundary } from 'react-error-boundary';
 import { PanelLoadingFallback } from './PanelLoadingFallback';
+import { AgentPanelSurface } from '../agentChat/AgentPanelSurface';
+import { isChatEnabled, useConfigStore } from '../../stores/configStore';
 import { renderLog } from '../../utils/console';
 
 // Lazy load panel components for better performance
@@ -13,6 +15,8 @@ const LogsPanel = lazy(() => import('./logPanel/LogsPanel'));
 const DashboardPanel = lazy(() => import('./DashboardPanel'));
 const SetupTasksPanel = lazy(() => import('./SetupTasksPanel'));
 const BrowserPanel = lazy(() => import('./browser/BrowserPanel'));
+
+const NotesPanel = lazy(() => import('./notes/NotesPanel'));
 
 // Transient failures (a webview not ready yet after a pane switch) clear on remount,
 // so retry quietly a few times before showing the error.
@@ -70,6 +74,8 @@ export const PanelContainer: React.FC<PanelContainerProps> = React.memo(({
   autoFocus
 }) => {
   const autoRetry = useRef<AutoRetryState>({ count: 0, lastAt: 0 });
+  // Undefined until config loads, so a cold start keeps the tab's saved view.
+  const chatEnabled = useConfigStore(s => s.config ? isChatEnabled(s.config) : undefined);
   renderLog('[PanelContainer] Rendering panel:', panel.id, 'Type:', panel.type, 'Active:', isActive);
   
   // FIX: Use stable panel rendering without forcing remounts
@@ -81,8 +87,10 @@ export const PanelContainer: React.FC<PanelContainerProps> = React.memo(({
 
     // Panel type rendering
     switch (panel.type) {
+      case 'notes':
+        return <NotesPanel paneId={panel.sessionId} viewId={panel.id} />;
       case 'terminal':
-        return <TerminalPanel panel={panel} isActive={isActive} autoFocus={autoFocus} />;
+        return <AgentPanelSurface panel={panel} client={window.electronAPI.agentChat} chatEnabled={chatEnabled}><TerminalPanel panel={panel} isActive={isActive} autoFocus={autoFocus} /></AgentPanelSurface>;
       case 'diff':
         return <DiffPanel panel={panel} isActive={isActive} sessionId={panel.sessionId} isMainRepo={isMainRepo} />;
       case 'explorer':
@@ -114,10 +122,18 @@ export const PanelContainer: React.FC<PanelContainerProps> = React.memo(({
           </div>
         );
     }
-  }, [panel, isActive, isMainRepo, autoFocus]); // Include panel to catch state changes
+  }, [panel, isActive, isMainRepo, autoFocus, chatEnabled]); // Include panel to catch state changes
 
   return (
     <ErrorBoundary
+      onError={(error, info) => {
+        window.electronAPI?.diagnostics?.rendererFatal({
+          kind: 'error-boundary',
+          message: error instanceof Error ? error.message : 'Panel render failed',
+          stack: error instanceof Error ? error.stack : undefined,
+          componentStack: info.componentStack ?? undefined,
+        }).catch(() => {});
+      }}
       fallbackRender={({ error, resetErrorBoundary }) => (
         <PanelErrorFallback
           // SAFETY: Panel children only throw Error instances.

@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { lazy, Suspense, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, ExternalLink, FolderOpen, Globe } from 'lucide-react';
+import { Copy, ExternalLink, FolderOpen, Globe, FileText } from 'lucide-react';
 import { TerminalPopover, PopoverButton } from './TerminalPopover';
 import { InterceptorToast } from './InterceptorToast';
 import { isWindows } from '../../utils/platformUtils';
+import NotesDialog from '../panels/notes/NotesDialog';
 import { copyTerminalText } from '../../utils/terminalClipboard';
+
+const NotesPanel = lazy(() => import('../panels/notes/NotesPanel'));
 
 export interface SelectionPopoverProps {
   visible: boolean;
@@ -12,9 +15,10 @@ export interface SelectionPopoverProps {
   y: number;
   text: string;
   workingDirectory?: string;
+  panelTitle?: string;
   sessionId?: string;
   isRemoteMode?: boolean;
-  onOpenInBrowser?: (url: string) => void | Promise<void>;
+  onOpenInBrowser: (url: string) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -60,11 +64,13 @@ export const SelectionPopover: React.FC<SelectionPopoverProps> = ({
   y,
   text,
   workingDirectory,
+  panelTitle,
   sessionId,
   isRemoteMode = false,
   onOpenInBrowser,
   onClose,
 }) => {
+  const [capture, setCapture] = useState<{ text: string; source: string; at: string }>();
   // Stays mounted while hidden so the error toast can outlive the popover
   const [errorToast, setErrorToast] = useState<string | null>(null);
 
@@ -95,13 +101,7 @@ export const SelectionPopover: React.FC<SelectionPopoverProps> = ({
   const handleOpenInBrowser = async () => {
     if (urlMatch && sessionId) {
       try {
-        if (onOpenInBrowser) {
-          await onOpenInBrowser(urlMatch[0]);
-        } else {
-          window.dispatchEvent(new CustomEvent('browser-panel:navigate', {
-            detail: { url: urlMatch[0], sessionId }
-          }));
-        }
+        await onOpenInBrowser(urlMatch[0]);
       } catch (error) {
         console.error('Failed to open URL in browser panel:', error);
       } finally {
@@ -145,6 +145,10 @@ export const SelectionPopover: React.FC<SelectionPopoverProps> = ({
           Copy
         </span>
       </PopoverButton>
+      {sessionId && !isRemoteMode && <PopoverButton onClick={() => {
+        setCapture({ text, source: [panelTitle, workingDirectory, sessionId].filter(Boolean).join(' · '), at: new Date().toISOString() });
+        onClose();
+      }}><span className="flex items-center gap-2"><FileText className="h-4 w-4" />Add to notes</span></PopoverButton>}
       {isUrl && sessionId && (
         <PopoverButton onClick={handleOpenInBrowser}>
           <span className="flex items-center gap-2">
@@ -174,6 +178,10 @@ export const SelectionPopover: React.FC<SelectionPopoverProps> = ({
         </PopoverButton>
       )}
     </TerminalPopover>
+    {capture && sessionId && <NotesDialog label="Add to notes" onDismiss={() => setCapture(undefined)}>
+      <button type="button" className="self-end px-4 py-2" onClick={() => setCapture(undefined)}>Close</button>
+      <div className="min-h-0 flex-1"><Suspense fallback={<p>Loading notes…</p>}><NotesPanel paneId={sessionId} capture={capture} viewId="capture" /></Suspense></div>
+    </NotesDialog>}
     {errorToast && createPortal(
       <div className="fixed inset-0 z-[10002] pointer-events-none">
         <InterceptorToast

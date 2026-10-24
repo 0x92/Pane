@@ -2,21 +2,28 @@
 import './versionQuery';
 // Load ReadableStream polyfill before any other imports
 import './polyfills/readablestream';
+import { agentChatManager } from './services/agentChat/agentChatManager';
+import { acknowledgeUpdateQuiescence } from './services/updateShutdown';
 
 import { hasHeadlessDaemonLaunchArg, hasRemoteSetupLaunchArg } from './utils/runtimeMode';
 import { getAppDirectory } from './utils/appDirectory';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { boundary, decodeBoundary } from '../../shared/validation/boundaryDecoder';
+import type { PaneCommandValue } from './daemon/commandRegistry';
 import type { PaneEventArgument } from './core/eventSink';
-import { customCommandResumeSchema } from '../../shared/types/customCommandResume';
 
 const launchHeadlessDaemon = hasHeadlessDaemonLaunchArg();
 const launchRemoteSetup = hasRemoteSetupLaunchArg();
 
 // Fix GTK 2/3 and GTK 4 conflict on Linux (Electron 36 issue)
 // This MUST be done before importing electron
-import { app } from 'electron';
+import { app, protocol } from 'electron';
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'pane-media',
+  privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true },
+}]);
 
 if (process.platform === 'darwin') {
   // Work around unrecoverable Skia Graphite rendering glitches on macOS.
@@ -67,7 +74,6 @@ import { autoUpdater as nativeAutoUpdater, BrowserWindow, ipcMain, screen, shell
 import * as path from 'path';
 import * as os from 'os';
 import type { SessionManager } from './services/sessionManager';
-import { isCliAgentType, resolveAgentTypeFromCommand } from './services/agents/agentIdentity';
 import type { ConfigManager } from './services/configManager';
 import { areKeyboardShortcutsEnabled, shouldForwardCommandPaletteShortcut } from './utils/keyboardShortcuts';
 import {
@@ -104,9 +110,11 @@ import type { CliManagerFactory } from './services/cliManagerFactory';
 import { setupConsoleWrapper } from './utils/consoleWrapper';
 import * as fs from 'fs';
 import { terminalPanelManager } from './services/terminalPanelManager';
+import { markTerminalPanelsInterrupted } from './services/terminalShutdown';
 import { panelManager } from './services/panelManager';
 import { worktreePoolManager } from './services/worktreePoolManager';
 import { usageManager } from './services/usage/usageManager';
+import { SharedCredentialSync } from './services/sharedCredentialSync';
 import { LeaderboardService } from './services/leaderboardService';
 import { registerLeaderboardHandlers } from './ipc/leaderboard';
 import { PtyHostSupervisor } from './ptyHost/ptyHostSupervisor';
@@ -119,6 +127,8 @@ import { startHeadlessPaneProcess } from './daemon/startHeadless';
 import { runRemoteSetupCli } from './daemon/setupRemoteHostCli';
 import { PowerSaveManager } from './services/powerSaveManager';
 import { warmShellPath } from './utils/shellPath';
+import { routeWebviewPopups } from './services/webviewPopups';
+import { hardenWebviewPreferences } from './services/webviewPreferences';
 import { APP_MENU_ACTION_CHANNEL, attachEditContextMenu, installApplicationMenu, type AppMenuAction } from './services/nativeMenus';
 import { fitBoundsToWorkAreas, parseSavedWindowState, trackWindowState, WINDOW_STATE_KEY } from './utils/windowState';
 
@@ -228,6 +238,7 @@ function setAppTitle() {
 }
 // Service instances (configManager exported for shell preference access)
 export let configManager: ConfigManager;
+let sharedCredentialSync: SharedCredentialSync | null = null;
 let logger: Logger;
 export let sessionManager: SessionManager;
 let worktreeManager: WorktreeManager;
@@ -239,6 +250,11 @@ let versionChecker: VersionChecker;
 let archiveProgressManager: ArchiveProgressManager;
 let leaderboardService: LeaderboardService;
 let analyticsManager: AnalyticsManager;
+// Observing preserves Node/Electron's existing fatal exception behavior.
+// Fatal unhandled rejections also reach this monitor under Node's default mode.
+process.on('uncaughtExceptionMonitor', (error) => {
+  analyticsManager?.captureException(error, 'main-uncaught');
+});
 let paneDaemonHost: PaneDaemonHost | null = null;
 let pendingPaneLink: string | undefined;
 let paneLinksReady = false;
@@ -554,12 +570,9 @@ async function createWindow() {
     }
   });
 
-  // Security hook: strip preload and enforce sandbox on any webview tags
+  // Security and opacity hook for every webview tag, including the docs dialog
   mainWindow.webContents.on('will-attach-webview', (_event, webPreferences, _params) => {
-    delete webPreferences.preload;
-    webPreferences.nodeIntegration = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
+    hardenWebviewPreferences(webPreferences);
   });
 
   // Set up popup interception on webviews IMMEDIATELY when they attach (before any page loads).
@@ -567,54 +580,10 @@ async function createWindow() {
   // The context map (panelId/sessionId) is populated later by the browser-panel:register-webview IPC.
   mainWindow.webContents.on('did-attach-webview', (_event, wvContents: WebContents) => {
     attachEditContextMenu(wvContents);
-    wvContents.setWindowOpenHandler(({ url, disposition }) => {
-      // Auth popups (Firebase signInWithPopup, OAuth providers, etc.) use window.open()
-      // with explicit features (width, height, toolbar=no), which Chromium reports as
-      // disposition 'new-window'. Let these open as real BrowserWindows so the
-      // postMessage channel between popup and opener remains intact.
-      if (disposition === 'new-window') {
-        if (!webviewContextMap.has(wvContents.id)) {
-          console.warn('[BrowserPanel] Auth popup allowed for unregistered webview (pre-dom-ready), wcId:', wvContents.id);
-        }
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            autoHideMenuBar: true,
-            webPreferences: {
-              contextIsolation: true,
-              sandbox: true,
-            },
-          },
-        };
-      }
-
-      // Regular navigations (target="_blank" links, etc.) → open as new browser panel tab
-      const ctx = webviewContextMap.get(wvContents.id);
-      if (ctx) {
-        mainWindow?.webContents.send('browser-panel:popup-requested', {
-          url,
-          sourceSessionId: ctx.sessionId,
-          sourcePanelId: ctx.panelId,
-        });
-      } else {
-        // Context not yet registered (popup fired before dom-ready).
-        // Fall back to opening in the system browser so the popup isn't silently lost.
-        shell.openExternal(url);
-      }
-      return { action: 'deny' };
-    });
-
-    // Track and manage auth popup windows created by { action: 'allow' }.
-    // Clean up when the parent webview is destroyed so popups don't orphan.
-    wvContents.on('did-create-window', (popupWindow) => {
-      // If the parent webview is destroyed (e.g., panel closed), close the popup too.
-      // This is a one-shot listener; safe even if the popup closes first because
-      // popupWindow.isDestroyed() is checked before calling close().
-      wvContents.once('destroyed', () => {
-        if (!popupWindow.isDestroyed()) {
-          popupWindow.close();
-        }
-      });
+    routeWebviewPopups(wvContents, {
+      contextOf: id => webviewContextMap.get(id),
+      openBrowserTab: request => mainWindow?.webContents.send('browser-panel:popup-requested', request),
+      openExternal: url => void shell.openExternal(url),
     });
 
     wvContents.setBackgroundThrottling(true);
@@ -1071,6 +1040,9 @@ async function createWindow() {
   // Handle renderer process crashes with recovery
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[RendererLifecycle] render-process-gone:', details.reason, details);
+    if (details.reason === 'crashed' || details.reason === 'oom') {
+      analyticsManager?.captureException(undefined, details.reason === 'oom' ? 'renderer-oom' : 'renderer-crash');
+    }
     if (details.reason === 'crashed' || details.reason === 'oom' || details.reason === 'killed') {
       // Attempt to reload the renderer
       console.log('[Main] Attempting to recover renderer...');
@@ -1165,7 +1137,7 @@ async function initializeServices() {
   logger = services.logger;
   archiveProgressManager = services.archiveProgressManager;
   analyticsManager = services.analyticsManager;
-  powerSaveManager = new PowerSaveManager(configManager, sessionManager);
+  powerSaveManager = new PowerSaveManager(configManager, sessionManager, terminalPanelManager, { logger });
   powerSaveManager.sync();
 
   leaderboardService = new LeaderboardService(configManager);
@@ -1257,6 +1229,14 @@ async function initializeServices() {
 
   ipcMain.handle('diagnostics:renderer-fatal', (_event, payload: RendererDiagnosticPayload) => {
     logger.error(`[RendererFatal] ${formatRendererDiagnostic(payload || {})}`);
+    const error = new Error();
+    error.stack = payload?.stack;
+    // The first line is used only to classify built-in types, never transmitted.
+    const name = error.stack?.split(':', 1)[0];
+    if (name) error.name = name;
+    const source = payload?.kind === 'error-boundary' ? 'react-boundary'
+      : payload?.kind === 'unhandledrejection' ? 'renderer-rejection' : 'renderer-error';
+    analyticsManager.captureException(error, source);
     return { success: true };
   });
 }
@@ -1308,7 +1288,7 @@ if (launchRemoteSetup) {
       app.exit(0);
       return;
     }
-    if (app.isPackaged && !app.isDefaultProtocolClient(PANE_LINK_SCHEME)) {
+    if (process.env.PANE_DISABLE_OS_INTEGRATION !== '1' && app.isPackaged && !app.isDefaultProtocolClient(PANE_LINK_SCHEME)) {
       app.setAsDefaultProtocolClient(PANE_LINK_SCHEME);
     }
 
@@ -1317,8 +1297,8 @@ if (launchRemoteSetup) {
     // after the window opens reads the cache instead of blocking on the shell.
     void warmShellPath();
     await initializeServices();
-    syncAutoStartOnBoot(app, configManager.getConfig().autoStartOnBoot !== false);
-    setTimeout(() => syncPaneMcpForApp({
+    if (process.env.PANE_DISABLE_OS_INTEGRATION !== '1') syncAutoStartOnBoot(app, configManager.getConfig().autoStartOnBoot !== false);
+    if (process.env.PANE_DISABLE_OS_INTEGRATION !== '1') setTimeout(() => syncPaneMcpForApp({
       isPackaged: app.isPackaged,
       config: configManager.getConfig(),
       getProjects: () => databaseService.getAllProjects(),
@@ -1328,6 +1308,12 @@ if (launchRemoteSetup) {
   // Register before any renderer loads. useNotifications pulls this on mount
   // and will race a late registration inside createWindow/loadURL.
   ipcMain.handle('window:is-focused', () => mainWindow?.isFocused() ?? true);
+  // A clicked desktop notification opens its tab the way an OS pane:// link does.
+  // The window comes forward even when the tab has since been closed.
+  ipcMain.handle('window:open-pane-link', (_event, link: PaneCommandValue) => {
+    showMainWindow();
+    openPaneLink(decodeBoundary(link, boundary.string));
+  });
 
   // Start the ptyHost supervisor before the window opens so the renderer's
   // preload listener for 'ptyHost-port' has a port to receive when the window
@@ -1336,7 +1322,7 @@ if (launchRemoteSetup) {
   // legacy in-main `pty.spawn` path with zero ptyHost code executing.
   if (configManager.getUsePtyHost()) {
     try {
-      ptyHostSupervisor = new PtyHostSupervisor();
+      ptyHostSupervisor = new PtyHostSupervisor((ptyId, data) => terminalPanelManager.authorizePtyHostInput(ptyId, data));
       await ptyHostSupervisor.start();
 
       ptyHostSupervisor.on('renderer-ack', (ptyId: string, bytes: number) => {
@@ -1472,10 +1458,8 @@ if (launchRemoteSetup) {
       if (activeProject?.path) {
         const ctx = sessionManager.getProjectContextByProjectId(activeProject.id);
         if (ctx) {
-          const mainBranch = await worktreeManager.getProjectMainBranch(activeProject.path, ctx.commandRunner).catch(() => 'HEAD');
-          worktreePoolManager.createReserve(
+          worktreeManager.seedReserve(
             activeProject.path,
-            mainBranch,
             activeProject.worktree_folder ?? undefined,
             ctx.pathResolver,
             ctx.commandRunner
@@ -1486,6 +1470,10 @@ if (launchRemoteSetup) {
       console.warn('[WorktreePool] Initialization failed:', error);
     }
   }, 5000); // Delay to not slow down app startup
+
+  // Share integration keys with the hosts this desktop has paired with.
+  sharedCredentialSync = new SharedCredentialSync(configManager);
+  sharedCredentialSync.start();
 
   // Index agent CLI transcripts for the usage page. Read-only, and deferred so
   // a first pass over a large ~/.claude never delays window creation.
@@ -1528,6 +1516,7 @@ if (launchRemoteSetup) {
   logToFile('before-quit fired');
 
   usageManager.stop();
+  void sharedCredentialSync?.stop();
 
   // Guard against multiple shutdown attempts
   if (shutdownInProgress) {
@@ -1602,6 +1591,8 @@ if (launchRemoteSetup) {
     // named locks; resumed agents still hold them after the restart.
     paneDaemonHost?.services.namedLockService?.suspendAutoRelease();
 
+    await agentChatManager.stopAll();
+
     // Phase 1: Send Ctrl+C to all terminals to gracefully exit Claude instances
     // Claude needs to exit cleanly so it releases the session ID lock, allowing
     // us to resume with --resume <panelId> on next launch.
@@ -1626,34 +1617,18 @@ if (launchRemoteSetup) {
     console.log('[Main] Saving terminal states...');
     await terminalPanelManager.saveAllTerminalStates();
 
-    const interruptedPanels = new Map<string, string[]>(); // sessionId → panelIds
-
-    // Find all terminal panels running supported CLI agents and mark them as interrupted
+    // Find all terminal panels running supported CLI agents and mark them as interrupted.
+    // Each panel is decoded independently so malformed legacy state cannot abort cleanup.
     const allTerminalPanelIds = terminalPanelManager.getAllPanelIds();
-    for (const panelId of allTerminalPanelIds) {
-      const panel = panelManager.getPanel(panelId);
-      if (!panel) continue;
-
-      const customState = decodeBoundary(panel.state?.customState ?? {}, boundary.jsonObject);
-      const resumeState = decodeBoundary(customState, boundary.object({
-        agentType: boundary.optional(boundary.enumeration('claude', 'codex', 'cursor')),
-        initialCommand: boundary.optional(boundary.string),
-        customResume: boundary.optional(boundary.nullable(customCommandResumeSchema)),
-      }));
-      const agentType = resumeState.agentType ?? resolveAgentTypeFromCommand(resumeState.initialCommand);
-
-      if (isCliAgentType(agentType) || resumeState.customResume) {
-        panel.state.customState = { ...customState, wasInterrupted: true, agentType };
-        await panelManager.updatePanel(panelId, { state: panel.state });
-
-        const existing = interruptedPanels.get(panel.sessionId);
-        if (existing) {
-          existing.push(panelId);
-        } else {
-          interruptedPanels.set(panel.sessionId, [panelId]);
-        }
+    const interruptedPanels = await markTerminalPanelsInterrupted(
+      allTerminalPanelIds,
+      panelId => panelManager.getPanel(panelId),
+      (panelId, updates) => panelManager.updatePanel(panelId, updates),
+    );
+    for (const panelIds of interruptedPanels.values()) {
+      for (const panelId of panelIds) {
         logToFile(`Marked terminal panel ${panelId} as interrupted`);
-        console.log(`[Main] Marked terminal panel ${panelId} as interrupted (${agentType} CLI)`);
+        console.log(`[Main] Marked terminal panel ${panelId} as interrupted`);
       }
     }
 
@@ -1685,6 +1660,8 @@ if (launchRemoteSetup) {
       paneDaemonHost = null;
       console.log('[Main] Daemon host services stopped');
     }
+
+    acknowledgeUpdateQuiescence();
 
     // Track app closed event with session duration.
     // Send directly via HTTP instead of IPC — the renderer may already be
@@ -1734,6 +1711,7 @@ if (launchRemoteSetup) {
   } catch (error) {
     logToFile(`ERROR during shutdown: ${error}`);
     console.error('[Main] Error during graceful shutdown:', error);
+    analyticsManager?.captureException(error, 'shutdown');
   } finally {
     clearTimeout(shutdownSafetyTimeout);
 

@@ -49,4 +49,10 @@ export interface PanelAgentStatusEvent {
   state: AgentState;
   /** Winning rule id or a short reason string, for debugging. */
   reason: string | null;
+  /** The CLI agent in the panel; absent for a plain shell. */
+  agentType?: string;
+  /** On idle: the agent showed its own working signal (spinner, working chrome) since its last idle. */
+  workedVisibly?: boolean;
+  /** On blocked: the screen lines of the prompt the agent waits on. */
+  screenLines?: string[];
 }

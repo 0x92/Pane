@@ -33,6 +33,7 @@ import {
   subsetInsertIndex,
   mergeAllGroups,
   placePanelInSplit,
+  showPanelInSplit,
 } from './panelLayout';
 
 // ---------------------------------------------------------------------------
@@ -413,12 +414,49 @@ describe('placePanelInSplit', () => {
   });
 });
 
+describe('showPanelInSplit', () => {
+  it('moves a reopened page out of the conversation group into a new side group', () => {
+    const root = showPanelInSplit(group('g1', ['agent', 'notes'], 'agent'), 'notes');
+    expect(allGroups(root).map(g => [g.panelIds, g.activePanelId])).toEqual([[['agent'], 'agent'], [['notes'], 'notes']]);
+    expect(requireSplit(root).direction).toBe('row');
+  });
+
+  it('moves it into the existing side group as the shown tab', () => {
+    const root = showPanelInSplit(split('s1', 'row', [group('g1', ['agent', 'notes']), group('g2', ['plan'])]), 'notes');
+    expect(allGroups(root).map(g => [g.id, g.panelIds, g.activePanelId])).toEqual([
+      ['g1', ['agent'], 'agent'],
+      ['g2', ['plan', 'notes'], 'notes'],
+    ]);
+  });
+
+  it('leaves a page already in a side group where it is', () => {
+    const root = split('s1', 'row', [group('g1', ['agent']), group('g2', ['plan', 'notes'], 'plan')]);
+    expect(showPanelInSplit(root, 'notes')).toBe(root);
+  });
+
+  it('leaves the only tab of the conversation group in place rather than emptying it', () => {
+    const root = split('s1', 'row', [group('g1', ['notes']), group('g2', ['plan'])]);
+    expect(showPanelInSplit(root, 'notes')).toBe(root);
+  });
+
+  it('places a page missing from the layout beside the conversation', () => {
+    const root = showPanelInSplit(group('g1', ['agent']), 'page');
+    expect(allGroups(root).map(g => g.panelIds)).toEqual([['agent'], ['page']]);
+  });
+});
+
 describe('reconcile', () => {
   it('opens orphans marked for split beside the primary group', () => {
     const { layout: result, changed } = reconcile(layoutOf(group('g1', ['agent'])), ['agent', 'tab', 'page'], new Set(['page']));
     expect(changed).toBe(true);
     const groups = allGroups(result.root);
     expect(groups.map(g => g.panelIds)).toEqual([['agent', 'tab'], ['page']]);
+  });
+
+  it('adds a page opened elsewhere to the side group without replacing its tab', () => {
+    const layout = layoutOf(split('s1', 'row', [group('g1', ['agent']), group('g2', ['v'], 'v')]));
+    const { layout: result } = reconcile(layout, ['agent', 'v', 'page'], new Set(['page']));
+    expect(allGroups(result.root).map(g => [g.panelIds, g.activePanelId])).toEqual([[['agent'], 'agent'], [['v', 'page'], 'v']]);
   });
 
   it('rebuilds an empty layout with agent-opened pages beside the conversation', () => {
@@ -429,6 +467,17 @@ describe('reconcile', () => {
   it('uses the first page as the primary group when only split panels remain', () => {
     const { layout: result } = reconcile(createSingleGroupLayout([], null), ['plan', 'report'], new Set(['plan', 'report']));
     expect(allGroups(result.root).map(g => g.panelIds)).toEqual([['plan'], ['report']]);
+  });
+
+  it('places never-placed agent pages in a remembered layout without moving placed tabs or focus', () => {
+    // The person dragged 'old' (an agent page) into the conversation group and focused the side group.
+    const remembered = layoutOf(split('s1', 'row', [group('g1', ['agent', 'old'], 'agent'), group('g2', ['v'], 'v')]), { focusedGroupId: 'g2' });
+    const { layout: result } = reconcile(remembered, ['agent', 'old', 'v', 'page'], new Set(['old', 'page']));
+    expect(allGroups(result.root).map(g => [g.id, g.panelIds, g.activePanelId])).toEqual([
+      ['g1', ['agent', 'old'], 'agent'],
+      ['g2', ['v', 'page'], 'v'],
+    ]);
+    expect(result.focusedGroupId).toBe('g2');
   });
 
   it('reports no change for a layout matching the live panels', () => {

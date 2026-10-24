@@ -9,6 +9,7 @@ import { registerConfigHandlers } from './config';
 import { registerGitHandlers } from './git';
 import { registerPanelHandlers } from './panels';
 import { registerPaneChatHandlers } from './paneChat';
+import { registerSshHostHandlers } from './sshHosts';
 import { registerOrchestrationSessionHandlers } from './orchestrationSessions';
 import { registerPermissionHandlers } from './permissions';
 import { registerProjectHandlers } from './project';
@@ -17,6 +18,8 @@ import { registerScriptHandlers } from './script';
 import { registerSessionHandlers } from './session';
 import { registerVoiceHandlers } from './voice';
 import { registerScheduleHandlers } from './schedule';
+import { registerUsageHandlers } from './usage';
+import { registerMissionControlHandlers } from './missionControl';
 import type { AppServices } from './types';
 import { isDaemonOwnedChannel } from '../../../shared/types/daemon';
 
@@ -32,6 +35,11 @@ const SCHEDULE_CHANNELS = [
   'schedules:set-enabled',
   'schedules:run-now',
 ] as const;
+const MISSION_CONTROL_CHANNELS = [
+  'mission-control:list-agents',
+  'mission-control:snapshots',
+] as const;
+
 const PROJECT_CHANNELS = [
   'projects:get-all',
   'projects:get-active',
@@ -52,6 +60,7 @@ const PROJECT_CHANNELS = [
 
 const CONFIG_CHANNELS = [
   'remote:pwa-affordances',
+  'remote:settings:update',
   'terminal:get-shell-settings',
   'terminal:set-preferred-shell',
 ] as const;
@@ -80,6 +89,7 @@ const ORCHESTRATION_SESSION_CHANNELS = [
   'orchestration-sessions:create',
   'orchestration-sessions:get',
   'orchestration-sessions:update',
+  'orchestration-sessions:reorder',
   'orchestration-sessions:set-agent',
   'orchestration-sessions:associate',
   'orchestration-sessions:detach',
@@ -99,6 +109,8 @@ const FILE_CHANNELS = [
   'file:write-binary',
   'file:getPath',
   'git:commit',
+  'git:identity',
+  'git:set-identity',
   'git:revert',
   'git:restore',
   'file:readAtRevision',
@@ -117,6 +129,7 @@ const FILE_CHANNELS = [
 
 const PANEL_CHANNELS = [
   'panels:read-browser-file',
+  'panels:open-html-file',
   'panels:create',
   'panels:delete',
   'panels:update',
@@ -133,6 +146,7 @@ const PANEL_CHANNELS = [
   'panels:get-layout',
   'panels:set-layout',
   'terminal:input',
+  'terminal:reply',
   'terminal:resize',
   'terminal:getState',
   'terminal:saveState',
@@ -146,6 +160,10 @@ const PANEL_CHANNELS = [
   'terminal:paste-image',
   'terminal:save-scrollback',
   'terminal:paste-file',
+  'terminal:upload-start',
+  'terminal:upload-chunk',
+  'terminal:upload-commit',
+  'terminal:upload-cancel',
 ] as const;
 
 const SCRIPT_CHANNELS = [
@@ -193,6 +211,7 @@ const SESSION_CHANNELS = [
   'sessions:resume-interrupted',
   'sessions:dismiss-interrupted',
   'archive:get-progress',
+  'archive:retry-cleanup',
   'panels:get-output',
   'panels:get-conversation-messages',
   'panels:get-json-messages',
@@ -362,6 +381,7 @@ describe('daemon registry IPC bindings', () => {
       },
       // Cursor depends on the host platform, so only the agents every host runs are pinned.
       sessionAgents: { agents: expect.arrayContaining(['claude', 'codex']), defaultAgent: 'codex' },
+      chatEnabled: false,
     });
   });
 
@@ -399,6 +419,16 @@ describe('daemon registry IPC bindings', () => {
     expect(registry.listChannels()).toEqual([...SCHEDULE_CHANNELS].sort());
     expect(ipcMain.boundChannels.sort()).toEqual([...SCHEDULE_CHANNELS].sort());
   });
+  it('binds daemon-owned missionControl channels through the shared registry', () => {
+    const registry = new PaneCommandRegistry();
+    const ipcMain = createIpcMainStub();
+
+    registerMissionControlHandlers(ipcMain, createServicesStub(), registry);
+
+    expect(registry.listChannels()).toEqual([...MISSION_CONTROL_CHANNELS].sort());
+    expect(ipcMain.boundChannels.sort()).toEqual([...MISSION_CONTROL_CHANNELS].sort());
+  });
+
   it('binds daemon-owned prompt channels through the shared registry', () => {
     const registry = new PaneCommandRegistry();
     const ipcMain = createIpcMainStub();
@@ -417,6 +447,18 @@ describe('daemon registry IPC bindings', () => {
 
     expect(registry.listChannels()).toEqual([...PANE_CHAT_CHANNELS].sort());
     expect(ipcMain.boundChannels.sort()).toEqual([...PANE_CHAT_CHANNELS].sort());
+  });
+
+  it('binds SSH host channels as daemon-owned, so a remote Pane lists and opens its own hosts', () => {
+    const channels = ['ssh-hosts:list', 'ssh-hosts:open'];
+    const registry = new PaneCommandRegistry();
+    const ipcMain = createIpcMainStub();
+
+    registerSshHostHandlers(ipcMain, createServicesStub(), registry);
+
+    expect(channels.every(isDaemonOwnedChannel)).toBe(true);
+    expect(registry.listChannels()).toEqual(channels);
+    expect(ipcMain.boundChannels.sort()).toEqual(channels);
   });
 
   it('binds daemon-owned orchestration Session channels through the shared registry', () => {
@@ -496,10 +538,21 @@ describe('daemon registry IPC bindings', () => {
     expect(
       ipcMain.boundChannels.filter(
         channel => channel !== 'terminal:clipboard-paste-image' && channel !== 'browser-panel:register-webview'
-          && channel !== 'browser-panel:prepare-file',
+          && channel !== 'browser-panel:prepare-file' && channel !== 'browser-data:clear',
       ).sort(),
     ).toEqual([...PANEL_CHANNELS].sort());
     expect(registry.has('terminal:clipboard-paste-image')).toBe(false);
+  });
+
+  it('clears browser data on the machine showing the browser, never on a remote host', () => {
+    const registry = new PaneCommandRegistry();
+    const ipcMain = createIpcMainStub();
+
+    registerPanelHandlers(ipcMain, createServicesStub(), registry);
+
+    expect(ipcMain.boundChannels).toContain('browser-data:clear');
+    expect(registry.has('browser-data:clear')).toBe(false);
+    expect(isDaemonOwnedChannel('browser-data:clear')).toBe(false);
   });
 
   it('keeps local IDE launching outside the daemon registry surface', () => {

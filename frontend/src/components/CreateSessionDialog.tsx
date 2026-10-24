@@ -3,13 +3,15 @@ import { API } from '../utils/api';
 import type { CreateSessionRequest } from '../types/session';
 import type { Project } from '../types/project';
 import { useErrorStore } from '../stores/errorStore';
-import { GitBranch, ChevronRight, ChevronDown, X, Search, Check, GitFork, Pin } from 'lucide-react';
+import { GitBranch, ChevronRight, ChevronDown, X, Search, Check, GitFork, MessageSquare, Pin } from 'lucide-react';
 import { Toggle } from './ui/Toggle';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from './ui/Modal';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { useSessionPreferencesStore, type SessionCreationPreferences } from '../stores/sessionPreferencesStore';
 import { useSessionStore } from '../stores/sessionStore';
+import { useNavigationStore } from '../stores/navigationStore';
+import { useOrchestrationSessionStore } from '../stores/orchestrationSessionStore';
 import { areKeyboardShortcutsEnabled, useConfigStore } from '../stores/configStore';
 import { generatePaneName, sanitizePaneName } from '../utils/paneName';
 
@@ -22,6 +24,10 @@ interface BranchInfo {
 }
 
 interface CreateSessionDialogProps {
+  onSubmittingChange?: (submitting: boolean) => void;
+  header?: React.ReactNode;
+  repositoryPicker?: React.ReactNode;
+  onBranchDropdownOpenChange?: (open: boolean) => void;
   isOpen: boolean;
   onClose: () => void;
   projectName?: string;
@@ -33,7 +39,18 @@ interface CreateSessionDialogProps {
   onSessionCreated?: () => void;
 }
 
-export function CreateSessionDialog({
+export function CreateSessionDialog(props: CreateSessionDialogProps) {
+  const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
+  return <Modal isOpen={props.isOpen} onClose={props.onClose} size="lg" closeOnOverlayClick={false} closeOnEscape={!branchDropdownOpen}>
+    <CreatePaneForm {...props} onBranchDropdownOpenChange={setBranchDropdownOpen} />
+  </Modal>;
+}
+
+export function CreatePaneForm({
+  onSubmittingChange,
+  header,
+  repositoryPicker,
+  onBranchDropdownOpenChange,
   isOpen,
   onClose,
   projectName,
@@ -61,13 +78,21 @@ export function CreateSessionDialog({
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [useWorktree, setUseWorktree] = useState(true);
   const [startPinned, setStartPinned] = useState(false);
+  const [addToSession, setAddToSession] = useState(true);
+  const openSession = useOrchestrationSessionStore(state => state.sessions.find(session => session.id === state.selectedSessionId && session.archived !== true));
+  const sessionViewShowing = useNavigationStore(state => state.activeView === 'pane-chat');
+  const targetSession = sessionViewShowing ? openSession : undefined;
+  // A Pane that joins a Session is listed under it, so it cannot start pinned.
+  const joiningSession = addToSession && targetSession !== undefined;
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showSessionOptions, setShowSessionOptions] = useState(false);
   const [branchSearch, setBranchSearch] = useState('');
   const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false);
   const [highlightedBranchIndex, setHighlightedBranchIndex] = useState(0);
-  const [userEditedName, setUserEditedName] = useState(false);
-  const userEditedNameRef = useRef(false);
+  const setBranchDropdownOpen = useCallback((open: boolean) => {
+    setIsBranchDropdownOpen(open);
+    onBranchDropdownOpenChange?.(open);
+  }, [onBranchDropdownOpenChange]);
   const branchDropdownRef = useRef<HTMLDivElement>(null);
   const branchInputRef = useRef<HTMLInputElement>(null);
   const branchListRef = useRef<HTMLDivElement>(null);
@@ -87,8 +112,7 @@ export function CreateSessionDialog({
         setSessionName(initialSessionName);
       }
       setSessionCount(1);
-      setUserEditedName(!!initialSessionName);
-      userEditedNameRef.current = !!initialSessionName;
+      setAddToSession(true);
       setFormData(prev => ({ ...prev, count: 1, baseBranch: initialBaseBranch }));
     }
   }, [isOpen, loadPreferences, initialSessionName, initialBaseBranch]);
@@ -111,8 +135,15 @@ export function CreateSessionDialog({
     if (!isOpen || !projectId) return;
 
     let cancelled = false;
+    // Only branch-derived fields belong to this repository. Keep the user's
+    // worktree/count/pinning choices and any name they have typed.
+    setBranches([]);
     setBranchesProjectId(null);
     setIsLoadingBranches(true);
+    setFormData(current => ({ ...current, baseBranch: initialBaseBranch }));
+    setBranchDropdownOpen(false);
+    setBranchSearch('');
+    setHighlightedBranchIndex(0);
     // First get the project to get its path
     API.projects.getAll().then(projectsResponse => {
       if (!projectsResponse.success || !projectsResponse.data) {
@@ -147,7 +178,7 @@ export function CreateSessionDialog({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, projectId]);
+  }, [isOpen, projectId, initialBaseBranch, setBranchDropdownOpen]);
 
   useEffect(() => {
     if (!isOpen || branchesProjectId !== projectId || formData.baseBranch || branches.length === 0) return;
@@ -160,11 +191,7 @@ export function CreateSessionDialog({
     if (!defaultBranch) return;
 
     setFormData((current) => ({ ...current, baseBranch: defaultBranch.name }));
-    if (!initialSessionName && !userEditedNameRef.current) {
-      const existingNames = new Set(existingSessions.map((session) => session.name));
-      setSessionName(generatePaneName(defaultBranch.name, existingNames, branches));
-    }
-  }, [branches, branchesProjectId, existingSessions, formData.baseBranch, initialSessionName, isOpen, projectId]);
+  }, [branches, branchesProjectId, formData.baseBranch, isOpen, projectId]);
 
   // Filtered branches based on search term
   const filteredBranches = useMemo(() => {
@@ -186,22 +213,22 @@ export function CreateSessionDialog({
     const handleClickOutside = (e: MouseEvent) => {
       // SAFETY: The registered DOM/custom-event source establishes this target and detail shape.
       if (branchDropdownRef.current && !branchDropdownRef.current.contains(e.target as Node)) {
-        setIsBranchDropdownOpen(false);
+        setBranchDropdownOpen(false);
         setBranchSearch('');
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isBranchDropdownOpen]);
+  }, [isBranchDropdownOpen, setBranchDropdownOpen]);
 
   // Reset branch search state when dialog closes
   useEffect(() => {
     if (!isOpen) {
-      setIsBranchDropdownOpen(false);
+      setBranchDropdownOpen(false);
       setBranchSearch('');
       setHighlightedBranchIndex(0);
     }
-  }, [isOpen]);
+  }, [isOpen, setBranchDropdownOpen]);
 
   // Scroll highlighted item into view
   useEffect(() => {
@@ -213,30 +240,27 @@ export function CreateSessionDialog({
     }
   }, [highlightedBranchIndex, isBranchDropdownOpen]);
 
-  const generateSessionName = useCallback((branchName: string): string => {
-    return generatePaneName(branchName, new Set(existingSessions.map(s => s.name)), branches);
-  }, [branches, existingSessions]);
+  // Shown as the name placeholder and used when the name field is left empty.
+  const suggestedName = useMemo(() => (
+    formData.baseBranch
+      ? generatePaneName(formData.baseBranch, new Set(existingSessions.map(s => s.name)), branches)
+      : ''
+  ), [branches, existingSessions, formData.baseBranch]);
+  const nameToSubmit = sessionName.trim() || suggestedName;
 
   const selectBranch = useCallback((branchName: string) => {
     setFormData(prev => ({ ...prev, baseBranch: branchName }));
     savePreferences({ baseBranch: branchName });
-    setIsBranchDropdownOpen(false);
+    setBranchDropdownOpen(false);
     setBranchSearch('');
     setHighlightedBranchIndex(0);
-
-    // Auto-populate session name if user hasn't manually edited it
-    if (!userEditedName) {
-      const autoName = generateSessionName(branchName);
-      setSessionName(autoName);
-      setFormData(prev => ({ ...prev, baseBranch: branchName, worktreeTemplate: autoName }));
-    }
-  }, [savePreferences, userEditedName, generateSessionName]);
+  }, [savePreferences, setBranchDropdownOpen]);
 
   const handleBranchKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!isBranchDropdownOpen) {
       if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        setIsBranchDropdownOpen(true);
+        setBranchDropdownOpen(true);
         return;
       }
       return;
@@ -262,12 +286,12 @@ export function CreateSessionDialog({
       case 'Escape':
         e.preventDefault();
         e.stopPropagation();
-        setIsBranchDropdownOpen(false);
+        setBranchDropdownOpen(false);
         setBranchSearch('');
         setHighlightedBranchIndex(0);
         break;
     }
-  }, [isBranchDropdownOpen, flatFilteredBranches, highlightedBranchIndex, selectBranch]);
+  }, [isBranchDropdownOpen, flatFilteredBranches, highlightedBranchIndex, selectBranch, setBranchDropdownOpen]);
 
   // Add keyboard shortcut handler
   useEffect(() => {
@@ -308,10 +332,9 @@ export function CreateSessionDialog({
     e.preventDefault();
 
     // Block submission while branches are still loading
-    if (isLoadingBranches) return;
+    if (isSubmitting || isLoadingBranches) return;
 
-    // Session name is always required
-    if (!sessionName.trim()) {
+    if (!nameToSubmit) {
       showError({
         title: 'Pane Name Required',
         error: 'Please provide a pane name.'
@@ -320,7 +343,7 @@ export function CreateSessionDialog({
     }
 
     // Sanitize the session name before submission
-    const cleanedName = sanitizePaneName(sessionName);
+    const cleanedName = sanitizePaneName(nameToSubmit);
     if (!cleanedName.trim()) {
       showError({
         title: 'Invalid Pane Name',
@@ -330,6 +353,7 @@ export function CreateSessionDialog({
     }
 
     setIsSubmitting(true);
+    onSubmittingChange?.(true);
 
     try {
       // Determine if we need to create a folder
@@ -361,7 +385,8 @@ export function CreateSessionDialog({
         folderId,
         isMainRepo: !useWorktree,
         baseBranch: formData.baseBranch,
-        startPinned
+        startPinned: joiningSession ? undefined : startPinned,
+        associateSessionId: joiningSession ? targetSession.id : undefined
       });
 
       if (!response.success) {
@@ -391,24 +416,18 @@ export function CreateSessionDialog({
       });
     } finally {
       setIsSubmitting(false);
+      onSubmittingChange?.(false);
     }
   };
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={() => {
-          onClose();
-      }}
-      size="lg"
-      closeOnOverlayClick={false}
-      closeOnEscape={!isBranchDropdownOpen}
-    >
-      <ModalHeader title={`New Pane${projectName ? ` in ${projectName}` : ''}`} />
+    <>
+      {header ?? <ModalHeader title={`New Pane${projectName ? ` in ${projectName}` : ''}`} />}
 
       <ModalBody className="p-0">
         <div className="flex-1 overflow-y-auto">
           <form id="create-session-form" onSubmit={handleSubmit}>
+            {repositoryPicker}
             {/* 1. Base Branch (select first, auto-populates session name) */}
             {isLoadingBranches && branches.length === 0 ? (
               <div className="px-6 pt-6 pb-5 border-b border-border-primary animate-pulse">
@@ -452,11 +471,11 @@ export function CreateSessionDialog({
                         setBranchSearch(e.target.value);
                         setHighlightedBranchIndex(0);
                         if (!isBranchDropdownOpen) {
-                          setIsBranchDropdownOpen(true);
+                          setBranchDropdownOpen(true);
                         }
                       }}
                       onFocus={() => {
-                        setIsBranchDropdownOpen(true);
+                        setBranchDropdownOpen(true);
                         setBranchSearch('');
                         setHighlightedBranchIndex(0);
                       }}
@@ -471,7 +490,7 @@ export function CreateSessionDialog({
                       tabIndex={-1}
                       aria-label={isBranchDropdownOpen ? 'Close branch options' : 'Open branch options'}
                       onClick={() => {
-                        setIsBranchDropdownOpen(!isBranchDropdownOpen);
+                        setBranchDropdownOpen(!isBranchDropdownOpen);
                         if (!isBranchDropdownOpen) {
                           setBranchSearch('');
                           setHighlightedBranchIndex(0);
@@ -590,9 +609,9 @@ export function CreateSessionDialog({
               </div>
             ) : null}
 
-            {/* 2. Pane Name (auto-populated from branch, editable) */}
+            {/* 2. Pane Name (empty uses the name suggested from the branch) */}
             <div className="px-6 pt-6 pb-5 border-b border-border-primary">
-              <label className="block text-sm font-medium text-text-primary mb-2">
+              <label htmlFor="worktreeTemplate" className="block text-sm font-medium text-text-primary mb-2">
                 Pane Name
               </label>
               <Input
@@ -603,15 +622,30 @@ export function CreateSessionDialog({
                   const value = sanitizePaneName(e.target.value, { trim: false });
                   setSessionName(value);
                   setFormData({ ...formData, worktreeTemplate: value });
-                  setUserEditedName(true);
-                  userEditedNameRef.current = true;
                 }}
-                placeholder="Enter a name for your pane"
+                placeholder={suggestedName || 'Enter a name for your pane'}
                 className="w-full"
               />
-              <p className="text-xs text-text-tertiary mt-2">
-                Auto-filled from branch. Edit to customize.
-              </p>
+              {suggestedName && (
+                <p className="text-xs text-text-tertiary mt-2">
+                  Leave empty to use {suggestedName}.
+                </p>
+              )}
+              {targetSession && (
+                <div className="mt-3 flex items-center gap-4 rounded-lg border border-border-primary px-5 py-4">
+                  <MessageSquare className="w-4 h-4 text-text-tertiary shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate text-sm font-medium text-text-primary">Add to {targetSession.name}</div>
+                    <div className="text-xs text-text-secondary mt-0.5">List this pane under the Session.</div>
+                  </div>
+                  <Toggle
+                    checked={addToSession}
+                    aria-label={`Add to ${targetSession.name}`}
+                    onChange={setAddToSession}
+                    size="sm"
+                  />
+                </div>
+              )}
             </div>
 
             {/* 3. Advanced Options Toggle */}
@@ -643,10 +677,13 @@ export function CreateSessionDialog({
                     <Pin className="w-4 h-4 text-text-tertiary shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-text-primary">Start pinned</div>
-                      <div className="text-xs text-text-secondary mt-0.5">Show this pane in the pinned section immediately.</div>
+                      <div className="text-xs text-text-secondary mt-0.5">
+                        {joiningSession ? 'Panes in a Session are listed under it.' : 'Show this pane in the pinned section immediately.'}
+                      </div>
                     </div>
                     <Toggle
-                      checked={startPinned}
+                      checked={startPinned && !joiningSession}
+                      disabled={joiningSession}
                       aria-label="Start pinned"
                       onChange={(checked) => {
                         setStartPinned(checked);
@@ -741,36 +778,29 @@ export function CreateSessionDialog({
         </div>
       </ModalBody>
 
-      <ModalFooter className="flex items-center justify-between">
-        <div className="text-xs text-text-tertiary">
-          <span className="font-medium">Tip:</span> Press {navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+Enter to create
-        </div>
-        <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            onClick={() => {
-                      onClose();
-            }}
-            variant="ghost"
-            disabled={isSubmitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            form="create-session-form"
-            disabled={isSubmitting || isLoadingBranches || !sessionName.trim()}
-            loading={isSubmitting}
-            title={
-              isSubmitting ? 'Creating pane...' :
-              !sessionName.trim() ? 'Please enter a pane name' :
-              undefined
-            }
-          >
-            {isSubmitting ? 'Creating...' : <>{`Create${sessionCount > 1 ? ` ${sessionCount} Panes` : ''}`} <span className="opacity-60">↵</span></>}
-          </Button>
-        </div>
+      <ModalFooter>
+        <Button
+          type="button"
+          onClick={onClose}
+          variant="ghost"
+          disabled={isSubmitting}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          form="create-session-form"
+          disabled={isSubmitting || isLoadingBranches || !nameToSubmit}
+          loading={isSubmitting}
+          title={
+            isSubmitting ? 'Creating pane...' :
+            !nameToSubmit ? 'Please enter a pane name' :
+            undefined
+          }
+        >
+          {isSubmitting ? 'Creating...' : <>{`Create${sessionCount > 1 ? ` ${sessionCount} Panes` : ''}`}<span className="ml-1.5 opacity-60">↵</span></>}
+        </Button>
       </ModalFooter>
-    </Modal>
+    </>
   );
 }
