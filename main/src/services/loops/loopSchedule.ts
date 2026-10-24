@@ -1,0 +1,103 @@
+import { Cron } from 'croner';
+import {
+  LOOP_MIN_INTERVAL_MS,
+  LOOP_MISS_GRACE_MS,
+  type LoopSchedulePreview,
+} from '../../../../shared/types/loop';
+
+/**
+ * When a loop runs. Cron in the host's local time zone, read by croner, which
+ * handles daylight saving: a slot in the skipped hour runs at the first valid
+ * time, and a repeated hour runs once.
+ */
+
+/** Enough upcoming runs to catch a pair closer than an hour in any weekly pattern. */
+const MIN_INTERVAL_SAMPLE = 24;
+
+const WEEKDAYS = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+
+function parseCron(cron: string): Cron {
+  return new Cron(cron.trim(), { paused: true, mode: '5-part' });
+}
+
+/** The first run strictly after `afterMs`, or null when the cron never runs again. */
+export function nextLoopRun(cron: string, afterMs: number): number | null {
+  return parseCron(cron).nextRun(new Date(afterMs))?.getTime() ?? null;
+}
+
+/** What a cron means, or why a loop cannot use it. */
+export function previewLoopSchedule(cron: string, nowMs: number): LoopSchedulePreview {
+  let runs: Date[];
+  try {
+    runs = parseCron(cron).nextRuns(MIN_INTERVAL_SAMPLE, new Date(nowMs));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message.replace(/^CronPattern: /, '') : String(error);
+    return { ok: false, error: `"${cron}" is not a five-field cron: ${reason}` };
+  }
+  if (runs.length === 0) return { ok: false, error: `"${cron}" never runs.` };
+
+  for (let index = 1; index < runs.length; index++) {
+    if (runs[index].getTime() - runs[index - 1].getTime() < LOOP_MIN_INTERVAL_MS) {
+      return {
+        ok: false,
+        error: `"${cron}" runs more often than once an hour. Loops need at least 60 minutes between runs; for short waits, use your agent's own sleep and wake.`,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    scheduleText: describeCron(cron),
+    nextRunAtMs: runs[0].getTime(),
+    nextRunsAtMs: runs.slice(0, 3).map(run => run.getTime()),
+  };
+}
+
+/** The preset shapes as sentences; anything else as its cron. */
+function describeCron(cron: string): string {
+  const text = cron.trim().replace(/\s+/g, ' ');
+  const [minute, hour, day, month, weekday] = text.split(' ');
+  const isNumber = (value: string) => /^\d{1,2}$/.test(value);
+  const pad = (value: string) => value.padStart(2, '0');
+
+  if (day === '*' && month === '*' && weekday === '*' && minute === '0') {
+    if (hour === '*') return 'Every hour';
+    const step = /^\*\/(\d{1,2})$/.exec(hour);
+    if (step) return step[1] === '1' ? 'Every hour' : `Every ${step[1]} hours`;
+  }
+
+  if (day === '*' && month === '*' && isNumber(minute) && isNumber(hour)) {
+    const time = `${pad(hour)}:${pad(minute)}`;
+    if (weekday === '*') return `Every day at ${time}`;
+    if (weekday === '1-5') return `Weekdays at ${time}`;
+    if (isNumber(weekday) && Number(weekday) <= 7) return `${WEEKDAYS[Number(weekday) % 7]} at ${time}`;
+  }
+
+  return `Cron ${text}`;
+}
+
+export type LoopDecision =
+  | { kind: 'wait'; atMs: number | null }
+  | { kind: 'run'; slotAtMs: number }
+  | { kind: 'skip'; slotAtMs: number };
+
+/**
+ * What to do about a loop now, counting only slots after `fromMs` (the last
+ * slot it handled, or when its schedule last started counting).
+ *
+ * A slot up to the grace period late runs. Later than that, only the latest
+ * missed slot is recorded as skipped: missed runs are never caught up.
+ */
+export function decideLoop(cron: string, fromMs: number, nowMs: number): LoopDecision {
+  const schedule = parseCron(cron);
+  let latest = schedule.nextRun(new Date(fromMs));
+  if (!latest || latest.getTime() > nowMs) return { kind: 'wait', atMs: latest?.getTime() ?? null };
+
+  // The 60-minute floor bounds this walk to one step per hour away.
+  for (let next = schedule.nextRun(latest); next && next.getTime() <= nowMs; next = schedule.nextRun(next)) {
+    latest = next;
+  }
+
+  const slotAtMs = latest.getTime();
+  return nowMs - slotAtMs <= LOOP_MISS_GRACE_MS ? { kind: 'run', slotAtMs } : { kind: 'skip', slotAtMs };
+}

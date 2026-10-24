@@ -117,28 +117,37 @@ CREATE TABLE IF NOT EXISTS usage_rate_limits (
 -- schedule is three shapes rather than cron syntax, so the UI can state it in
 -- a sentence. NOTE this file is split on the statement separator at startup,
 -- so a comment must never contain one.
-CREATE TABLE IF NOT EXISTS scheduled_runs (
+-- Loops (scheduled tasks): a cron plus the request `runpane panes create` takes.
+-- schedule_from_ms: only slots after this count. Set on create, resume and a
+-- cron change, so none of them replays slots from before.
+CREATE TABLE IF NOT EXISTS loops (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   project_id INTEGER NOT NULL,
-  prompt TEXT NOT NULL,
-  tool_type TEXT NOT NULL DEFAULT 'claude',
+  cron TEXT NOT NULL,
+  agent TEXT,
+  tool_command TEXT,
+  initial_input TEXT,
   worktree_template TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
-  kind TEXT NOT NULL,
-  interval_minutes INTEGER,
-  time_of_day TEXT,
-  weekday INTEGER,
-  last_run_at_ms INTEGER,
-  last_run_status TEXT,
-  last_run_error TEXT,
-  last_session_id TEXT,
-  next_run_at_ms INTEGER,
+  schedule_from_ms INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_scheduled_runs_next ON scheduled_runs(enabled, next_run_at_ms);
+-- One row per run: its Pane, a failure to create it, or a skipped slot.
+CREATE TABLE IF NOT EXISTS loop_runs (
+  id TEXT PRIMARY KEY,
+  loop_id TEXT NOT NULL,
+  slot_at_ms INTEGER NOT NULL,
+  trigger TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT,
+  session_id TEXT,
+  FOREIGN KEY (loop_id) REFERENCES loops(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_loop_runs_loop ON loop_runs(loop_id, slot_at_ms);
 
 -- Index for faster lookups
 CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(timestamp_ms);

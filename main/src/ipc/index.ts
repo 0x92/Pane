@@ -37,7 +37,7 @@ import { registerSshHostHandlers } from './sshHosts';
 import { registerUsageHandlers } from './usage';
 import { registerOrchestrationSessionHandlers } from './orchestrationSessions';
 import { registerExportHandlers } from './export';
-import { registerScheduleHandlers } from './schedule';
+import { registerLoopHandlers } from './loops';
 import { registerMissionControlHandlers } from './missionControl';
 import { createDaemonBridgeRouter, registerDaemonBridgeHandlers } from './daemon';
 import { registerPermissionHandlers } from './permissions';
@@ -136,9 +136,7 @@ export function registerIpcHandlers(services: AppServices): PaneCommandRegistry 
   registerSshHostHandlers(ipcMain, services, commandRegistry);
   registerOrchestrationSessionHandlers(ipcMain, services, commandRegistry);
   registerUsageHandlers(ipcMain, commandRegistry);
-  // Started here rather than in index.ts: the manager only exists once its
-  // handlers are registered, and it needs the task queue they close over.
-  registerScheduleHandlers(ipcMain, services, commandRegistry).start();
+  if (services.loopManager) registerLoopHandlers(ipcMain, services.loopManager, commandRegistry);
   registerMissionControlHandlers(ipcMain, services, commandRegistry);
   registerOnboardingHandlers(ipcMain, services);
   registerDaemonBridgeHandlers(ipcMain, bridgeRouter);

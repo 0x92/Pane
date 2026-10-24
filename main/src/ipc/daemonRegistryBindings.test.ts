@@ -1,4 +1,3 @@
-import { registerUsageHandlers } from './usage';
 import { describe, expect, it, vi } from 'vitest';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
@@ -17,7 +16,8 @@ import { registerPromptHandlers } from './prompt';
 import { registerScriptHandlers } from './script';
 import { registerSessionHandlers } from './session';
 import { registerVoiceHandlers } from './voice';
-import { registerScheduleHandlers } from './schedule';
+import { registerLoopHandlers } from './loops';
+import type { LoopManager } from '../services/loops/loopManager';
 import { registerUsageHandlers } from './usage';
 import { registerMissionControlHandlers } from './missionControl';
 import type { AppServices } from './types';
@@ -28,12 +28,13 @@ const USAGE_CHANNELS = [
   'usage:get-status',
   'usage:rescan',
 ] as const;
-const SCHEDULE_CHANNELS = [
-  'schedules:list',
-  'schedules:save',
-  'schedules:delete',
-  'schedules:set-enabled',
-  'schedules:run-now',
+const LOOP_CHANNELS = [
+  'loops:list',
+  'loops:save',
+  'loops:delete',
+  'loops:set-enabled',
+  'loops:run-now',
+  'loops:preview',
 ] as const;
 const MISSION_CONTROL_CHANNELS = [
   'mission-control:list-agents',
@@ -410,15 +411,17 @@ describe('daemon registry IPC bindings', () => {
     expect(ipcMain.boundChannels.sort()).toEqual([...USAGE_CHANNELS].sort());
   });
 
-  it('binds daemon-owned schedule channels through the shared registry', () => {
+  it('binds daemon-owned loop channels through the shared registry', () => {
     const registry = new PaneCommandRegistry();
     const ipcMain = createIpcMainStub();
 
-    registerScheduleHandlers(ipcMain, createServicesStub(), registry);
+    // SAFETY: Binding never calls the manager.
+    registerLoopHandlers(ipcMain, {} as LoopManager, registry);
 
-    expect(registry.listChannels()).toEqual([...SCHEDULE_CHANNELS].sort());
-    expect(ipcMain.boundChannels.sort()).toEqual([...SCHEDULE_CHANNELS].sort());
+    expect(registry.listChannels()).toEqual([...LOOP_CHANNELS].sort());
+    expect(ipcMain.boundChannels.sort()).toEqual([...LOOP_CHANNELS].sort());
   });
+
   it('binds daemon-owned missionControl channels through the shared registry', () => {
     const registry = new PaneCommandRegistry();
     const ipcMain = createIpcMainStub();
