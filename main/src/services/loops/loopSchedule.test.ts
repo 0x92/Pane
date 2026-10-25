@@ -36,6 +36,17 @@ describe('previewLoopSchedule', () => {
     expect(previewLoopSchedule('0 * * * *', now)).toMatchObject({ ok: true });
   });
 
+  it('accepts an hourly loop across the night the clocks go forward', () => {
+    // March 8 00:30 EST: 01:00 EST is 06:00 UTC, 02:00 does not exist, and 03:00 EDT is 07:00 UTC.
+    const preview = previewLoopSchedule('0 * * * *', utc('2026-03-08T05:30:00Z'));
+    expect(preview).toEqual({
+      ok: true,
+      scheduleText: 'Every hour',
+      nextRunAtMs: utc('2026-03-08T06:00:00Z'),
+      nextRunsAtMs: [utc('2026-03-08T06:00:00Z'), utc('2026-03-08T07:00:00Z'), utc('2026-03-08T07:00:00Z')],
+    });
+  });
+
   it('rejects text that is not a five-field cron', () => {
     const now = utc('2026-10-24T12:00:00Z');
     expect(previewLoopSchedule('nope', now)).toMatchObject({ ok: false });

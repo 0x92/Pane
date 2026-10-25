@@ -20,9 +20,18 @@ function parseCron(cron: string): Cron {
   return new Cron(cron.trim(), { paused: true, mode: '5-part' });
 }
 
+/** A stored cron that no longer parses (say, after a parser upgrade) never runs, rather than stopping every other loop. */
+function parseStoredCron(cron: string): Cron | null {
+  try {
+    return parseCron(cron);
+  } catch {
+    return null;
+  }
+}
+
 /** The first run strictly after `afterMs`, or null when the cron never runs again. */
 export function nextLoopRun(cron: string, afterMs: number): number | null {
-  return parseCron(cron).nextRun(new Date(afterMs))?.getTime() ?? null;
+  return parseStoredCron(cron)?.nextRun(new Date(afterMs))?.getTime() ?? null;
 }
 
 /** What a cron means, or why a loop cannot use it. */
@@ -37,7 +46,9 @@ export function previewLoopSchedule(cron: string, nowMs: number): LoopSchedulePr
   if (runs.length === 0) return { ok: false, error: `"${cron}" never runs.` };
 
   for (let index = 1; index < runs.length; index++) {
-    if (runs[index].getTime() - runs[index - 1].getTime() < LOOP_MIN_INTERVAL_MS) {
+    const gapMs = runs[index].getTime() - runs[index - 1].getTime();
+    // croner lists the first time after a skipped hour twice (02:00 and 03:00 both run at 03:00); that is one run.
+    if (gapMs > 0 && gapMs < LOOP_MIN_INTERVAL_MS) {
       return {
         ok: false,
         error: `"${cron}" runs more often than once an hour. Loops need at least 60 minutes between runs; for short waits, use your agent's own sleep and wake.`,
@@ -89,7 +100,8 @@ export type LoopDecision =
  * missed slot is recorded as skipped: missed runs are never caught up.
  */
 export function decideLoop(cron: string, fromMs: number, nowMs: number): LoopDecision {
-  const schedule = parseCron(cron);
+  const schedule = parseStoredCron(cron);
+  if (!schedule) return { kind: 'wait', atMs: null };
   let latest = schedule.nextRun(new Date(fromMs));
   if (!latest || latest.getTime() > nowMs) return { kind: 'wait', atMs: latest?.getTime() ?? null };
 

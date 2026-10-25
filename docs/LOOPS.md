@@ -115,6 +115,8 @@ review its work the way you review any Pane.
 
 `runpane loops list --json` lists each loop's newest runs. A run's `status` is
 `started` (its Pane was created; `sessionId` is that Pane's id, so read its
-progress with `runpane agents status --pane <sessionId>`), `failed` (the Pane
+progress with `runpane agents status --pane <sessionId>`; when `error` is set
+too, the Pane started but its agent never became ready or Pane could not
+confirm the prompt arrived, and the app shows the run as a warning), `failed` (the Pane
 could not be created; `error` says why) or `skipped` (the run came and went
 while Pane was not running).

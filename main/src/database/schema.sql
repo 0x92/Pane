@@ -113,11 +113,9 @@ CREATE TABLE IF NOT EXISTS usage_rate_limits (
   PRIMARY KEY (provider, limit_id, scope)
 );
 
--- Recurring agent runs. Each row creates one session when it comes due. The
--- schedule is three shapes rather than cron syntax, so the UI can state it in
--- a sentence. NOTE this file is split on the statement separator at startup,
--- so a comment must never contain one.
 -- Loops (scheduled tasks): a cron plus the request `runpane panes create` takes.
+-- NOTE this file is split on the statement separator at startup, so a comment
+-- must never contain one.
 -- schedule_from_ms: only slots after this count. Set on create, resume and a
 -- cron change, so none of them replays slots from before.
 CREATE TABLE IF NOT EXISTS loops (

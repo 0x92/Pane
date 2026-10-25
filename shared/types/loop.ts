@@ -90,3 +90,10 @@ export const LOOP_MISS_GRACE_MS = 15 * 60 * 1000;
 
 /** Run Panes kept per loop; older ones are archived. */
 export const LOOP_KEPT_RUNS = 10;
+
+export const LOOP_NAME_MAX_LENGTH = 80;
+
+/** `Nightly Bug Sweep!` → `nightly-bug-sweep`, at most 40 characters, for run Pane and worktree names. */
+export function loopSlug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-+|-+$/g, '') || 'loop';
+}

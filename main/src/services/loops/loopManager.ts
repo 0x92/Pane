@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import {
   LOOP_KEPT_RUNS,
+  LOOP_NAME_MAX_LENGTH,
   type Loop,
   type LoopInput,
   type LoopRun,
@@ -11,8 +12,8 @@ import { decideLoop, nextLoopRun, previewLoopSchedule } from './loopSchedule';
 import type { LoopRepository, StoredLoop } from './loopRepository';
 import type { Logger } from '../../utils/logger';
 
-/** The longest the timer sleeps, so a changed clock or a slept laptop is noticed soon. */
-const MAX_SLEEP_MS = 5 * 60 * 1000;
+/** The longest the timer sleeps, so a changed clock or a slept laptop is noticed within the grace period. */
+const MAX_SLEEP_MS = 60 * 1000;
 
 /** Starts one run's Pane, as `runpane panes create`, and returns its id. */
 export type LoopRunStarter = (loop: StoredLoop, slotAtMs: number) => Promise<{ sessionId: string; warning?: string }>;
@@ -67,6 +68,9 @@ export class LoopManager {
     const cron = input.cron.trim().replace(/\s+/g, ' ');
     const toolCommand = input.toolCommand?.trim() || undefined;
     if (!name) throw new PaneError('ERR_LOOP_INVALID', 'A loop needs a name. Nothing was saved.', 'Add a name, then save again.');
+    if (name.length > LOOP_NAME_MAX_LENGTH) {
+      throw new PaneError('ERR_LOOP_INVALID', `A loop name can be at most ${LOOP_NAME_MAX_LENGTH} characters; this one has ${name.length}. Nothing was saved.`, 'Shorten the name, then save again.');
+    }
     if (!this.options.projectExists(input.projectId)) {
       throw new PaneError('ERR_LOOP_INVALID', `Project ${input.projectId} does not exist. Nothing was saved.`, 'Pick a saved project (`runpane repos list`), then save again.');
     }
@@ -165,12 +169,12 @@ export class LoopManager {
 
   private async execute(loop: StoredLoop, slotAtMs: number, trigger: LoopRunTrigger): Promise<void> {
     const { repo } = this.options;
-    this.starting.add(loop.id);
     // Recorded before the Pane exists, so a crash mid-create cannot run the slot twice.
     const run: LoopRun = { id: randomUUID(), loopId: loop.id, slotAtMs, trigger, status: 'started', error: null, sessionId: null };
     repo.addRun(run);
-    this.options.onChange?.();
+    this.starting.add(loop.id);
     try {
+      this.options.onChange?.();
       const { sessionId, warning } = await this.options.startRun(loop, slotAtMs);
       repo.finishRun(run.id, { status: 'started', error: warning ?? null, sessionId });
       this.options.logger?.info(`[Loops] Started "${loop.name}" as Pane ${sessionId}.`);
@@ -185,8 +189,16 @@ export class LoopManager {
     this.options.onChange?.();
   }
 
+  /** Drop runs past the kept ten and archive their Panes. Trimming never fails a run. */
   private trim(loopId: string): void {
-    for (const run of this.options.repo.trimRuns(loopId, LOOP_KEPT_RUNS)) {
+    let removed: LoopRun[];
+    try {
+      removed = this.options.repo.trimRuns(loopId, LOOP_KEPT_RUNS);
+    } catch (error) {
+      this.options.logger?.warn(`[Loops] Could not trim old runs: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    for (const run of removed) {
       if (!run.sessionId) continue;
       void this.options.archiveRun(run.sessionId).catch(error => {
         this.options.logger?.warn(`[Loops] Kept old run Pane ${run.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -222,7 +234,8 @@ export class LoopManager {
     this.timer = null;
     void this.tick()
       .catch(error => this.options.logger?.error('[Loops] Tick failed', error instanceof Error ? error : undefined))
-      .finally(() => this.arm());
+      .finally(() => this.arm())
+      .catch(error => this.options.logger?.error('[Loops] Could not schedule the next tick', error instanceof Error ? error : undefined));
   }
 
   private arm(): void {

@@ -155,3 +155,57 @@ describe('LoopManager runs', () => {
     expect(archived).toEqual(['pane-1', 'pane-2']);
   });
 });
+
+describe('LoopManager timer', () => {
+  it('starts a loop when its slot comes, and stops scheduling once stopped', async () => {
+    const { manager, started, setNow } = setup();
+    manager.save(nightly);
+    manager.start();
+    await manager.tick();
+
+    // The clock reaches 03:00 EDT while the timer sleeps; it wakes within a minute.
+    setNow('2026-10-24T07:00:30Z');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(started).toEqual(['Nightly bug sweep']);
+
+    manager.stop();
+    setNow('2026-10-25T07:00:30Z');
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(started).toEqual(['Nightly bug sweep']);
+  });
+});
+
+describe('LoopManager schedule restarts', () => {
+  it('counts a resumed loop from the resume, so the slot it was paused over does not run', async () => {
+    const { manager, started, setNow } = setup();
+    const { id } = manager.save(nightly);
+    manager.setEnabled(id, false);
+    manager.start();
+
+    // Resumed at 03:05 EDT, five minutes after a slot that would still be in its grace period.
+    setNow('2026-10-24T07:05:00Z');
+    const loop = manager.setEnabled(id, true);
+    await manager.tick();
+
+    expect(started).toEqual([]);
+    expect(loop.nextRunAtMs).toBe(utc('2026-10-25T07:00:00Z'));
+    expect(manager.list()[0].runs).toEqual([]);
+    manager.stop();
+  });
+
+  it('counts an edited cron from the edit, so a slot it moved into the past does not run', async () => {
+    const { manager, started, setNow } = setup();
+    const { id } = manager.save(nightly);
+    manager.start();
+
+    // At 03:10 EDT the cron moves to 03:05, which passed five minutes ago.
+    setNow('2026-10-24T07:10:00Z');
+    const loop = manager.save({ ...nightly, id, cron: '5 3 * * *' });
+    await manager.tick();
+
+    expect(started).toEqual([]);
+    expect(loop.nextRunAtMs).toBe(utc('2026-10-25T07:05:00Z'));
+    expect(manager.list()[0].runs).toEqual([]);
+    manager.stop();
+  });
+});

@@ -4,7 +4,7 @@ import type { LoopManager } from '../services/loops/loopManager';
 import type { StoredLoop } from '../services/loops/loopRepository';
 import { previewLoopSchedule } from '../services/loops/loopSchedule';
 import { boundary, decodeBoundary } from '../../../shared/validation/boundaryDecoder';
-import { loopInputSchema } from '../../../shared/types/loop';
+import { loopInputSchema, loopSlug } from '../../../shared/types/loop';
 import type { RunpanePaneCreateRequest } from '../../../shared/types/runpaneOrchestration';
 
 const LOOP_CHANNELS = [
@@ -23,6 +23,8 @@ const paneCreateResultSchema = boundary.object({
     ok: boundary.boolean,
     sessionId: boundary.optional(boundary.string),
     error: failureSchema,
+    readiness: boundary.optional(boundary.object({ ok: boundary.boolean, reason: failureSchema })),
+    initialInput: boundary.optional(boundary.object({ error: failureSchema, delivery: failureSchema })),
   })),
 });
 const paneArchiveResultSchema = boundary.object({ ok: boundary.boolean, blocked: failureSchema });
@@ -56,11 +58,6 @@ export function registerLoopHandlers(ipcMain: IpcMain, loopManager: LoopManager,
   commandRegistry.bindChannels(ipcMain, LOOP_CHANNELS);
 }
 
-/** `ab Cd!` → `ab-cd`, for Pane and worktree names. */
-function slug(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'loop';
-}
-
 function pad(value: number): string {
   return String(value).padStart(2, '0');
 }
@@ -81,13 +78,15 @@ export async function startLoopRun(
   const slot = new Date(slotAtMs);
   const stamp = `${slot.getFullYear()}${pad(slot.getMonth() + 1)}${pad(slot.getDate())}-${pad(slot.getHours())}${pad(slot.getMinutes())}`;
   const label = `${slot.toLocaleString('en-US', { month: 'short' })} ${slot.getDate()} ${pad(slot.getHours())}:${pad(slot.getMinutes())}`;
-  const name = `${slug(loop.name)} · ${label}`;
+  const name = `${loopSlug(loop.name)} · ${label}`;
   const request: RunpanePaneCreateRequest = {
     repo: { id: loop.projectId },
     noFocus: true,
+    // Wait for the agent so the prompt's delivery is checked, and a run that never got it says so.
+    waitReady: Boolean(loop.initialInput),
     panes: [{
       name,
-      worktreeName: `${slug(loop.worktreeTemplate ?? `loop-${loop.name}`)}-${stamp}`,
+      worktreeName: `${loopSlug(loop.worktreeTemplate ?? `loop-${loop.name}`)}-${stamp}`,
       pinned: false,
       tool: loop.toolCommand
         ? { command: loop.toolCommand, initialInput: loop.initialInput }
@@ -100,7 +99,13 @@ export async function startLoopRun(
   // `panes create` names a Pane after its worktree when given one; label the run by loop and slot.
   // A failed rename leaves the worktree's name; the run itself started.
   await commandRegistry.invoke('runpane:panes:rename', [{ paneId: item.sessionId, name }]).catch(() => undefined);
-  return item.ok || !item.error ? { sessionId: item.sessionId } : { sessionId: item.sessionId, warning: item.error.message };
+  if (item.ok) return { sessionId: item.sessionId };
+  // The Pane exists but is not doing its job: the agent never became ready, or the prompt did not arrive.
+  if (item.readiness?.ok === false) {
+    return { sessionId: item.sessionId, warning: `The agent did not become ready, so its prompt was not sent. ${item.readiness.reason?.message ?? ''}`.trim() };
+  }
+  const detail = item.error?.message ?? item.initialInput?.error?.message ?? item.initialInput?.delivery?.message;
+  return { sessionId: item.sessionId, warning: `Pane could not confirm the prompt was submitted. ${detail ?? ''}`.trim() };
 }
 
 /** Archive an old run Pane the way `runpane panes archive` does; unsaved work blocks it. */
