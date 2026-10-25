@@ -13,7 +13,7 @@ import type { LoopRepository, StoredLoop } from './loopRepository';
 import type { Logger } from '../../utils/logger';
 
 /** The note on an old run whose Pane was not archived. */
-const KEPT_RUN_NOTE = 'Kept because the run Pane has unsaved changes. Archive it yourself when you\'re done.';
+const KEPT_RUN_NOTE = 'Kept because the run Pane has uncommitted or unpushed work. Archive it yourself when you\'re done.';
 
 /** The longest the timer sleeps, so a changed clock or a slept laptop is noticed within the grace period. */
 const MAX_SLEEP_MS = 60 * 1000;
@@ -24,7 +24,7 @@ export type LoopRunStarter = (loop: StoredLoop, slotAtMs: number) => Promise<{ s
 export interface LoopManagerOptions {
   repo: LoopRepository;
   startRun: LoopRunStarter;
-  /** Archive a run Pane that fell out of the kept runs. False when Pane refused, to keep unsaved work. */
+  /** Archive a run Pane that fell out of the kept runs. False when Pane refused, to keep uncommitted or unpushed work. */
   archiveRun: (sessionId: string) => Promise<boolean>;
   projectExists: (projectId: number) => boolean;
   /** Called after any loop or run changes, so clients refetch. */
@@ -196,7 +196,7 @@ export class LoopManager {
 
   /**
    * Archive the Panes of runs past the kept ten, and drop each row once its Pane
-   * is gone. A Pane kept for its unsaved work keeps its row, with a note, so the
+   * is gone. A Pane kept for its uncommitted or unpushed work keeps its row, with a note, so the
    * loop still links to it. Trimming never fails a run.
    */
   private trim(loopId: string): void {
@@ -221,7 +221,7 @@ export class LoopManager {
           if (archived) {
             repo.deleteRun(run.id);
           } else {
-            logger?.info(`[Loops] Kept old run Pane ${sessionId}: it has unsaved changes.`);
+            logger?.info(`[Loops] Kept old run Pane ${sessionId}: it has uncommitted or unpushed work.`);
             repo.finishRun(run.id, { status: run.status, error: KEPT_RUN_NOTE, sessionId });
           }
         }, error => {

@@ -126,7 +126,7 @@ export async function startLoopRun(
   return { sessionId: item.sessionId, warning: `Pane could not confirm the prompt was submitted. ${detail ?? ''}`.trim() };
 }
 
-/** Archive an old run Pane the way `runpane panes archive` does. False when unsaved work blocked it. */
+/** Archive an old run Pane the way `runpane panes archive` does. False when uncommitted or unpushed work blocked it. */
 export async function archiveLoopRun(commandRegistry: PaneCommandRegistry, sessionId: string): Promise<boolean> {
   const result = decodeBoundary(await commandRegistry.invoke('runpane:panes:archive', [{ paneId: sessionId, source: 'agent' }]), paneArchiveResultSchema);
   return result.blocked === undefined;

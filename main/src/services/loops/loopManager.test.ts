@@ -166,7 +166,7 @@ describe('LoopManager runs', () => {
     expect(archived).toEqual(['pane-1', 'pane-2']);
   });
 
-  it('keeps an old run listed, with a note, when its Pane has unsaved changes', async () => {
+  it('keeps an old run listed, with a note, when its Pane has uncommitted or unpushed work', async () => {
     let count = 0;
     const { manager, archived } = setup(async () => ({ sessionId: `pane-${++count}` }), sessionId => sessionId === 'pane-1');
     const { id } = manager.save(nightly);
@@ -179,7 +179,7 @@ describe('LoopManager runs', () => {
     );
     expect(runs[10]).toMatchObject({
       status: 'started',
-      error: 'Kept because the run Pane has unsaved changes. Archive it yourself when you\'re done.',
+      error: 'Kept because the run Pane has uncommitted or unpushed work. Archive it yourself when you\'re done.',
     });
     expect(archived).toEqual([]);
   });
