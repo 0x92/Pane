@@ -9449,7 +9449,7 @@ describe('runpane loops', () => {
     services.loopManager = new LoopManager({
       repo: new LoopRepository(() => db),
       startRun: async () => ({ sessionId: 'run-pane' }),
-      archiveRun: async () => undefined,
+      archiveRun: async () => true,
       projectExists: id => id === 1,
     });
     return services;

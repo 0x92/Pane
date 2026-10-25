@@ -18,7 +18,13 @@ const nightly: LoopInput = {
   enabled: true,
 };
 
-function setup(startRun: LoopRunStarter = async () => ({ sessionId: `pane-${Math.random()}` })) {
+/** Let archives started in the background finish. */
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+function setup(
+  startRun: LoopRunStarter = async () => ({ sessionId: `pane-${Math.random()}` }),
+  refusesArchive: (sessionId: string) => boolean = () => false,
+) {
   let nowMs = utc('2026-10-23T12:00:00Z');
   const archived: string[] = [];
   const started: string[] = [];
@@ -28,7 +34,11 @@ function setup(startRun: LoopRunStarter = async () => ({ sessionId: `pane-${Math
       started.push(loop.name);
       return startRun(loop, slotAtMs);
     },
-    archiveRun: async sessionId => { archived.push(sessionId); },
+    archiveRun: async sessionId => {
+      if (refusesArchive(sessionId)) return false;
+      archived.push(sessionId);
+      return true;
+    },
     projectExists: id => id === 1,
     now: () => nowMs,
   });
@@ -148,11 +158,30 @@ describe('LoopManager runs', () => {
     const { manager, archived } = setup(async () => ({ sessionId: `pane-${++count}` }));
     const { id } = manager.save(nightly);
     for (let index = 0; index < 12; index++) await manager.runNow(id);
+    await settle();
 
     expect(manager.list()[0].runs.map(run => run.sessionId)).toEqual(
       ['pane-12', 'pane-11', 'pane-10', 'pane-9', 'pane-8', 'pane-7', 'pane-6', 'pane-5', 'pane-4', 'pane-3'],
     );
     expect(archived).toEqual(['pane-1', 'pane-2']);
+  });
+
+  it('keeps an old run listed, with a note, when its Pane has unsaved changes', async () => {
+    let count = 0;
+    const { manager, archived } = setup(async () => ({ sessionId: `pane-${++count}` }), sessionId => sessionId === 'pane-1');
+    const { id } = manager.save(nightly);
+    for (let index = 0; index < 11; index++) await manager.runNow(id);
+    await settle();
+
+    const runs = manager.list()[0].runs;
+    expect(runs.map(run => run.sessionId)).toEqual(
+      ['pane-11', 'pane-10', 'pane-9', 'pane-8', 'pane-7', 'pane-6', 'pane-5', 'pane-4', 'pane-3', 'pane-2', 'pane-1'],
+    );
+    expect(runs[10]).toMatchObject({
+      status: 'started',
+      error: 'Kept because the run Pane has unsaved changes. Archive it yourself when you\'re done.',
+    });
+    expect(archived).toEqual([]);
   });
 });
 

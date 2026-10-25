@@ -58,7 +58,7 @@ export interface Loop extends Omit<LoopInput, 'id'> {
   nextRunAtMs: number | null;
   /** The schedule as a sentence, such as "Every day at 03:00". */
   scheduleText: string;
-  /** Newest first, at most `LOOP_KEPT_RUNS`. */
+  /** Newest first: the last `LOOP_KEPT_RUNS`, plus older runs whose Pane was kept for its unsaved work. */
   runs: LoopRun[];
 }
 

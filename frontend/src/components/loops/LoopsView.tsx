@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Plus, Repeat } from 'lucide-react';
-import type { Loop } from '../../../../shared/types/loop';
+import { LOOP_KEPT_RUNS, type Loop } from '../../../../shared/types/loop';
 import { openLoopRun, useLoopsStore } from '../../stores/loopsStore';
 import { cn } from '../../utils/cn';
 import { Button } from '../ui/Button';
@@ -72,7 +72,9 @@ function SummaryCard({ label, children }: { label: string; children: React.React
 
 function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) {
   const views = useLoopRunViews(loop);
-  const count = (outcome: LoopRunView['outcome']) => views.filter(view => view.outcome === outcome).length;
+  // The counts cover the strip's runs; older runs kept for their Panes are only in the table.
+  const recent = views.slice(0, LOOP_KEPT_RUNS);
+  const count = (outcome: LoopRunView['outcome']) => recent.filter(view => view.outcome === outcome).length;
   const [okCount, warningCount, failedCount] = [count('ok'), count('warning'), count('failed')];
   const counts = [
     okCount > 0 && `${okCount} ok`,

@@ -42,7 +42,7 @@ describe('LoopRepository', () => {
     expect(repo.get('missing')).toBeNull();
   });
 
-  it('keeps the newest runs and returns the ones it drops', () => {
+  it('lists runs newest first and finds the ones past the kept count', () => {
     const db = createLoopTestDb();
     const repo = new LoopRepository(() => db);
     repo.upsert(loop);
@@ -51,13 +51,14 @@ describe('LoopRepository', () => {
     repo.addRun(run('c', 300));
     repo.finishRun('c', { status: 'failed', error: 'no worktree', sessionId: null });
 
-    expect(repo.runs(loop.id, 10).map(r => [r.id, r.status, r.error])).toEqual([
+    expect(repo.runs(loop.id).map(r => [r.id, r.status, r.error])).toEqual([
       ['c', 'failed', 'no worktree'],
       ['b', 'skipped', null],
       ['a', 'started', null],
     ]);
-    expect(repo.trimRuns(loop.id, 2).map(r => r.sessionId)).toEqual(['pane-a']);
-    expect(repo.runs(loop.id, 10).map(r => r.id)).toEqual(['c', 'b']);
+    expect(repo.oldRuns(loop.id, 1).map(r => r.id)).toEqual(['a', 'b']);
+    repo.deleteRun('a');
+    expect(repo.runs(loop.id).map(r => r.id)).toEqual(['c', 'b']);
   });
 
   it('counts only scheduled runs as the last handled slot', () => {
@@ -77,6 +78,6 @@ describe('LoopRepository', () => {
     repo.addRun(run('a', 100));
     repo.delete(loop.id);
     expect(repo.get(loop.id)).toBeNull();
-    expect(repo.runs(loop.id, 10)).toEqual([]);
+    expect(repo.runs(loop.id)).toEqual([]);
   });
 });

@@ -12,6 +12,9 @@ import { decideLoop, nextLoopRun, previewLoopSchedule } from './loopSchedule';
 import type { LoopRepository, StoredLoop } from './loopRepository';
 import type { Logger } from '../../utils/logger';
 
+/** The note on an old run whose Pane was not archived. */
+const KEPT_RUN_NOTE = 'Kept because the run Pane has unsaved changes. Archive it yourself when you\'re done.';
+
 /** The longest the timer sleeps, so a changed clock or a slept laptop is noticed within the grace period. */
 const MAX_SLEEP_MS = 60 * 1000;
 
@@ -21,8 +24,8 @@ export type LoopRunStarter = (loop: StoredLoop, slotAtMs: number) => Promise<{ s
 export interface LoopManagerOptions {
   repo: LoopRepository;
   startRun: LoopRunStarter;
-  /** Archive a run Pane that fell out of the kept runs; it may refuse, to keep unsaved work. */
-  archiveRun: (sessionId: string) => Promise<void>;
+  /** Archive a run Pane that fell out of the kept runs. False when Pane refused, to keep unsaved work. */
+  archiveRun: (sessionId: string) => Promise<boolean>;
   projectExists: (projectId: number) => boolean;
   /** Called after any loop or run changes, so clients refetch. */
   onChange?: () => void;
@@ -40,6 +43,8 @@ export class LoopManager {
   private ticking: Promise<void> | null = null;
   /** Loops whose run is being created, so one run is never started twice at once. */
   private readonly starting = new Set<string>();
+  /** Old runs whose Pane is being archived, so two trims never archive one Pane twice. */
+  private readonly archiving = new Set<string>();
   private readonly now: () => number;
 
   constructor(private readonly options: LoopManagerOptions) {
@@ -149,14 +154,14 @@ export class LoopManager {
       if (!loop?.enabled) continue;
       const decision = decideLoop(loop.cron, this.countsFrom(loop), this.now());
       if (decision.kind === 'skip') {
-        this.options.logger?.info(`[Loops] Skipped "${loop.name}": its run came due while Pane was not running.`);
+        this.options.logger?.info(`[Loops] Skipped "${loop.name}": its run came due while Pane was not running or the computer was asleep.`);
         repo.addRun({
           id: randomUUID(),
           loopId: loop.id,
           slotAtMs: decision.slotAtMs,
           trigger: 'schedule',
           status: 'skipped',
-          error: 'Pane was not running when this run came due.',
+          error: 'Pane was not running, or the computer was asleep, when this run came due.',
           sessionId: null,
         });
         this.trim(loop.id);
@@ -189,20 +194,46 @@ export class LoopManager {
     this.options.onChange?.();
   }
 
-  /** Drop runs past the kept ten and archive their Panes. Trimming never fails a run. */
+  /**
+   * Archive the Panes of runs past the kept ten, and drop each row once its Pane
+   * is gone. A Pane kept for its unsaved work keeps its row, with a note, so the
+   * loop still links to it. Trimming never fails a run.
+   */
   private trim(loopId: string): void {
-    let removed: LoopRun[];
+    const { repo, logger } = this.options;
+    let old: LoopRun[];
     try {
-      removed = this.options.repo.trimRuns(loopId, LOOP_KEPT_RUNS);
+      old = repo.oldRuns(loopId, LOOP_KEPT_RUNS);
     } catch (error) {
-      this.options.logger?.warn(`[Loops] Could not trim old runs: ${error instanceof Error ? error.message : String(error)}`);
+      logger?.warn(`[Loops] Could not trim old runs: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-    for (const run of removed) {
-      if (!run.sessionId) continue;
-      void this.options.archiveRun(run.sessionId).catch(error => {
-        this.options.logger?.warn(`[Loops] Kept old run Pane ${run.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
-      });
+    for (const run of old) {
+      const { sessionId } = run;
+      if (!sessionId) {
+        repo.deleteRun(run.id);
+        continue;
+      }
+      if (this.archiving.has(run.id)) continue;
+      this.archiving.add(run.id);
+      void this.options.archiveRun(sessionId)
+        .then(archived => {
+          if (archived) {
+            repo.deleteRun(run.id);
+          } else {
+            logger?.info(`[Loops] Kept old run Pane ${sessionId}: it has unsaved changes.`);
+            repo.finishRun(run.id, { status: run.status, error: KEPT_RUN_NOTE, sessionId });
+          }
+        }, error => {
+          // The Pane is gone or was archived elsewhere; the row has nothing left to link to.
+          logger?.warn(`[Loops] Dropped old run Pane ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+          repo.deleteRun(run.id);
+        })
+        .catch(error => logger?.warn(`[Loops] Could not update old run ${run.id}: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => {
+          this.archiving.delete(run.id);
+          this.options.onChange?.();
+        });
     }
   }
 
@@ -217,7 +248,7 @@ export class LoopManager {
       ...stored,
       nextRunAtMs: loop.enabled ? nextLoopRun(loop.cron, Math.max(this.countsFrom(loop), this.now())) : null,
       scheduleText: preview.ok ? preview.scheduleText : `Cron ${loop.cron}`,
-      runs: this.options.repo.runs(loop.id, LOOP_KEPT_RUNS),
+      runs: this.options.repo.runs(loop.id),
     };
   }
 

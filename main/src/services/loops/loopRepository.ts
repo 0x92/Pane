@@ -134,12 +134,12 @@ export class LoopRepository {
     this.db.prepare('DELETE FROM loops WHERE id = ?').run(id);
   }
 
-  /** Newest first. */
-  runs(loopId: string, limit: number): LoopRun[] {
+  /** Newest first. Trimming keeps this to the kept runs plus any whose Pane was kept. */
+  runs(loopId: string): LoopRun[] {
     // SAFETY: This SELECT reads rows of the loop_runs table, represented by LoopRunRow.
     const rows = this.db.prepare(
-      'SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY slot_at_ms DESC, rowid DESC LIMIT ?'
-    ).all(loopId, limit) as LoopRunRow[];
+      'SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY slot_at_ms DESC, rowid DESC'
+    ).all(loopId) as LoopRunRow[];
     return rows.map(toRun);
   }
 
@@ -164,16 +164,16 @@ export class LoopRepository {
       .run(outcome.status, outcome.error, outcome.sessionId, id);
   }
 
-  /** Delete all but the newest `keep` runs of a loop, and return the ones deleted. */
-  trimRuns(loopId: string, keep: number): LoopRun[] {
-    return this.db.transaction(() => {
-      // SAFETY: This SELECT reads rows of the loop_runs table, represented by LoopRunRow.
-      const rows = this.db.prepare(
-        'SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY slot_at_ms DESC, rowid DESC LIMIT -1 OFFSET ?'
-      ).all(loopId, keep) as LoopRunRow[];
-      const remove = this.db.prepare('DELETE FROM loop_runs WHERE id = ?');
-      for (const row of rows) remove.run(row.id);
-      return rows.map(toRun);
-    })();
+  /** A loop's runs past the newest `keep`, oldest first. */
+  oldRuns(loopId: string, keep: number): LoopRun[] {
+    // SAFETY: This SELECT reads rows of the loop_runs table, represented by LoopRunRow.
+    const rows = this.db.prepare(
+      'SELECT * FROM loop_runs WHERE loop_id = ? ORDER BY slot_at_ms DESC, rowid DESC LIMIT -1 OFFSET ?'
+    ).all(loopId, keep) as LoopRunRow[];
+    return rows.map(toRun).reverse();
+  }
+
+  deleteRun(id: string): void {
+    this.db.prepare('DELETE FROM loop_runs WHERE id = ?').run(id);
   }
 }
