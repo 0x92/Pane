@@ -91,18 +91,25 @@ machine-readable output. The same commands are MCP tools: `loops_list`,
   minutes apart.
 - **Pane must be running.** Runs start only while Pane is running on that
   machine.
-- **Missed runs.** A run up to 15 minutes late still starts. A later one is
-  recorded as skipped. Missed runs are never caught up.
+- **Missed runs.** A run up to 15 minutes late still starts, for example after
+  the computer wakes from sleep. A later one is recorded as skipped. Missed runs
+  are never caught up.
 - **Overlap.** A run starts even if the previous one is still going.
 - **Kept runs.** Pane keeps each loop's last 10 runs and archives older run
-  Panes. A run Pane with uncommitted or unpushed work is not archived; it stays
-  under its project for you to review.
+  Panes. A run Pane with uncommitted or unpushed work is not archived: its run
+  stays in the loop's list with the note "Kept because the run Pane has unsaved
+  changes", so a loop can show more than 10 runs. Archive the Pane yourself
+  when you're done; Pane tries again after each new run.
 - **Delete.** Deleting a loop stops its schedule. Its run Panes stay, as
   normal Panes.
 - **Pause.** A paused loop starts no scheduled runs. Resuming picks up at the
   next scheduled time.
 - **Permissions.** Runs are unattended, so Claude, Codex and Cursor runs skip
   their permission prompts. A `--tool-command` runs as written.
+- **Commands on Windows.** A `--tool-command` runs in Pane's terminal shell,
+  which is Git Bash by default. Write it in bash, or call cmd with `//c`:
+  `cmd //c echo hi > loop.txt` works. With `cmd /c`, Git Bash turns `/c` into a
+  path, so cmd starts interactively and the run hangs.
 - **Folder trust.** Claude and Codex ask whether to trust a folder they have
   not seen, and each run is a new worktree. A run stopped at that prompt shows
   as **needs attention**. Open the run and answer it, or open the project
@@ -118,11 +125,16 @@ Each run is a new Pane in a fresh worktree branched from the repository's
 default base branch. It appears as a normal Pane under its project, and you
 review its work the way you review any Pane.
 
-`runpane loops list --json` lists each loop's newest runs. A run's `status` is
-`started` (its Pane was created; `sessionId` is that Pane's id, so read its
-progress with `runpane agents status --pane <sessionId>`; when `error` is set
-too, the Pane started but its agent is waiting at a prompt such as folder
-trust, never became ready, or Pane could not confirm the prompt arrived; the
-app shows the run as needing attention), `failed` (the Pane
-could not be created; `error` says why) or `skipped` (the run came and went
-while Pane was not running).
+`runpane loops list --json` lists each loop's runs, newest first. A run's
+`status` is:
+
+- `started`: its Pane was created. `sessionId` is that Pane's id, so read its
+  progress with `runpane agents status --pane <sessionId>`. When `error` is set
+  too, something needed attention when the run started: the agent was stopped
+  at a prompt such as folder trust, never became ready, or Pane could not
+  confirm the prompt arrived. The app and plain `runpane loops list` show such
+  a run as **needs attention**. On an older run, `error` can instead be the
+  note that its Pane was kept for its unsaved changes.
+- `failed`: the Pane could not be created; `error` says why.
+- `skipped`: the run came and went while Pane was not running or the computer
+  was asleep.

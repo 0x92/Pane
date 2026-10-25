@@ -115,7 +115,7 @@ const seededSessions = [
   runSession('sweep-run-20', sweepSlots[4], 35, 'stopped'),
 ];
 
-const TRUST_WARNING = 'The run is waiting at the agent\'s folder-trust prompt in its new worktree, so it has not started.';
+const TRUST_WARNING = 'When it started, the run was stopped at the agent\'s folder-trust prompt in its new worktree.';
 
 const seededLoops: Loop[] = [
   {
@@ -134,7 +134,7 @@ const seededLoops: Loop[] = [
       { id: 'r22', loopId: 'loop-sweep', slotAtMs: sweepSlots[2], trigger: 'schedule', status: 'started', error: null, sessionId: 'sweep-run-22' },
       { id: 'r21', loopId: 'loop-sweep', slotAtMs: sweepSlots[3], trigger: 'schedule', status: 'started', error: TRUST_WARNING, sessionId: 'sweep-run-21' },
       { id: 'r20', loopId: 'loop-sweep', slotAtMs: sweepSlots[4], trigger: 'schedule', status: 'started', error: null, sessionId: 'sweep-run-20' },
-      { id: 'r19', loopId: 'loop-sweep', slotAtMs: sweepSlots[5], trigger: 'schedule', status: 'skipped', error: 'Pane was not running when this run came due.', sessionId: null },
+      { id: 'r19', loopId: 'loop-sweep', slotAtMs: sweepSlots[5], trigger: 'schedule', status: 'skipped', error: 'Pane was not running, or the computer was asleep, when this run came due.', sessionId: null },
     ],
   },
   {

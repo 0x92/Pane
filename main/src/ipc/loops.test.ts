@@ -114,7 +114,7 @@ describe('startLoopRun', () => {
 
     await expect(startLoopRun(registry, nightly, slotAtMs)).resolves.toEqual({
       sessionId: 'pane-10',
-      warning: 'The agent did not become ready, so Pane could not confirm it got its prompt. Claude did not show its prompt within 60s.',
+      warning: 'When the run started, the agent did not become ready, so Pane could not confirm it got its prompt. Claude did not show its prompt within 60s.',
     });
   });
 
@@ -138,8 +138,8 @@ describe('startLoopRun', () => {
 
     await expect(startLoopRun(registry, nightly, slotAtMs)).resolves.toEqual({
       sessionId: 'pane-11',
-      warning: 'The run is waiting at the agent\'s folder-trust prompt in its new worktree, so it has not started. '
-        + 'Open the run and answer it, or open the project folder in the agent once and trust it so later runs start on their own.',
+      warning: 'When it started, the run was stopped at the agent\'s folder-trust prompt in its new worktree. '
+        + 'If it is still there, open the run and answer it, or trust the project folder in the agent once so later runs start on their own.',
     });
   });
 

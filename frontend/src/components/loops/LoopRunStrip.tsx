@@ -8,7 +8,7 @@ import { RUN_DOT_CLASS, formatDuration, formatRunTime, runWarning, type LoopRunV
 function runDetail(view: LoopRunView): string {
   const warning = runWarning(view);
   if (warning) return view.branch ? `${warning} · ${view.branch}` : warning;
-  if (view.outcome === 'failed' || view.outcome === 'skipped') return view.run.error ?? (view.outcome === 'skipped' ? 'Pane was not running when it came due.' : 'The Pane could not be created.');
+  if (view.outcome === 'failed' || view.outcome === 'skipped') return view.run.error ?? (view.outcome === 'skipped' ? 'Pane was not running, or the computer was asleep, when this run came due.' : 'The Pane could not be created.');
   const duration = view.durationMs === null ? null : formatDuration(view.durationMs);
   const lead = view.outcome === 'running' ? (duration ? `Running for ${duration}` : 'Running') : (duration ? `Finished after ${duration}` : 'Finished');
   return view.branch ? `${lead} · ${view.branch}` : lead;

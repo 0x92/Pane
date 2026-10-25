@@ -321,7 +321,7 @@ def run_loops_list(parsed: Any) -> int:
     for loop in loops:
         repo = repo_names.get(loop.get("projectId")) or f"repo {loop.get('projectId')}"
         runs = loop.get("runs") or []
-        last = f" · last {runs[0].get('status')} {format_loop_time(runs[0].get('slotAtMs'))}" if runs else ""
+        last = f" · last {_describe_loop_run_status(runs[0])} {format_loop_time(runs[0].get('slotAtMs'))}" if runs else ""
         print(f"{loop.get('name')} ({loop.get('id')}) · {repo} · {loop.get('scheduleText')} · {describe_next_run(loop)}{last}")
     return 0
 
@@ -352,6 +352,11 @@ def run_loops_save(parsed: Any) -> int:
     return 0
 
 
+def _describe_loop_run_status(run: Dict[str, Any]) -> str:
+    """A started run with a warning needs the person, as the app shows it."""
+    return "needs attention" if run.get("status") == "started" and run.get("error") else str(run.get("status"))
+
+
 def run_loops_run(parsed: Any) -> int:
     loop_id = _require_loop_id(parsed)
     confirm_mutation(parsed)
@@ -365,7 +370,10 @@ def run_loops_run(parsed: Any) -> int:
         print(f"Run of {loop.get('name')} failed: {run.get('error') or 'unknown error'}")
     else:
         where = f" in Pane {run.get('sessionId')}" if run.get("sessionId") else ""
-        print(f"Started a run of {loop.get('name')}{where}.")
+        if run.get("error"):
+            print(f"Started a run of {loop.get('name')}{where}; it needs attention: {run.get('error')}")
+        else:
+            print(f"Started a run of {loop.get('name')}{where}.")
     return 1 if failed else 0
 
 
@@ -419,7 +427,9 @@ def build_loop_create(parsed: Any) -> Dict[str, Any]:
     if not parsed.repo or not name or not parsed.cron:
         raise ValueError("runpane loops create requires --repo <selector>, --name <name>, and --cron <expr>.")
     agent = _loop_agent(parsed)
-    if bool(agent) == bool(parsed.tool_command):
+    if agent and parsed.tool_command:
+        raise ValueError("runpane loops create takes either --agent or --tool-command, not both.")
+    if not agent and not parsed.tool_command:
         raise ValueError("runpane loops create requires either --agent or --tool-command.")
     return _without_empty_loop_fields({
         "name": name,

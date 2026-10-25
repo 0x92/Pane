@@ -3451,7 +3451,9 @@ export const RUNPANE_CONTRACT = {
         "  --name <name>                   Loop name.",
         "  --cron <expr>                   Five-field cron in local time, such as \"0 3 * * *\"; at least 1 hour apart.",
         "  --agent <claude|codex|cursor>   Agent each run starts. Runs skip permission prompts.",
-        "  --tool-command <command>        Command each run starts instead of an agent.",
+        "  --tool-command <command>        Command each run starts instead of an agent. On Windows it runs",
+        "                                  in Pane's terminal shell, Git Bash by default, so write bash or",
+        "                                  `cmd //c`: \"cmd //c echo hi > loop.txt\" works, \"cmd /c ...\" hangs.",
         "  --prompt <text>                 First input sent to the agent or command.",
         "  --prompt-file <path|->          Read the first input from a file or stdin.",
         "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>.",
@@ -3474,7 +3476,9 @@ export const RUNPANE_CONTRACT = {
         "  --name <name>                   Loop name.",
         "  --cron <expr>                   Five-field cron in local time, such as \"0 3 * * *\"; at least 1 hour apart.",
         "  --agent <claude|codex|cursor>   Agent each run starts. Runs skip permission prompts.",
-        "  --tool-command <command>        Command each run starts instead of an agent.",
+        "  --tool-command <command>        Command each run starts instead of an agent. On Windows it runs",
+        "                                  in Pane's terminal shell, Git Bash by default, so write bash or",
+        "                                  `cmd //c`: \"cmd //c echo hi > loop.txt\" works, \"cmd /c ...\" hangs.",
         "  --prompt <text>                 First input sent to the agent or command.",
         "  --prompt-file <path|->          Read the first input from a file or stdin.",
         "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>.",
@@ -4880,7 +4884,9 @@ export const RUNPANE_CONTRACT = {
         "  --name <name>                   Loop name.",
         "  --cron <expr>                   Five-field cron in local time, such as \"0 3 * * *\"; at least 1 hour apart.",
         "  --agent <claude|codex|cursor>   Agent each run starts. Runs skip permission prompts.",
-        "  --tool-command <command>        Command each run starts instead of an agent.",
+        "  --tool-command <command>        Command each run starts instead of an agent. On Windows it runs",
+        "                                  in Pane's terminal shell, Git Bash by default, so write bash or",
+        "                                  `cmd //c`: \"cmd //c echo hi > loop.txt\" works, \"cmd /c ...\" hangs.",
         "  --prompt <text>                 First input sent to the agent or command.",
         "  --prompt-file <path|->          Read the first input from a file or stdin.",
         "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>.",
@@ -4903,7 +4909,9 @@ export const RUNPANE_CONTRACT = {
         "  --name <name>                   Loop name.",
         "  --cron <expr>                   Five-field cron in local time, such as \"0 3 * * *\"; at least 1 hour apart.",
         "  --agent <claude|codex|cursor>   Agent each run starts. Runs skip permission prompts.",
-        "  --tool-command <command>        Command each run starts instead of an agent.",
+        "  --tool-command <command>        Command each run starts instead of an agent. On Windows it runs",
+        "                                  in Pane's terminal shell, Git Bash by default, so write bash or",
+        "                                  `cmd //c`: \"cmd //c echo hi > loop.txt\" works, \"cmd /c ...\" hangs.",
         "  --prompt <text>                 First input sent to the agent or command.",
         "  --prompt-file <path|->          Read the first input from a file or stdin.",
         "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>.",
@@ -16844,7 +16852,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--tool-command",
             "value": "<command>",
             "required": false,
-            "description": "Command each run starts instead of a built-in agent, such as `agent-farm run <task>`."
+            "description": "Command each run starts instead of a built-in agent, such as `agent-farm run <task>`. On Windows it runs in Pane's terminal shell, Git Bash by default: write bash, or `cmd //c echo hi > loop.txt` rather than `cmd /c`."
           },
           {
             "name": "--prompt",
@@ -16945,7 +16953,7 @@ export const RUNPANE_CONTRACT = {
             "name": "--tool-command",
             "value": "<command>",
             "required": false,
-            "description": "Command each run starts instead of a built-in agent, such as `agent-farm run <task>`."
+            "description": "Command each run starts instead of a built-in agent, such as `agent-farm run <task>`. On Windows it runs in Pane's terminal shell, Git Bash by default: write bash, or `cmd //c echo hi > loop.txt` rather than `cmd /c`."
           },
           {
             "name": "--prompt",

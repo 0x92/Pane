@@ -2326,7 +2326,7 @@ export async function runLoopsList(parsed: ParsedArgs): Promise<number> {
   for (const loop of loops) {
     const repo = repoNames.get(loop.projectId) ?? `repo ${loop.projectId}`;
     const [lastRun] = loop.runs;
-    const last = lastRun ? ` · last ${lastRun.status} ${formatLoopTime(lastRun.slotAtMs)}` : '';
+    const last = lastRun ? ` · last ${describeLoopRunStatus(lastRun)} ${formatLoopTime(lastRun.slotAtMs)}` : '';
     console.log(`${loop.name} (${loop.id}) · ${repo} · ${loop.scheduleText} · ${describeNextRun(loop)}${last}`);
   }
   return 0;
@@ -2349,6 +2349,11 @@ export async function runLoopsSave(parsed: ParsedArgs): Promise<number> {
   return 0;
 }
 
+/** A started run with a warning needs the person, as the app shows it. */
+function describeLoopRunStatus(run: LoopRun): string {
+  return run.status === 'started' && run.error ? 'needs attention' : run.status;
+}
+
 export async function runLoopsRun(parsed: ParsedArgs): Promise<number> {
   const id = requireLoopId(parsed);
   await confirmMutation(parsed);
@@ -2359,7 +2364,8 @@ export async function runLoopsRun(parsed: ParsedArgs): Promise<number> {
   } else if (run?.status === 'failed') {
     console.log(`Run of ${loop.name} failed: ${run.error ?? 'unknown error'}`);
   } else {
-    console.log(`Started a run of ${loop.name}${run?.sessionId ? ` in Pane ${run.sessionId}` : ''}.`);
+    const where = run?.sessionId ? ` in Pane ${run.sessionId}` : '';
+    console.log(run?.error ? `Started a run of ${loop.name}${where}; it needs attention: ${run.error}` : `Started a run of ${loop.name}${where}.`);
   }
   return run?.status === 'failed' ? 1 : 0;
 }
@@ -2408,9 +2414,8 @@ async function buildLoopCreate(parsed: ParsedArgs): Promise<LoopInput> {
     throw new Error('runpane loops create requires --repo <selector>, --name <name>, and --cron <expr>.');
   }
   const agent = loopAgent(parsed);
-  if (Boolean(agent) === Boolean(parsed.toolCommand)) {
-    throw new Error('runpane loops create requires either --agent or --tool-command.');
-  }
+  if (agent && parsed.toolCommand) throw new Error('runpane loops create takes either --agent or --tool-command, not both.');
+  if (!agent && !parsed.toolCommand) throw new Error('runpane loops create requires either --agent or --tool-command.');
   return withoutEmptyLoopFields({
     name,
     projectId: await resolveLoopProjectId(parsed, parsed.repo),

@@ -108,18 +108,19 @@ export async function startLoopRun(
   // A failed rename leaves the worktree's name; the run itself started.
   await commandRegistry.invoke('runpane:panes:rename', [{ paneId: item.sessionId, name }]).catch(() => undefined);
   if (item.ok) return { sessionId: item.sessionId };
-  // The Pane exists but is not doing its job: the agent is stuck at a prompt, never became ready, or the prompt did not arrive.
+  // The Pane exists but was not doing its job at start: the agent was stuck at a prompt, never became ready, or the prompt did not arrive.
+  // Warnings are written once, so each says what was true when the run started.
   const blocked = item.readiness?.blocked?.message;
   if (blocked !== undefined) {
     // Pane never answers trust prompts for an unattended run; the person decides.
     const warning = TRUST_PROMPT.test(blocked)
-      ? 'The run is waiting at the agent\'s folder-trust prompt in its new worktree, so it has not started. '
-        + 'Open the run and answer it, or open the project folder in the agent once and trust it so later runs start on their own.'
-      : 'The run is waiting at a prompt in its terminal, so it has not started. Open the run and answer it.';
+      ? 'When it started, the run was stopped at the agent\'s folder-trust prompt in its new worktree. '
+        + 'If it is still there, open the run and answer it, or trust the project folder in the agent once so later runs start on their own.'
+      : 'When it started, the run was stopped at a prompt in its terminal. If it is still there, open the run and answer it.';
     return { sessionId: item.sessionId, warning };
   }
   if (item.readiness?.ok === false) {
-    return { sessionId: item.sessionId, warning: `The agent did not become ready, so Pane could not confirm it got its prompt. ${item.readiness.reason?.message ?? ''}`.trim() };
+    return { sessionId: item.sessionId, warning: `When the run started, the agent did not become ready, so Pane could not confirm it got its prompt. ${item.readiness.reason?.message ?? ''}`.trim() };
   }
   const detail = item.error?.message ?? item.initialInput?.error?.message ?? item.initialInput?.delivery?.message;
   return { sessionId: item.sessionId, warning: `Pane could not confirm the prompt was submitted. ${detail ?? ''}`.trim() };
