@@ -5,7 +5,8 @@ import { usePanelStore } from '../../stores/panelStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { rollupSessionAgentState } from '../../utils/agentStatus';
 
-export type LoopRunOutcome = 'running' | 'ok' | 'failed' | 'skipped';
+/** `warning`: the run's Pane exists but its error says it may not be doing its job, such as an undelivered prompt. */
+export type LoopRunOutcome = 'running' | 'ok' | 'warning' | 'failed' | 'skipped';
 
 export interface LoopRunView {
   run: LoopRun;
@@ -34,7 +35,7 @@ function viewRun(run: LoopRun, session: Session | undefined, agentState: AgentSt
   // Only a working run has a trustworthy end (now): a session's lastActivity is not when its agent finished.
   const durationMs = running && nowMs > run.slotAtMs ? nowMs - run.slotAtMs : null;
   const branch = session?.worktreePath ? session.worktreePath.split(/[\\/]/).filter(Boolean).pop() ?? null : null;
-  return { run, outcome: running ? 'running' : 'ok', session, durationMs, branch };
+  return { run, outcome: run.error ? 'warning' : running ? 'running' : 'ok', session, durationMs, branch };
 }
 
 /** Every run of a loop with its outcome, newest first. Rerenders when a run Pane's status changes. */
@@ -99,11 +100,12 @@ export function formatNextRun(ms: number, nowMs = Date.now()): string {
   return formatRunTime(ms, true);
 }
 
-/** A run's outcome in a few words: "running 12m", "ok · 41m", "failed", "skipped". */
+/** A run's outcome in a few words: "running 12m", "ok · 41m", "started with a warning", "failed", "skipped". */
 export function describeRun(view: LoopRunView): string {
   const duration = view.durationMs === null ? null : formatDuration(view.durationMs);
   if (view.outcome === 'running') return duration ? `running ${duration}` : 'running';
   if (view.outcome === 'ok') return duration ? `ok · ${duration}` : 'ok';
+  if (view.outcome === 'warning') return 'started with a warning';
   return view.outcome;
 }
 
@@ -117,6 +119,7 @@ export function describeLoopCommand(loop: Pick<Loop, 'agent' | 'toolCommand' | '
 export const RUN_DOT_CLASS = {
   running: 'bg-status-info',
   ok: 'bg-status-success',
+  warning: 'bg-status-warning',
   failed: 'bg-status-error',
   skipped: 'bg-text-muted',
 } satisfies Record<LoopRunOutcome, string>;

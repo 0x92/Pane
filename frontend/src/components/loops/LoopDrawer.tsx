@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import type { Loop, LoopAgent, LoopInput, LoopSchedulePreview } from '../../../../shared/types/loop';
+import { LOOP_NAME_MAX_LENGTH, loopSlug, type Loop, type LoopAgent, type LoopInput, type LoopSchedulePreview } from '../../../../shared/types/loop';
 import { useLoopsStore } from '../../stores/loopsStore';
 import { API } from '../../utils/api';
 import { Button } from '../ui/Button';
@@ -50,10 +50,6 @@ function formFrom(loop: Loop | undefined): LoopForm {
     cron: loop?.cron ?? '0 3 * * *',
     worktreeTemplate: loop?.worktreeTemplate ?? '',
   };
-}
-
-function slugify(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'name';
 }
 
 /** The cron's meaning from main, asked again a moment after typing stops. */
@@ -133,7 +129,7 @@ function LoopDrawerForm({ loop, onClose }: { loop: Loop | undefined; onClose: ()
     <>
       <ModalHeader title={loop ? 'Edit loop' : 'New loop'} description={loop?.name} onClose={onClose} />
       <ModalBody className="flex flex-col gap-4">
-        <Input label="Name" value={form.name} onChange={event => update({ name: event.target.value })} placeholder="Nightly bug sweep" fullWidth autoFocus />
+        <Input label="Name" value={form.name} onChange={event => update({ name: event.target.value })} placeholder="Nightly bug sweep" maxLength={LOOP_NAME_MAX_LENGTH} fullWidth autoFocus />
 
         <div>
           <p className="mb-1 text-label font-medium text-text-primary" id="loop-project-label">Project</p>
@@ -203,13 +199,13 @@ function LoopDrawerForm({ loop, onClose }: { loop: Loop | undefined; onClose: ()
           label="Branch template"
           value={form.worktreeTemplate}
           onChange={event => update({ worktreeTemplate: event.target.value })}
-          placeholder={`loop-${slugify(form.name)}`}
+          placeholder={loopSlug(`loop-${form.name}`)}
           helperText="Each run gets a new worktree from the project's default branch."
           className="font-mono text-sm"
           fullWidth
         />
 
-        <div className="flex gap-2 rounded-md border border-[color-mix(in_srgb,var(--color-status-warning)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] px-3 py-2 text-xs text-text-primary">
+        <div className="flex gap-2 rounded-md border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-text-primary">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-status-warning" aria-hidden="true" />
           <span>Runs unattended with permission prompts skipped. At most once an hour. Keeps the last 10 runs.</span>
         </div>

@@ -1,9 +1,10 @@
 import { useMemo } from 'react';
-import { Pause, Pencil, Play, Plus, Repeat } from 'lucide-react';
+import { Plus, Repeat } from 'lucide-react';
 import type { Loop } from '../../../../shared/types/loop';
 import { openLoopRun, useLoopsStore } from '../../stores/loopsStore';
 import { cn } from '../../utils/cn';
 import { Button } from '../ui/Button';
+import { LoopActions } from './LoopActions';
 import { LoopRunStrip } from './LoopRunStrip';
 import {
   RUN_DOT_CLASS,
@@ -70,12 +71,14 @@ function SummaryCard({ label, children }: { label: string; children: React.React
 
 function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) {
   const views = useLoopRunViews(loop);
-  const runNow = useLoopsStore(state => state.runNow);
-  const setEnabled = useLoopsStore(state => state.setEnabled);
-  const openDrawer = useLoopsStore(state => state.openDrawer);
-  const okCount = views.filter(view => view.outcome === 'ok').length;
-  const failedCount = views.filter(view => view.outcome === 'failed').length;
-  const counts = [okCount > 0 && `${okCount} ok`, failedCount > 0 && `${failedCount} failed`].filter(Boolean).join(' · ') || 'No runs yet';
+  const count = (outcome: LoopRunView['outcome']) => views.filter(view => view.outcome === outcome).length;
+  const [okCount, warningCount, failedCount] = [count('ok'), count('warning'), count('failed')];
+  const counts = [
+    okCount > 0 && `${okCount} ok`,
+    warningCount > 0 && `${warningCount} with a warning`,
+    failedCount > 0 && `${failedCount} failed`,
+  ].filter(Boolean).join(' · ') || 'No runs yet';
+  const latestSessionId = views.find(view => view.session)?.session?.id;
 
   return (
     <div className="flex min-w-0 flex-col gap-4" data-testid="loop-detail">
@@ -85,12 +88,10 @@ function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) 
         <span className="rounded-full border border-border-primary px-2 py-0.5 text-[11px] text-text-secondary">{projectName}</span>
         {!loop.enabled && <span className="rounded-full border border-border-primary px-2 py-0.5 text-[11px] text-text-tertiary">paused</span>}
         <div className="ml-auto flex items-center gap-2">
-          <Button size="sm" onClick={() => void runNow(loop.id)}><Play className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />Run now</Button>
-          <Button size="sm" variant="secondary" onClick={() => void setEnabled(loop.id, !loop.enabled)}>
-            {loop.enabled ? <Pause className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" /> : <Play className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />}
-            {loop.enabled ? 'Pause' : 'Resume'}
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => openDrawer(loop.id)}><Pencil className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />Edit</Button>
+          {latestSessionId && (
+            <Button size="sm" variant="secondary" onClick={() => openLoopRun(latestSessionId)}>Open latest run</Button>
+          )}
+          <LoopActions loop={loop} />
         </div>
       </div>
 
@@ -136,7 +137,9 @@ function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) 
                 <span className="truncate">{formatRunTime(view.run.slotAtMs, true)}</span>
               </span>
               <span role="cell" className="truncate text-text-secondary">{describeRun(view)}</span>
-              <span role="cell" className="truncate font-mono text-xs text-text-secondary">{view.branch ?? view.run.error ?? ''}</span>
+              <span role="cell" className={cn('truncate text-xs', view.outcome === 'warning' ? 'text-status-warning' : 'font-mono text-text-secondary')}>
+                {view.outcome === 'warning' ? view.run.error : view.branch ?? view.run.error ?? ''}
+              </span>
               <span role="cell" className="flex w-16 justify-end">
                 {view.session && (
                   <Button size="sm" variant="secondary" aria-label={`Open run ${formatRunTime(view.run.slotAtMs)}`} onClick={openLoopRun.bind(null, view.session.id)}>Open</Button>

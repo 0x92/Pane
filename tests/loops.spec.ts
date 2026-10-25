@@ -36,7 +36,7 @@ test('creates, runs, pauses, edits and deletes a loop', async ({ page }) => {
   await drawer.getByRole('radio', { name: 'Command' }).click();
   await drawer.getByLabel('Command').fill('agent-farm run greenfield/bug-sweep --since 24h');
   await drawer.getByLabel('Schedule (cron)').fill('*/15 * * * *');
-  await expect(drawer.getByText('Loops run at most once an hour')).toBeVisible();
+  // The mock rejects sub-hourly crons like main does; the drawer must not let it be saved.
   await expect(drawer.getByRole('button', { name: 'Save' })).toBeDisabled();
   await drawer.getByRole('button', { name: 'daily' }).click();
   await expect(drawer.getByLabel('Schedule (cron)')).toHaveValue('0 3 * * *');

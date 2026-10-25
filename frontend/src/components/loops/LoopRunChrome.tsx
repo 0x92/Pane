@@ -1,7 +1,7 @@
-import { ChevronRight, Pause, Pencil, Play, Repeat } from 'lucide-react';
-import { navigateToLoops, openLoopRun, useLoopsStore, type LoopRunRef } from '../../stores/loopsStore';
+import { ChevronRight, Repeat } from 'lucide-react';
+import { navigateToLoops, openLoopRun, type LoopRunRef } from '../../stores/loopsStore';
 import { cn } from '../../utils/cn';
-import { Button } from '../ui/Button';
+import { LoopActions } from './LoopActions';
 import { RUN_DOT_CLASS, describeRun, formatDuration, formatNextRun, formatRunTime, useLoopRunViews } from './loopRunView';
 
 /**
@@ -12,9 +12,6 @@ export function LoopRunHeader({ runRef }: { runRef: LoopRunRef }) {
   const { loop, run } = runRef;
   const views = useLoopRunViews(loop);
   const view = views.find(candidate => candidate.run.id === run.id);
-  const runNow = useLoopsStore(state => state.runNow);
-  const setEnabled = useLoopsStore(state => state.setEnabled);
-  const openDrawer = useLoopsStore(state => state.openDrawer);
   const next = loop.nextRunAtMs === null ? 'paused' : `next run ${formatNextRun(loop.nextRunAtMs).replace(/^(Today|Tomorrow)/, word => word.toLowerCase())}`;
 
   return (
@@ -39,12 +36,7 @@ export function LoopRunHeader({ runRef }: { runRef: LoopRunRef }) {
           {loop.scheduleText} · {next} · <span className="text-text-tertiary">permission prompts skipped</span>
         </span>
         <div className="ml-auto flex flex-shrink-0 items-center gap-2">
-          <Button size="sm" onClick={() => void runNow(loop.id)}><Play className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />Run now</Button>
-          <Button size="sm" variant="secondary" onClick={() => void setEnabled(loop.id, !loop.enabled)}>
-            {loop.enabled ? <Pause className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" /> : <Play className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />}
-            {loop.enabled ? 'Pause' : 'Resume'}
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => openDrawer(loop.id)}><Pencil className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />Edit</Button>
+          <LoopActions loop={loop} />
         </div>
       </div>
     </div>
@@ -61,7 +53,7 @@ export function LoopRunsRail({ runRef }: { runRef: LoopRunRef }) {
         {views.map(view => {
           const current = view.run.id === runRef.run.id;
           const sessionId = view.session?.id;
-          const trailing = view.outcome === 'failed' || view.outcome === 'skipped'
+          const trailing = view.outcome === 'failed' || view.outcome === 'skipped' || view.outcome === 'warning'
             ? view.outcome
             : view.durationMs === null ? '' : formatDuration(view.durationMs);
           return (

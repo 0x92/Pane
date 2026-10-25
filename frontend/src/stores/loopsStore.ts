@@ -128,8 +128,9 @@ const REFRESH_INTERVAL_MS = 60_000;
 
 /**
  * Keeps loops current while the sidebar is mounted: on start, whenever main
- * says they changed, when a Pane is deleted, when this window starts driving
- * another Pane host, and every minute so "next run" and skipped runs move on.
+ * says they changed, when a Pane or project is deleted (a project's loops go
+ * with it), when this window starts driving another Pane host, and every
+ * minute so "next run" and skipped runs move on.
  */
 export function useLoopsRefresh(): void {
   const refresh = useLoopsStore(state => state.refresh);
@@ -142,11 +143,12 @@ export function useLoopsRefresh(): void {
       events.onLoopsChanged(reread),
       events.onSessionDeleted(reread),
       events.onRemoteDaemonResyncRequested(reread),
+      events.onProjectListChanged?.(reread),
     ];
     const timer = window.setInterval(reread, REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(timer);
-      for (const unsubscribe of unsubscribers) unsubscribe();
+      for (const unsubscribe of unsubscribers) unsubscribe?.();
     };
   }, [refresh]);
 }
