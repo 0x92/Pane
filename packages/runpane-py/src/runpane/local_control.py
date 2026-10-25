@@ -287,20 +287,29 @@ def format_lock_line(lock: Dict[str, Any]) -> str:
 LOOP_AGENTS = ("claude", "codex", "cursor")
 
 
-def _invoke_loops(parsed: Any, channel: str, args: List[Any]) -> Any:
-    """The loops channels answer {success, data?, error?}, like the app's other handlers."""
-    response = invoke_daemon(channel, args, pane_dir=parsed.pane_dir) or {}
-    if not response.get("success"):
-        raise PaneDaemonClientError(
-            response.get("error") or f"Pane could not run {channel}. Nothing was changed.",
-            "ERR_RUNPANE_LOOPS",
-            "See loops and their ids with `runpane loops list`.",
-        )
-    return response.get("data")
+LOOP_KEYS = ("id", "name", "projectId", "cron", "enabled", "createdAtMs", "nextRunAtMs", "scheduleText", "runs")
+LOOP_OPTIONAL_KEYS = ("agent", "toolCommand", "initialInput", "worktreeTemplate")
+LOOP_RUN_KEYS = ("id", "loopId", "slotAtMs", "trigger", "status", "error", "sessionId")
+
+
+def _loop_json(loop: Dict[str, Any]) -> Dict[str, Any]:
+    """A loop in the npm CLI's field order, set optional fields last, so --json output matches it."""
+    result = {key: loop.get(key) for key in LOOP_KEYS}
+    result["runs"] = [{key: run.get(key) for key in LOOP_RUN_KEYS} for run in loop.get("runs") or []]
+    result.update({key: loop[key] for key in LOOP_OPTIONAL_KEYS if loop.get(key)})
+    return result
+
+
+def _list_loops(parsed: Any) -> List[Dict[str, Any]]:
+    return [_loop_json(loop) for loop in invoke_daemon("runpane:loops:list", [], pane_dir=parsed.pane_dir).get("loops") or []]
+
+
+def _invoke_loop(parsed: Any, channel: str, request: Dict[str, Any]) -> Dict[str, Any]:
+    return _loop_json(invoke_daemon(channel, [request], pane_dir=parsed.pane_dir)["loop"])
 
 
 def run_loops_list(parsed: Any) -> int:
-    loops = _invoke_loops(parsed, "loops:list", []) or []
+    loops = _list_loops(parsed)
     if parsed.json:
         print_json({"ok": True, "loops": loops})
         return 0
@@ -320,7 +329,7 @@ def run_loops_list(parsed: Any) -> int:
 def run_loops_save(parsed: Any) -> int:
     loop_input = merge_loop_update(parsed) if parsed.command == "loops update" else build_loop_create(parsed)
     if parsed.dry_run:
-        preview = _invoke_loops(parsed, "loops:preview", [loop_input["cron"]]) or {}
+        preview = invoke_daemon("runpane:loops:preview", [{"cron": loop_input["cron"]}], pane_dir=parsed.pane_dir)
         if not preview.get("ok"):
             raise PaneDaemonClientError(
                 f"{preview.get('error')} Nothing was saved.",
@@ -335,7 +344,7 @@ def run_loops_save(parsed: Any) -> int:
             print(f"Would save loop {loop_input['name']}: {preview.get('scheduleText')}, next run {format_loop_time(preview.get('nextRunAtMs'))}{paused}.")
         return 0
     confirm_mutation(parsed)
-    loop = _invoke_loops(parsed, "loops:save", [loop_input]) or {}
+    loop = _invoke_loop(parsed, "runpane:loops:save", loop_input)
     if parsed.json:
         print_json({"ok": True, "loop": loop})
     else:
@@ -346,7 +355,7 @@ def run_loops_save(parsed: Any) -> int:
 def run_loops_run(parsed: Any) -> int:
     loop_id = _require_loop_id(parsed)
     confirm_mutation(parsed)
-    loop = _invoke_loops(parsed, "loops:run-now", [loop_id]) or {}
+    loop = _invoke_loop(parsed, "runpane:loops:run-now", {"loopId": loop_id})
     runs = loop.get("runs") or []
     run = runs[0] if runs else {}
     failed = run.get("status") == "failed"
@@ -363,7 +372,7 @@ def run_loops_run(parsed: Any) -> int:
 def run_loops_set_enabled(parsed: Any, enabled: bool) -> int:
     loop_id = _require_loop_id(parsed)
     confirm_mutation(parsed)
-    loop = _invoke_loops(parsed, "loops:set-enabled", [loop_id, enabled]) or {}
+    loop = _invoke_loop(parsed, "runpane:loops:set-enabled", {"loopId": loop_id, "enabled": enabled})
     if parsed.json:
         print_json({"ok": True, "loop": loop})
     elif enabled:
@@ -376,7 +385,7 @@ def run_loops_set_enabled(parsed: Any, enabled: bool) -> int:
 def run_loops_delete(parsed: Any) -> int:
     loop_id = _require_loop_id(parsed)
     confirm_mutation(parsed)
-    _invoke_loops(parsed, "loops:delete", [loop_id])
+    invoke_daemon("runpane:loops:delete", [{"loopId": loop_id}], pane_dir=parsed.pane_dir)
     if parsed.json:
         print_json({"ok": True, "deleted": loop_id})
     else:
@@ -432,7 +441,7 @@ def merge_loop_update(parsed: Any) -> Dict[str, Any]:
     agent = _loop_agent(parsed)
     if agent and parsed.tool_command:
         raise ValueError("Pass either --agent or --tool-command, not both.")
-    loops = _invoke_loops(parsed, "loops:list", []) or []
+    loops = _list_loops(parsed)
     loop = next((candidate for candidate in loops if candidate.get("id") == loop_id), None)
     if loop is None:
         raise PaneDaemonClientError(
@@ -456,8 +465,10 @@ def merge_loop_update(parsed: Any) -> Dict[str, Any]:
 
 
 def _without_empty_loop_fields(loop_input: Dict[str, Any]) -> Dict[str, Any]:
-    optional = ("agent", "toolCommand", "initialInput", "worktreeTemplate")
-    return {key: value for key, value in loop_input.items() if key not in optional or (value and str(value).strip())}
+    """Drops blank optional fields and puts the set ones last, in the npm CLI's order."""
+    result = {key: value for key, value in loop_input.items() if key not in LOOP_OPTIONAL_KEYS}
+    result.update({key: loop_input[key] for key in LOOP_OPTIONAL_KEYS if loop_input.get(key) and str(loop_input[key]).strip()})
+    return result
 
 
 def describe_next_run(loop: Dict[str, Any]) -> str:

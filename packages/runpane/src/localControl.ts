@@ -2286,6 +2286,7 @@ const loopFieldsSchema = boundary.object({
   scheduleText: boundary.string,
   runs: boundary.array(loopRunSchema),
 });
+/** Drops unset optional fields and puts the set ones last; the Python CLI prints loops in this same order. */
 const loopSchema: BoundarySchema<Loop> = {
   decode(cursor) {
     const { agent, toolCommand, initialInput, worktreeTemplate, ...rest } = loopFieldsSchema.decode(cursor);
@@ -2302,21 +2303,16 @@ const loopPreviewSchema: BoundarySchema<LoopSchedulePreview> = boundary.union(
   boundary.object({ ok: boundary.literal(false), error: boundary.string }),
 );
 
-/** The loops channels answer `{ success, data?, error? }`, like the app's other handlers. */
-async function invokeLoops<Value>(parsed: ParsedArgs, channel: string, args: unknown[], dataSchema: BoundarySchema<Value>): Promise<Value> {
-  const response = await invokeDaemon(channel, args, boundary.object({
-    success: boundary.boolean,
-    data: boundary.optional(boundary.json),
-    error: boundary.optional(boundary.nullable(boundary.string)),
-  }), { paneDir: parsed.paneDir });
-  if (!response.success) {
-    throw new RunpaneError('ERR_RUNPANE_LOOPS', response.error || `Pane could not run ${channel}. Nothing was changed.`, 'See loops and their ids with `runpane loops list`.');
-  }
-  return decodeBoundary(response.data, dataSchema);
+const loopListResultSchema = boundary.object({ ok: boundary.literal(true), loops: boundary.array(loopSchema) });
+const loopResultSchema = boundary.object({ ok: boundary.literal(true), loop: loopSchema });
+const loopDeleteResultSchema = boundary.object({ ok: boundary.literal(true), deleted: boundary.string });
+
+async function listLoops(parsed: ParsedArgs): Promise<Loop[]> {
+  return (await invokeDaemon('runpane:loops:list', [], loopListResultSchema, { paneDir: parsed.paneDir })).loops;
 }
 
 export async function runLoopsList(parsed: ParsedArgs): Promise<number> {
-  const loops = await invokeLoops(parsed, 'loops:list', [], boundary.array(loopSchema));
+  const loops = await listLoops(parsed);
   if (parsed.json) {
     printJson({ ok: true, loops });
     return 0;
@@ -2339,7 +2335,7 @@ export async function runLoopsList(parsed: ParsedArgs): Promise<number> {
 export async function runLoopsSave(parsed: ParsedArgs): Promise<number> {
   const input = parsed.command === 'loops update' ? await mergeLoopUpdate(parsed) : await buildLoopCreate(parsed);
   if (parsed.dryRun) {
-    const preview = await invokeLoops(parsed, 'loops:preview', [input.cron], loopPreviewSchema);
+    const preview = await invokeDaemon('runpane:loops:preview', [{ cron: input.cron }], loopPreviewSchema, { paneDir: parsed.paneDir });
     if (!preview.ok) throw new RunpaneError('ERR_RUNPANE_LOOP_CRON', `${preview.error} Nothing was saved.`, 'Pass a five-field cron such as "0 3 * * *" with --cron.');
     const result = { ok: true, dryRun: true, input, scheduleText: preview.scheduleText, nextRunAtMs: preview.nextRunAtMs };
     if (parsed.json) printJson(result);
@@ -2347,7 +2343,7 @@ export async function runLoopsSave(parsed: ParsedArgs): Promise<number> {
     return 0;
   }
   await confirmMutation(parsed);
-  const loop = await invokeLoops(parsed, 'loops:save', [input], loopSchema);
+  const { loop } = await invokeDaemon('runpane:loops:save', [input], loopResultSchema, { paneDir: parsed.paneDir });
   if (parsed.json) printJson({ ok: true, loop });
   else console.log(`Saved loop ${loop.name} (${loop.id}): ${loop.scheduleText}, ${describeNextRun(loop)}.`);
   return 0;
@@ -2356,7 +2352,7 @@ export async function runLoopsSave(parsed: ParsedArgs): Promise<number> {
 export async function runLoopsRun(parsed: ParsedArgs): Promise<number> {
   const id = requireLoopId(parsed);
   await confirmMutation(parsed);
-  const loop = await invokeLoops(parsed, 'loops:run-now', [id], loopSchema);
+  const { loop } = await invokeDaemon('runpane:loops:run-now', [{ loopId: id }], loopResultSchema, { paneDir: parsed.paneDir });
   const [run] = loop.runs;
   if (parsed.json) {
     printJson({ ok: true, loop });
@@ -2371,7 +2367,7 @@ export async function runLoopsRun(parsed: ParsedArgs): Promise<number> {
 export async function runLoopsSetEnabled(parsed: ParsedArgs, enabled: boolean): Promise<number> {
   const id = requireLoopId(parsed);
   await confirmMutation(parsed);
-  const loop = await invokeLoops(parsed, 'loops:set-enabled', [id, enabled], loopSchema);
+  const { loop } = await invokeDaemon('runpane:loops:set-enabled', [{ loopId: id, enabled }], loopResultSchema, { paneDir: parsed.paneDir });
   if (parsed.json) printJson({ ok: true, loop });
   else console.log(enabled ? `Resumed loop ${loop.name}: ${describeNextRun(loop)}.` : `Paused loop ${loop.name}.`);
   return 0;
@@ -2380,7 +2376,7 @@ export async function runLoopsSetEnabled(parsed: ParsedArgs, enabled: boolean): 
 export async function runLoopsDelete(parsed: ParsedArgs): Promise<number> {
   const id = requireLoopId(parsed);
   await confirmMutation(parsed);
-  await invokeLoops(parsed, 'loops:delete', [id], boundary.optional(boundary.json));
+  await invokeDaemon('runpane:loops:delete', [{ loopId: id }], loopDeleteResultSchema, { paneDir: parsed.paneDir });
   if (parsed.json) printJson({ ok: true, deleted: id });
   else console.log(`Deleted loop ${id}.`);
   return 0;
@@ -2433,7 +2429,7 @@ async function mergeLoopUpdate(parsed: ParsedArgs): Promise<LoopInput> {
   if (parsed.paused) throw new Error('runpane loops update does not take --paused. Use `runpane loops pause --loop <id>`.');
   const agent = loopAgent(parsed);
   if (agent && parsed.toolCommand) throw new Error('Pass either --agent or --tool-command, not both.');
-  const loops = await invokeLoops(parsed, 'loops:list', [], boundary.array(loopSchema));
+  const loops = await listLoops(parsed);
   const loop = loops.find((candidate) => candidate.id === id);
   if (!loop) throw new RunpaneError('ERR_RUNPANE_LOOP_NOT_FOUND', `No loop found with id ${id}. Nothing was changed.`, 'See loop ids with `runpane loops list`.');
   const replacesTool = Boolean(agent || parsed.toolCommand);

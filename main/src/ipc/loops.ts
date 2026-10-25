@@ -40,8 +40,9 @@ async function respond<T>(work: () => T | Promise<T>): Promise<LoopResponse<T>> 
 }
 
 /**
- * Loops (scheduled tasks). Daemon-owned like `sessions:*`: the UI, `runpane
- * loops` and paired remote clients all use these channels, with the same access.
+ * Loops (scheduled tasks) for the app. Daemon-owned like `sessions:*`, so the
+ * UI and paired remote clients use them with the same access. `runpane loops`
+ * uses the `runpane:loops:*` handlers in `runpane.ts`.
  */
 export function registerLoopHandlers(ipcMain: IpcMain, loopManager: LoopManager, commandRegistry: PaneCommandRegistry): void {
   commandRegistry.register('loops:list', () => respond(() => loopManager.list()));
