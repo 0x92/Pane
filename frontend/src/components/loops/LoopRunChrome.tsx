@@ -2,7 +2,7 @@ import { ChevronRight, Repeat } from 'lucide-react';
 import { navigateToLoops, openLoopRun, type LoopRunRef } from '../../stores/loopsStore';
 import { cn } from '../../utils/cn';
 import { LoopActions } from './LoopActions';
-import { RUN_DOT_CLASS, describeRun, formatDuration, formatNextRun, formatRunTime, useLoopRunViews } from './loopRunView';
+import { RUN_DOT_CLASS, describeRun, formatDuration, formatNextRun, formatRunTime, runWarning, useLoopRunViews } from './loopRunView';
 
 /**
  * Above a run Pane's tabs: where the run sits (Loops › loop › run), how it is
@@ -12,6 +12,7 @@ export function LoopRunHeader({ runRef }: { runRef: LoopRunRef }) {
   const { loop, run } = runRef;
   const views = useLoopRunViews(loop);
   const view = views.find(candidate => candidate.run.id === run.id);
+  const warning = view ? runWarning(view) : null;
   const next = loop.nextRunAtMs === null ? 'paused' : `next run ${formatNextRun(loop.nextRunAtMs).replace(/^(Today|Tomorrow)/, word => word.toLowerCase())}`;
 
   return (
@@ -32,9 +33,14 @@ export function LoopRunHeader({ runRef }: { runRef: LoopRunRef }) {
           <span className={cn('h-2 w-2 rounded-full', RUN_DOT_CLASS[view?.outcome ?? 'ok'])} aria-hidden="true" />
           {view ? describeRun(view) : 'ok'}
         </span>
-        <span className="min-w-0 truncate text-xs text-text-secondary" title="Loop runs are unattended: the agent does not stop to ask for permission.">
-          {loop.scheduleText} · {next} · <span className="text-text-tertiary">permission prompts skipped</span>
-        </span>
+        {/* A warning takes the schedule's place in the same row, so the header never changes height over the terminal. */}
+        {warning ? (
+          <span role="status" className="min-w-0 truncate text-xs text-status-warning" title={warning}>{warning}</span>
+        ) : (
+          <span className="min-w-0 truncate text-xs text-text-secondary" title="Loop runs are unattended: the agent does not stop to ask for permission.">
+            {loop.scheduleText} · {next} · <span className="text-text-tertiary">permission prompts skipped</span>
+          </span>
+        )}
         <div className="ml-auto flex flex-shrink-0 items-center gap-2">
           <LoopActions loop={loop} />
         </div>
@@ -62,7 +68,7 @@ export function LoopRunsRail({ runRef }: { runRef: LoopRunRef }) {
               type="button"
               aria-current={current ? 'page' : undefined}
               aria-disabled={!sessionId}
-              title={view.run.error ?? undefined}
+              title={runWarning(view) ?? view.run.error ?? undefined}
               onClick={() => { if (sessionId && !current) openLoopRun(sessionId); }}
               className={cn(
                 'flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-interactive aria-disabled:cursor-default',

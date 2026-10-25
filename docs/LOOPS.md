@@ -103,6 +103,11 @@ machine-readable output. The same commands are MCP tools: `loops_list`,
   next scheduled time.
 - **Permissions.** Runs are unattended, so Claude, Codex and Cursor runs skip
   their permission prompts. A `--tool-command` runs as written.
+- **Folder trust.** Claude and Codex ask whether to trust a folder they have
+  not seen, and each run is a new worktree. A run stopped at that prompt shows
+  as **needs attention**. Open the run and answer it, or open the project
+  folder in the agent once and trust it so later runs start on their own. Pane
+  never answers a trust prompt for you.
 - **Run now.** `runpane loops run` starts a run immediately, even while the
   loop is paused. The schedule stays the same, and the run counts toward the 10
   kept runs.
@@ -116,7 +121,8 @@ review its work the way you review any Pane.
 `runpane loops list --json` lists each loop's newest runs. A run's `status` is
 `started` (its Pane was created; `sessionId` is that Pane's id, so read its
 progress with `runpane agents status --pane <sessionId>`; when `error` is set
-too, the Pane started but its agent never became ready or Pane could not
-confirm the prompt arrived, and the app shows the run as a warning), `failed` (the Pane
+too, the Pane started but its agent is waiting at a prompt such as folder
+trust, never became ready, or Pane could not confirm the prompt arrived; the
+app shows the run as needing attention), `failed` (the Pane
 could not be created; `error` says why) or `skipped` (the run came and went
 while Pane was not running).

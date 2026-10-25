@@ -2,11 +2,12 @@ import { LOOP_KEPT_RUNS } from '../../../../shared/types/loop';
 import { openLoopRun } from '../../stores/loopsStore';
 import { cn } from '../../utils/cn';
 import { Tooltip } from '../ui/Tooltip';
-import { RUN_DOT_CLASS, formatDuration, formatRunTime, type LoopRunView } from './loopRunView';
+import { RUN_DOT_CLASS, formatDuration, formatRunTime, runWarning, type LoopRunView } from './loopRunView';
 
 /** What the run did, for its tooltip: "Exited after 22m · loop-sweep-1023" or why it never started. */
 function runDetail(view: LoopRunView): string {
-  if (view.outcome === 'warning' && view.run.error) return view.branch ? `${view.run.error} · ${view.branch}` : view.run.error;
+  const warning = runWarning(view);
+  if (warning) return view.branch ? `${warning} · ${view.branch}` : warning;
   if (view.outcome === 'failed' || view.outcome === 'skipped') return view.run.error ?? (view.outcome === 'skipped' ? 'Pane was not running when it came due.' : 'The Pane could not be created.');
   const duration = view.durationMs === null ? null : formatDuration(view.durationMs);
   const lead = view.outcome === 'running' ? (duration ? `Running for ${duration}` : 'Running') : (duration ? `Finished after ${duration}` : 'Finished');

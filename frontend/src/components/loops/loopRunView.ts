@@ -5,7 +5,10 @@ import { usePanelStore } from '../../stores/panelStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { rollupSessionAgentState } from '../../utils/agentStatus';
 
-/** `warning`: the run's Pane exists but its error says it may not be doing its job, such as an undelivered prompt. */
+/**
+ * `warning`: the run's Pane exists but may not be doing its job: its agent is
+ * waiting at a prompt (such as folder trust) or the run started with a warning.
+ */
 export type LoopRunOutcome = 'running' | 'ok' | 'warning' | 'failed' | 'skipped';
 
 export interface LoopRunView {
@@ -17,25 +20,31 @@ export interface LoopRunView {
   durationMs: number | null;
   /** The run's worktree, which Pane names after its branch. */
   branch: string | null;
+  /** The run's agent is waiting at a prompt in its terminal now. */
+  waitingForAnswer: boolean;
 }
 
 /**
  * Whether a run Pane is still working: its agent says so, or, for a command
- * Pane with no agent to report, the Pane itself is starting or running.
+ * Pane with no agent to report, the Pane itself is starting or running. An
+ * agent waiting at a prompt is not working: unattended, it never moves on.
  */
 function isRunning(session: Session, agentState: AgentState): boolean {
-  if (agentState === 'working' || agentState === 'blocked') return true;
+  if (agentState === 'working') return true;
   if (agentState !== 'unknown') return false;
   return session.status === 'running' || session.status === 'initializing';
 }
 
 function viewRun(run: LoopRun, session: Session | undefined, agentState: AgentState, nowMs: number): LoopRunView {
-  if (run.status !== 'started') return { run, outcome: run.status, session: undefined, durationMs: null, branch: null };
+  if (run.status !== 'started') return { run, outcome: run.status, session: undefined, durationMs: null, branch: null, waitingForAnswer: false };
   const running = session ? isRunning(session, agentState) : false;
+  const waitingForAnswer = session !== undefined && agentState === 'blocked';
   // Only a working run has a trustworthy end (now): a session's lastActivity is not when its agent finished.
   const durationMs = running && nowMs > run.slotAtMs ? nowMs - run.slotAtMs : null;
   const branch = session?.worktreePath ? session.worktreePath.split(/[\\/]/).filter(Boolean).pop() ?? null : null;
-  return { run, outcome: run.error ? 'warning' : running ? 'running' : 'ok', session, durationMs, branch };
+  // A start-up warning stands until the run is visibly working again, as after its prompt is answered.
+  const outcome = waitingForAnswer || (run.error && !running) ? 'warning' : running ? 'running' : 'ok';
+  return { run, outcome, session, durationMs, branch, waitingForAnswer };
 }
 
 /** Every run of a loop with its outcome, newest first. Rerenders when a run Pane's status changes. */
@@ -100,13 +109,19 @@ export function formatNextRun(ms: number, nowMs = Date.now()): string {
   return formatRunTime(ms, true);
 }
 
-/** A run's outcome in a few words: "running 12m", "ok · 41m", "started with a warning", "failed", "skipped". */
+/** A run's outcome in a few words: "running 12m", "ok · 41m", "needs attention", "failed", "skipped". */
 export function describeRun(view: LoopRunView): string {
   const duration = view.durationMs === null ? null : formatDuration(view.durationMs);
   if (view.outcome === 'running') return duration ? `running ${duration}` : 'running';
   if (view.outcome === 'ok') return duration ? `ok · ${duration}` : 'ok';
-  if (view.outcome === 'warning') return 'started with a warning';
+  if (view.outcome === 'warning') return view.waitingForAnswer ? 'needs attention' : 'started with a warning';
   return view.outcome;
+}
+
+/** Why a run needs a look, or null: its start-up warning, or the prompt its agent is waiting at now. */
+export function runWarning(view: LoopRunView): string | null {
+  if (view.outcome !== 'warning') return null;
+  return view.run.error ?? 'The agent is waiting for an answer in its terminal. Open the run and answer it.';
 }
 
 /** What a loop runs, as one line: the command, or the agent and its first input. */

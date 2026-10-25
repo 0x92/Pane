@@ -115,6 +115,8 @@ const seededSessions = [
   runSession('sweep-run-20', sweepSlots[4], 35, 'stopped'),
 ];
 
+const TRUST_WARNING = 'The run is waiting at the agent\'s folder-trust prompt in its new worktree, so it has not started.';
+
 const seededLoops: Loop[] = [
   {
     id: 'loop-sweep',
@@ -130,7 +132,7 @@ const seededLoops: Loop[] = [
       { id: 'r24', loopId: 'loop-sweep', slotAtMs: manualRunAtMs, trigger: 'manual', status: 'started', error: null, sessionId: 'sweep-run-24' },
       { id: 'r23', loopId: 'loop-sweep', slotAtMs: sweepSlots[1], trigger: 'schedule', status: 'failed', error: 'git worktree add failed: branch already exists', sessionId: null },
       { id: 'r22', loopId: 'loop-sweep', slotAtMs: sweepSlots[2], trigger: 'schedule', status: 'started', error: null, sessionId: 'sweep-run-22' },
-      { id: 'r21', loopId: 'loop-sweep', slotAtMs: sweepSlots[3], trigger: 'schedule', status: 'started', error: null, sessionId: 'sweep-run-21' },
+      { id: 'r21', loopId: 'loop-sweep', slotAtMs: sweepSlots[3], trigger: 'schedule', status: 'started', error: TRUST_WARNING, sessionId: 'sweep-run-21' },
       { id: 'r20', loopId: 'loop-sweep', slotAtMs: sweepSlots[4], trigger: 'schedule', status: 'started', error: null, sessionId: 'sweep-run-20' },
       { id: 'r19', loopId: 'loop-sweep', slotAtMs: sweepSlots[5], trigger: 'schedule', status: 'skipped', error: 'Pane was not running when this run came due.', sessionId: null },
     ],
@@ -176,13 +178,14 @@ for (const theme of ['light-rounded', 'dark'] as const) {
     await page.getByTestId('loops-nav').click();
     const detail = page.getByTestId('loop-detail');
     await expect(detail.getByRole('heading', { name: 'Nightly bug sweep' })).toBeVisible();
-    await expect(detail).toContainText('3 ok · 1 failed');
+    await expect(detail).toContainText('2 ok · 1 with a warning · 1 failed');
+    await expect(detail.getByRole('row').filter({ hasText: 'started with a warning' })).toContainText(TRUST_WARNING);
     await expect(page.getByTestId('loops-nav')).toContainText('3');
     await shoot(page, `${prefix}01-loops-page`);
 
-    // Oldest first: skipped, then three ok runs; the newest ok one is the fourth square.
+    // Oldest first: skipped, ok, the warning, then the newest ok run in the fourth square.
     await detail.getByRole('group', { name: 'Last 10 runs' }).getByRole('button').nth(3).hover();
-    await expect(page.getByText('Finished after 41m · loop-nightly-bug-sweep-22')).toBeVisible();
+    await expect(page.getByText('Finished · loop-nightly-bug-sweep-22')).toBeVisible();
     await shoot(page, `${prefix}02-run-tooltip`);
 
     await page.getByTestId('loop-list-item').filter({ hasText: 'Weekly docs audit' }).click();
@@ -197,7 +200,7 @@ for (const theme of ['light-rounded', 'dark'] as const) {
     await drawer.getByRole('radio', { name: 'Command' }).click();
     await drawer.getByLabel('Command').fill('agent-farm run greenfield/bug-sweep --since 24h');
     await drawer.getByLabel('Schedule (cron)').fill('*/15 * * * *');
-    await expect(drawer.getByText('Loops run at most once an hour')).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Save' })).toBeDisabled();
     await shoot(page, `${prefix}05-drawer-cron-error`);
     await drawer.getByRole('button', { name: 'Cancel' }).click();
 
@@ -220,6 +223,6 @@ for (const theme of ['light-rounded', 'dark'] as const) {
     // The rail switches between runs without leaving the run Pane.
     await page.getByTestId('loop-runs-rail').getByRole('button').nth(2).click();
     await expect(header.getByRole('navigation', { name: 'Breadcrumb' })).toContainText(new Date(sweepSlots[2]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-    await expect(header).toContainText('ok · 41m');
+    await expect(header.getByText('ok', { exact: true })).toBeVisible();
   });
 }

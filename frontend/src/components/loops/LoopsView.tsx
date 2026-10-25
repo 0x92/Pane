@@ -13,6 +13,7 @@ import {
   formatDuration,
   formatNextRun,
   formatRunTime,
+  runWarning,
   useLoopRunViews,
   type LoopRunView,
 } from './loopRunView';
@@ -130,7 +131,7 @@ function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) 
               key={view.run.id}
               role="row"
               className="grid grid-cols-[minmax(9rem,1.1fr)_minmax(6rem,1fr)_minmax(0,1.6fr)_auto] items-center gap-3 border-b border-border-primary py-1.5 text-[13px]"
-              title={view.run.error ?? undefined}
+              title={runWarning(view) ?? view.run.error ?? undefined}
             >
               <span role="cell" className="flex min-w-0 items-center gap-2 text-text-primary">
                 <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', RUN_DOT_CLASS[view.outcome])} aria-hidden="true" />
@@ -138,7 +139,7 @@ function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) 
               </span>
               <span role="cell" className="truncate text-text-secondary">{describeRun(view)}</span>
               <span role="cell" className={cn('truncate text-xs', view.outcome === 'warning' ? 'text-status-warning' : 'font-mono text-text-secondary')}>
-                {view.outcome === 'warning' ? view.run.error : view.branch ?? view.run.error ?? ''}
+                {runWarning(view) ?? view.branch ?? view.run.error ?? ''}
               </span>
               <span role="cell" className="flex w-16 justify-end">
                 {view.session && (
