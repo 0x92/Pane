@@ -108,11 +108,38 @@ describe('startLoopRun', () => {
       pinned: false,
       sessionId: 'pane-10',
       readiness: { ok: false, reason: { code: 'agent-not-ready', message: 'Claude did not show its prompt within 60s.' } },
+      // Claude takes its prompt on the command line, so delivery has evidence but no message.
+      initialInput: { delivered: false, submitted: false, inputBytes: 40, delivery: { state: 'unknown', evidence: 'argv' } },
     });
 
     await expect(startLoopRun(registry, nightly, slotAtMs)).resolves.toEqual({
       sessionId: 'pane-10',
-      warning: 'The agent did not become ready, so its prompt was not sent. Claude did not show its prompt within 60s.',
+      warning: 'The agent did not become ready, so Pane could not confirm it got its prompt. Claude did not show its prompt within 60s.',
+    });
+  });
+
+  it('says how to clear a folder-trust prompt the run is stuck at', async () => {
+    const { registry } = registryAnswering({
+      ok: false,
+      index: 0,
+      name: 'x',
+      pinned: false,
+      sessionId: 'pane-11',
+      readiness: {
+        ok: false,
+        blocked: {
+          kind: 'first-run-dialog',
+          message: ' Accessing workspace:\n\n /repos/demo/worktrees/loop-ping-20261025-0118\n\n Quick safety check: Is this a project you created or one you trust?\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel',
+          suggestedCommand: 'runpane panels input --panel p --keys down,enter --yes --json',
+        },
+      },
+      initialInput: { delivered: false, submitted: false, inputBytes: 40, delivery: { state: 'unknown', evidence: 'argv' } },
+    });
+
+    await expect(startLoopRun(registry, nightly, slotAtMs)).resolves.toEqual({
+      sessionId: 'pane-11',
+      warning: 'The run is waiting at the agent\'s folder-trust prompt in its new worktree, so it has not started. '
+        + 'Open the run and answer it, or open the project folder in the agent once and trust it so later runs start on their own.',
     });
   });
 

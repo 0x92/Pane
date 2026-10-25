@@ -23,10 +23,17 @@ const paneCreateResultSchema = boundary.object({
     ok: boundary.boolean,
     sessionId: boundary.optional(boundary.string),
     error: failureSchema,
-    readiness: boundary.optional(boundary.object({ ok: boundary.boolean, reason: failureSchema })),
-    initialInput: boundary.optional(boundary.object({ error: failureSchema, delivery: failureSchema })),
+    // `blocked` is Pane's own prompt detection (`detectPanelBlocker`), as `panels wait` reports it.
+    readiness: boundary.optional(boundary.object({ ok: boundary.boolean, reason: failureSchema, blocked: failureSchema })),
+    initialInput: boundary.optional(boundary.object({
+      error: failureSchema,
+      delivery: boundary.optional(boundary.object({ message: boundary.optional(boundary.string) })),
+    })),
   })),
 });
+/** The folder-trust prompts `detectPanelBlocker` recognises: Claude, Codex and Agent Farm. */
+const TRUST_PROMPT = /trust this folder|trust and continue|quick safety check|trust this repository workspace/i;
+
 const paneArchiveResultSchema = boundary.object({ ok: boundary.boolean, blocked: failureSchema });
 
 type LoopResponse<T> = { success: true; data?: T } | { success: false; error: string };
@@ -101,9 +108,18 @@ export async function startLoopRun(
   // A failed rename leaves the worktree's name; the run itself started.
   await commandRegistry.invoke('runpane:panes:rename', [{ paneId: item.sessionId, name }]).catch(() => undefined);
   if (item.ok) return { sessionId: item.sessionId };
-  // The Pane exists but is not doing its job: the agent never became ready, or the prompt did not arrive.
+  // The Pane exists but is not doing its job: the agent is stuck at a prompt, never became ready, or the prompt did not arrive.
+  const blocked = item.readiness?.blocked?.message;
+  if (blocked !== undefined) {
+    // Pane never answers trust prompts for an unattended run; the person decides.
+    const warning = TRUST_PROMPT.test(blocked)
+      ? 'The run is waiting at the agent\'s folder-trust prompt in its new worktree, so it has not started. '
+        + 'Open the run and answer it, or open the project folder in the agent once and trust it so later runs start on their own.'
+      : 'The run is waiting at a prompt in its terminal, so it has not started. Open the run and answer it.';
+    return { sessionId: item.sessionId, warning };
+  }
   if (item.readiness?.ok === false) {
-    return { sessionId: item.sessionId, warning: `The agent did not become ready, so its prompt was not sent. ${item.readiness.reason?.message ?? ''}`.trim() };
+    return { sessionId: item.sessionId, warning: `The agent did not become ready, so Pane could not confirm it got its prompt. ${item.readiness.reason?.message ?? ''}`.trim() };
   }
   const detail = item.error?.message ?? item.initialInput?.error?.message ?? item.initialInput?.delivery?.message;
   return { sessionId: item.sessionId, warning: `Pane could not confirm the prompt was submitted. ${detail ?? ''}`.trim() };
