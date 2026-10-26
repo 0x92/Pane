@@ -387,7 +387,8 @@ def run_loops_run(parsed: Any) -> int:
     else:
         if loop.get("orchestrationSessionId"):
             session = _describe_loop_session(_loop_session_names(parsed), loop["orchestrationSessionId"])
-            started = f"Sent a run of {loop.get('name')} to {session}"
+            # A Session run with a warning was held, so it was not sent.
+            started = f"Started a run of {loop.get('name')} for {session}" if run.get("error") else f"Sent a run of {loop.get('name')} to {session}"
         else:
             where = f" in Pane {run.get('sessionId')}" if run.get("sessionId") else ""
             started = f"Started a run of {loop.get('name')}{where}"

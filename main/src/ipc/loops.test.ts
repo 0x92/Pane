@@ -8,6 +8,9 @@ process.env.TZ = 'America/New_York';
 
 const slotAtMs = Date.parse('2026-10-24T07:00:00Z');
 
+/** A run context in which Pane launched nothing it remembers. */
+const noLaunches = { launchedCommand: () => undefined };
+
 const nightly: StoredLoop = {
   id: 'loop-1',
   name: 'Nightly bug sweep',
@@ -39,7 +42,7 @@ describe('startLoopRun', () => {
   it('creates an agent run through panes create, waits for its prompt, and labels it by loop and slot', async () => {
     const { registry, calls } = registryAnswering({ ok: true, index: 0, name: 'x', pinned: false, sessionId: 'pane-7' });
 
-    await expect(startLoopRun(registry, nightly, slotAtMs)).resolves.toEqual({ sessionId: 'pane-7' });
+    await expect(startLoopRun(registry, nightly, slotAtMs, noLaunches)).resolves.toEqual({ sessionId: 'pane-7' });
     expect(calls).toEqual([
       {
         channel: 'runpane:panes:create',
@@ -69,7 +72,7 @@ describe('startLoopRun', () => {
       worktreeTemplate: 'Deps Check',
     };
 
-    await startLoopRun(registry, command, slotAtMs);
+    await startLoopRun(registry, command, slotAtMs, noLaunches);
     expect(calls[0].request).toEqual({
       repo: { id: 1 },
       noFocus: true,
@@ -94,7 +97,7 @@ describe('startLoopRun', () => {
       initialInput: { delivered: true, submitted: false, inputBytes: 40, delivery: { state: 'in-composer', evidence: 'screen', message: 'The prompt is still in the composer.' } },
     });
 
-    await expect(startLoopRun(registry, nightly, slotAtMs)).resolves.toEqual({
+    await expect(startLoopRun(registry, nightly, slotAtMs, noLaunches)).resolves.toEqual({
       sessionId: 'pane-9',
       warning: 'Pane could not confirm the prompt was submitted. The prompt is still in the composer.',
     });
@@ -112,7 +115,7 @@ describe('startLoopRun', () => {
       initialInput: { delivered: false, submitted: false, inputBytes: 40, delivery: { state: 'unknown', evidence: 'argv' } },
     });
 
-    await expect(startLoopRun(registry, nightly, slotAtMs)).resolves.toEqual({
+    await expect(startLoopRun(registry, nightly, slotAtMs, noLaunches)).resolves.toEqual({
       sessionId: 'pane-10',
       warning: 'When the run started, the agent did not become ready, so Pane could not confirm it got its prompt. Claude did not show its prompt within 60s.',
     });
@@ -136,7 +139,7 @@ describe('startLoopRun', () => {
       initialInput: { delivered: false, submitted: false, inputBytes: 40, delivery: { state: 'unknown', evidence: 'argv' } },
     });
 
-    await expect(startLoopRun(registry, nightly, slotAtMs)).resolves.toEqual({
+    await expect(startLoopRun(registry, nightly, slotAtMs, noLaunches)).resolves.toEqual({
       sessionId: 'pane-11',
       warning: 'When it started, the run was stopped at the agent\'s folder-trust prompt in its new worktree. '
         + 'If it is still there, open the run and answer it, or trust the project folder in the agent once so later runs start on their own.',
@@ -146,7 +149,7 @@ describe('startLoopRun', () => {
   it('fails the run when no Pane was created', async () => {
     const { registry } = registryAnswering({ ok: false, index: 0, error: { code: 'ERR_GIT', message: 'The default branch could not be fetched.' } });
 
-    await expect(startLoopRun(registry, nightly, slotAtMs)).rejects.toThrow('The default branch could not be fetched.');
+    await expect(startLoopRun(registry, nightly, slotAtMs, noLaunches)).rejects.toThrow('The default branch could not be fetched.');
   });
 });
 
@@ -169,7 +172,7 @@ function sessionRegistry(options: {
   answer('runpane:sessions:get', { ok: true, session });
   answer('runpane:sessions:create', { ok: true, session: { ...session, name: 'Morning standup' } });
   answer('runpane:sessions:update', { ok: true, session });
-  answer('runpane:panels:resume', { ok: true, readiness: { ok: true }, ...options.resume });
+  answer('runpane:panels:resume', { ok: true, readiness: { ok: true, state: { running: true, agentType: session.agent } }, ...options.resume });
   answer('runpane:panels:submit', { ok: true, ...options.submit });
   return { registry, calls };
 }
@@ -179,7 +182,7 @@ describe('startLoopRun for a Session loop', () => {
 
   it('starts the Session agent tab and sends the prompt there, with no new Pane', async () => {
     const { registry, calls } = sessionRegistry();
-    await expect(startLoopRun(registry, standup, slotAtMs)).resolves.toEqual({ sessionId: null });
+    await expect(startLoopRun(registry, standup, slotAtMs, noLaunches)).resolves.toEqual({ sessionId: null });
     expect(calls).toEqual([
       { channel: 'runpane:sessions:get', request: { sessionId: SESSION_ID } },
       { channel: 'runpane:panels:resume', request: { panelId: 'claude-panel', waitReady: true } },
@@ -188,22 +191,66 @@ describe('startLoopRun for a Session loop', () => {
   });
 
   it('does not type the prompt into a prompt the agent is stopped at', async () => {
-    const { registry, calls } = sessionRegistry({ resume: { readiness: { ok: false, blocked: { message: 'Do you want to proceed? 1. Yes 2. No' } } } });
-    await expect(startLoopRun(registry, standup, slotAtMs)).resolves.toEqual({
+    const { registry, calls } = sessionRegistry({ resume: { readiness: { ok: false, blocked: { message: 'Do you want to proceed? 1. Yes 2. No' }, state: { running: true, agentType: 'claude' } } } });
+    await expect(startLoopRun(registry, standup, slotAtMs, noLaunches)).resolves.toEqual({
       sessionId: null,
       warning: 'When the run came due, the Session\'s agent was stopped at a prompt, so the loop\'s prompt was not sent. Open the Session and answer it.',
     });
     expect(calls.map(call => call.channel)).not.toContain('runpane:panels:submit');
   });
 
+  it('never types the prompt into a shell whose agent launch exited or never showed an agent', async () => {
+    // The reviewer's repro: the custom command exits back to a live shell, and resume reports command-exited.
+    const exited = sessionRegistry({ resume: { readiness: {
+      ok: false,
+      reason: { code: 'command-exited', message: 'The Claude Code command exited back to the shell, so the panel will not become ready.' },
+      state: { running: true },
+    } } });
+    await expect(startLoopRun(exited.registry, standup, slotAtMs, noLaunches)).resolves.toEqual({
+      sessionId: null,
+      warning: 'When the run came due, the Session\'s agent was not running (The Claude Code command exited back to the shell, so the panel will not become ready.), '
+        + 'so the loop\'s prompt was not sent. Open the Session, check its agent\'s launch command and start it, then run the loop again.',
+    });
+    expect(exited.calls.map(call => call.channel)).not.toContain('runpane:panels:submit');
+
+    const noAgent = sessionRegistry({ resume: { readiness: { ok: false, reason: { code: 'no-agent-detected', message: 'No agent.' }, state: { running: true } } } });
+    await startLoopRun(noAgent.registry, standup, slotAtMs, noLaunches);
+    const stopped = sessionRegistry({ resume: { readiness: { ok: false, state: { running: false } } } });
+    await startLoopRun(stopped.registry, standup, slotAtMs, noLaunches);
+    expect([...noAgent.calls, ...stopped.calls].map(call => call.channel)).not.toContain('runpane:panels:submit');
+  });
+
+  it('queues the prompt for an agent that is busy on a turn', async () => {
+    const { registry, calls } = sessionRegistry({ resume: { readiness: {
+      ok: false,
+      reason: { code: 'agent-not-ready', message: 'Pane detected Claude Code, but its input box was not ready within 60 s.' },
+      state: { running: true, agentType: 'claude' },
+    } } });
+    await expect(startLoopRun(registry, standup, slotAtMs, noLaunches)).resolves.toEqual({ sessionId: null });
+    expect(calls.map(call => call.channel)).toContain('runpane:panels:submit');
+  });
+
+  it('holds runs while the agent still runs from a launch without the unattended flags', async () => {
+    const stale = sessionRegistry();
+    await expect(startLoopRun(stale.registry, standup, slotAtMs, { launchedCommand: () => 'claude --append-system-prompt "Never use --dangerously-skip-permissions"' })).resolves.toEqual({
+      sessionId: null,
+      warning: 'When the run came due, the Session\'s agent was still running from before it was set to skip permission prompts, so the loop\'s prompt was not sent. '
+        + 'Exit the agent in the Session\'s tab and start it again (it resumes the same conversation), then run the loop again.',
+    });
+    expect(stale.calls.map(call => call.channel)).not.toContain('runpane:panels:submit');
+
+    const restarted = sessionRegistry();
+    await expect(startLoopRun(restarted.registry, standup, slotAtMs, { launchedCommand: () => 'claude --dangerously-skip-permissions --resume 5f0c' })).resolves.toEqual({ sessionId: null });
+  });
+
   it('warns when the prompt was not confirmed, and fails when the Session is archived', async () => {
     const unconfirmed = sessionRegistry({ submit: { ok: false, blocked: { message: 'The agent is waiting for input.' } } });
-    await expect(startLoopRun(unconfirmed.registry, standup, slotAtMs)).resolves.toEqual({
+    await expect(startLoopRun(unconfirmed.registry, standup, slotAtMs, noLaunches)).resolves.toEqual({
       sessionId: null,
       warning: 'Pane could not confirm the Session\'s agent got the prompt. The agent is waiting for input.',
     });
     const archived = sessionRegistry({ session: { archived: true } });
-    await expect(startLoopRun(archived.registry, standup, slotAtMs)).rejects.toThrow('Session Standups is archived, so the prompt was not sent.');
+    await expect(startLoopRun(archived.registry, standup, slotAtMs, noLaunches)).rejects.toThrow('Session Standups is archived, so the prompt was not sent.');
   });
 });
 
@@ -211,7 +258,7 @@ describe('prepareLoopSession', () => {
   it('creates a new Session named after the loop, already unattended by its default command', async () => {
     const { registry, calls } = sessionRegistry();
     await expect(prepareLoopSession(registry, 'new', { name: 'Morning standup', agent: 'claude' })).resolves.toBe(SESSION_ID);
-    expect(calls).toEqual([{ channel: 'runpane:sessions:create', request: { name: 'Morning standup', agent: 'claude' } }]);
+    expect(calls).toEqual([{ channel: 'runpane:sessions:create', request: { name: 'Morning standup', agent: 'claude', launchCommand: '' } }]);
   });
 
   it('finds a Session by name and adds the missing unattended flag to its custom command', async () => {
@@ -219,8 +266,27 @@ describe('prepareLoopSession', () => {
     await expect(prepareLoopSession(registry, 'Standups', { name: 'Standup', agent: 'codex' })).resolves.toBe(SESSION_ID);
     expect(calls).toEqual([
       { channel: 'runpane:sessions:get', request: { name: 'Standups' } },
-      { channel: 'runpane:sessions:update', request: { selector: { sessionId: SESSION_ID }, input: { launchCommand: 'codex --model gpt-5 --yolo', source: 'user' } } },
+      { channel: 'runpane:sessions:update', request: { selector: { sessionId: SESSION_ID }, input: { launchCommand: 'codex --yolo --model gpt-5', source: 'user' } } },
     ]);
+  });
+
+  it('adds the flag to the agent itself, not because a quoted argument mentions it', async () => {
+    const { registry, calls } = sessionRegistry({ session: { launchCommand: 'claude --append-system-prompt "Never use --dangerously-skip-permissions on production"' } });
+    await prepareLoopSession(registry, SESSION_ID, { name: 'Standup', agent: 'claude' });
+    expect(calls[1]).toEqual({ channel: 'runpane:sessions:update', request: { selector: { sessionId: SESSION_ID }, input: {
+      launchCommand: 'claude --dangerously-skip-permissions --append-system-prompt "Never use --dangerously-skip-permissions on production"', source: 'user',
+    } } });
+  });
+
+  it('refuses a wrapped or compound launch command it cannot change safely, and changes nothing', async () => {
+    for (const launchCommand of ["sh -c 'codex --model gpt-5'", 'codex --model gpt-5 && say done', 'OPENAI_API_KEY=x codex', 'npx codex']) {
+      const { registry, calls } = sessionRegistry({ session: { agent: 'codex', launchCommand } });
+      await expect(prepareLoopSession(registry, SESSION_ID, { name: 'Standup', agent: 'codex' })).rejects.toMatchObject({
+        code: 'ERR_LOOP_INVALID',
+        message: `Session Standups launches its agent with \`${launchCommand}\`, which Pane cannot safely change to skip permission prompts. Nothing was saved.`,
+      });
+      expect(calls.map(call => call.channel)).toEqual(['runpane:sessions:get']);
+    }
   });
 
   it('leaves a command that already skips prompts alone, and switches a Session to the loop\'s agent', async () => {

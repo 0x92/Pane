@@ -180,7 +180,9 @@ function LoopDrawerForm({ loop, onClose }: { loop: Loop | undefined; onClose: ()
             <div role="note" className="flex gap-2 rounded-md border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-text-primary">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-status-warning" aria-hidden="true" />
               <span>
-                {form.sessionTarget === LOOP_NEW_SESSION ? 'The new Session' : 'This Session'}'s agent will skip permission prompts for every message it gets, not only loop runs.
+                {form.sessionTarget === LOOP_NEW_SESSION
+                  ? 'The new Session\'s agent will skip permission prompts for every message it gets, not only loop runs.'
+                  : 'This Session\'s agent will skip permission prompts for every message it gets, not only loop runs. If it is running now, runs wait until you restart it; Pane never restarts it for you.'}
               </span>
             </div>
           </div>

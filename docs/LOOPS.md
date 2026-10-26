@@ -116,12 +116,20 @@ runpane loops create --session new --name morning-standup --cron "0 9 * * 1-5" \
   skip permission prompts, with the same launch flags as project runs (`claude
   --dangerously-skip-permissions`, `codex --yolo`, `cursor-agent --force
   --trust`). That holds for every message the Session gets, not only loop
-  runs. On an existing Session the flags apply the next time its agent starts.
-  Picking an agent other than the Session's switches the Session to it.
+  runs. A custom launch command gets the flags added after the agent's
+  program; one Pane cannot change safely (a wrapper such as `sh -c`, an
+  `env` or variable prefix, or `&&`, `;`, a pipe or a redirect) is refused
+  when you save. Picking an agent other than the Session's switches the
+  Session to it.
+- **Restart a running agent once.** An agent that is already running keeps
+  the flags it started with. Until you exit it and start it again (it resumes
+  the same conversation), runs are held and show as **needs attention**. Pane
+  never restarts it for you.
 - **A run.** Pane starts the Session's agent if it is stopped, then sends the
-  prompt. If the agent is stopped at a prompt of its own, the loop's prompt is
-  not sent and the run shows as **needs attention**; open the Session and
-  answer it.
+  prompt to it. An agent busy with a turn gets the prompt queued after it. If
+  the agent is stopped at a prompt of its own, or its launch exited back to
+  the shell, the loop's prompt is not sent (Pane never types it into a shell)
+  and the run shows as **needs attention**; open the Session and fix it.
 - **Kept runs.** The last 10 runs are listed. There is no run Pane to archive.
 
 ## Rules

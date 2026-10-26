@@ -136,7 +136,7 @@ test('creates a loop that messages a Session', async ({ page }) => {
 
   await drawer.getByRole('combobox', { name: 'Session' }).click();
   await page.getByRole('option', { name: 'Standups', exact: true }).click();
-  await expect(drawer.getByRole('note')).toHaveText('This Session\'s agent will skip permission prompts for every message it gets, not only loop runs.');
+  await expect(drawer.getByRole('note')).toHaveText('This Session\'s agent will skip permission prompts for every message it gets, not only loop runs. If it is running now, runs wait until you restart it; Pane never restarts it for you.');
   // The existing Session keeps its own agent.
   await expect(drawer.getByRole('radio', { name: 'Codex' })).toHaveAttribute('aria-checked', 'true');
   await shoot(page, '11-drawer-session-existing');

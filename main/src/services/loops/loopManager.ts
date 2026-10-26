@@ -208,7 +208,8 @@ export class LoopManager {
       this.options.onChange?.();
       const { sessionId, warning } = await this.options.startRun(loop, slotAtMs);
       repo.finishRun(run.id, { status: 'started', error: warning ?? null, sessionId });
-      this.options.logger?.info(sessionId ? `[Loops] Started "${loop.name}" as Pane ${sessionId}.` : `[Loops] Sent "${loop.name}" to Session ${loop.orchestrationSessionId}.`);
+      const where = sessionId ? `as Pane ${sessionId}` : `for Session ${loop.orchestrationSessionId}`;
+      this.options.logger?.info(`[Loops] Started "${loop.name}" ${where}${warning ? `; it needs attention: ${warning}` : '.'}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       repo.finishRun(run.id, { status: 'failed', error: message, sessionId: null });

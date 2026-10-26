@@ -323,7 +323,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
   // Loop runs go through the registry's `runpane panes create`, which exists once handlers are registered.
   const loopManager = new LoopManager({
     repo: new LoopRepository(() => databaseService.getDb()),
-    startRun: (loop, slotAtMs) => startLoopRun(commandRegistry, loop, slotAtMs),
+    startRun: (loop, slotAtMs) => startLoopRun(commandRegistry, loop, slotAtMs, { launchedCommand: panelId => terminalPanelManager.launchedCommand(panelId) }),
     archiveRun: sessionId => archiveLoopRun(commandRegistry, sessionId),
     projectExists: projectId => Boolean(databaseService.getProject(projectId)),
     prepareSession: (target, loop) => prepareLoopSession(commandRegistry, target, loop),

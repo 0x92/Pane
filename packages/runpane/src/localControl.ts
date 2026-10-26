@@ -2376,9 +2376,10 @@ export async function runLoopsRun(parsed: ParsedArgs): Promise<number> {
   } else if (run?.status === 'failed') {
     console.log(`Run of ${loop.name} failed: ${run.error ?? 'unknown error'}`);
   } else {
-    const started = loop.orchestrationSessionId
-      ? `Sent a run of ${loop.name} to ${describeLoopSession(await loopSessionNames(parsed), loop.orchestrationSessionId)}`
-      : `Started a run of ${loop.name}${run?.sessionId ? ` in Pane ${run.sessionId}` : ''}`;
+    // A Session run with a warning was held, so it was not sent.
+    const session = loop.orchestrationSessionId ? describeLoopSession(await loopSessionNames(parsed), loop.orchestrationSessionId) : undefined;
+    const started = !session ? `Started a run of ${loop.name}${run?.sessionId ? ` in Pane ${run.sessionId}` : ''}`
+      : run?.error ? `Started a run of ${loop.name} for ${session}` : `Sent a run of ${loop.name} to ${session}`;
     console.log(run?.error ? `${started}; it needs attention: ${run.error}` : `${started}.`);
   }
   return run?.status === 'failed' ? 1 : 0;
