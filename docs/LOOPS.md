@@ -30,11 +30,20 @@ Open **Loops** in the sidebar, under Home and Pane Chat. The Loops page lists
 every loop across your projects. Select one to see its schedule, next run, the
 strip of its last 10 runs and a table of those runs. **+ New** and **Edit** open
 a side drawer where you pick the project, what runs (Claude, Codex, Cursor or a
-command), and the schedule. Presets write the cron for you and the drawer shows
-it as a sentence with the next three run times.
+command), and the schedule.
 
-A run's Pane shows a loop header above its tabs: the loop's name and schedule,
-Run now, Pause and Edit, and a rail that switches between the loop's runs.
+The schedule works like Google Calendar's Repeat field. Pick **Hourly**,
+**Daily**, **Every weekday (Monday to Friday)**, **Weekly** (choose the days),
+or **Monthly** (choose the day of the month), then the time. The drawer shows
+the schedule in words, such as "Weekly on Mon, Wed, Fri at 9:00 AM", the next
+three run times and the cron it saves. **Custom cron** takes any five-field
+cron. Editing a loop opens its cron in the matching mode, or in Custom cron
+when no mode matches.
+
+A run's Pane shows a breadcrumb above its tabs (Loops › loop › run) that leads
+back to the loop, and a rail that switches between the loop's runs. Its
+Details / Files / Changes sidebar starts closed; open it once and run Panes
+keep it open.
 
 ## From the CLI
 

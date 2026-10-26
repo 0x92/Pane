@@ -13,6 +13,11 @@ async function shoot(page: Page, name: string) {
   if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/${name}.png` });
 }
 
+async function chooseRepeat(page: Page, option: string) {
+  await page.getByRole('dialog').getByRole('combobox', { name: 'Repeat' }).click();
+  await page.getByRole('option', { name: option, exact: true }).click();
+}
+
 async function open(page: Page, options: ElectronApiMockOptions = {}) {
   await page.setViewportSize({ width: 1_440, height: 900 });
   await installElectronApiMock(page, {
@@ -35,17 +40,32 @@ test('creates, runs, pauses, edits and deletes a loop', async ({ page }) => {
   await drawer.getByLabel('Name').fill('Nightly bug sweep');
   await drawer.getByRole('radio', { name: 'Command' }).click();
   await drawer.getByLabel('Command').fill('agent-farm run greenfield/bug-sweep --since 24h');
-  await drawer.getByLabel('Schedule (cron)').fill('*/15 * * * *');
+  const schedule = drawer.getByTestId('loop-schedule-preview');
+  await expect(drawer.getByRole('combobox', { name: 'Repeat' })).toHaveText('Daily');
+  await expect(schedule).toContainText('Daily at 3:00 AM');
+
+  // Custom cron starts from the picker's cron.
+  await chooseRepeat(page, 'Custom cron');
+  await expect(drawer.getByLabel('Cron', { exact: true })).toHaveValue('0 3 * * *');
+  await drawer.getByLabel('Cron', { exact: true }).fill('*/15 * * * *');
   // The mock rejects sub-hourly crons like main does; the drawer must not let it be saved.
   await expect(drawer.getByRole('button', { name: 'Save' })).toBeDisabled();
-  await drawer.getByRole('button', { name: 'daily' }).click();
-  await expect(drawer.getByLabel('Schedule (cron)')).toHaveValue('0 3 * * *');
-  await expect(drawer.getByText('Every day at 03:00')).toBeVisible();
+
+  await chooseRepeat(page, 'Weekly on Monday');
+  await drawer.getByRole('button', { name: 'Wednesday' }).click();
+  await drawer.getByRole('button', { name: 'Friday' }).click();
+  await drawer.getByLabel('At', { exact: true }).fill('09:30');
+  await expect(drawer.getByRole('combobox', { name: 'Repeat' })).toHaveText('Weekly on Mon, Wed, Fri');
+  await expect(schedule).toContainText('Weekly on Mon, Wed, Fri at 9:30 AM');
+  await expect(schedule).toContainText('cron: 30 9 * * 1,3,5');
+
+  await chooseRepeat(page, 'Daily');
+  await expect(schedule).toContainText('cron: 30 9 * * *');
   await drawer.getByRole('button', { name: 'Save' }).click();
   await expect(drawer).toBeHidden();
 
   const detail = page.getByTestId('loop-detail');
-  await expect(page.getByTestId('loop-list-item')).toContainText('Every day at 03:00 · no runs yet');
+  await expect(page.getByTestId('loop-list-item')).toContainText('Every day at 09:30 · no runs yet');
   await expect(detail.getByRole('heading', { name: 'Nightly bug sweep' })).toBeVisible();
   await expect(detail.getByText('agent-farm run greenfield/bug-sweep --since 24h')).toBeVisible();
   await expect(page.getByTestId('loops-nav')).toContainText('1');
@@ -59,12 +79,12 @@ test('creates, runs, pauses, edits and deletes a loop', async ({ page }) => {
   await detail.getByRole('button', { name: /^Open run / }).click();
   const header = page.getByTestId('loop-run-header');
   await expect(header.getByRole('navigation', { name: 'Breadcrumb' })).toContainText(/Loops.*Nightly bug sweep.*Run /);
-  await expect(header).toContainText('permission prompts skipped');
   await expect(page.getByTestId('loop-runs-rail').getByRole('button')).toHaveCount(1);
+  // A run Pane starts with the inspector closed.
+  await expect(page.getByRole('button', { name: 'Show details' })).toBeVisible();
 
-  await header.getByRole('button', { name: 'Pause' }).click();
-  await expect(header).toContainText('paused');
   await header.getByRole('button', { name: 'Loops' }).click();
+  await detail.getByRole('button', { name: 'Pause' }).click();
   await expect(detail.getByText('paused', { exact: true })).toBeVisible();
   await expect(detail.getByRole('button', { name: 'Resume' })).toBeVisible();
 
@@ -195,34 +215,55 @@ for (const theme of ['light-rounded', 'dark'] as const) {
     await page.getByRole('button', { name: 'New loop' }).click();
     const drawer = page.getByRole('dialog');
     await drawer.getByLabel('Name').fill('Nightly bug sweep');
-    await expect(drawer.getByText('Every day at 03:00')).toBeVisible();
-    await shoot(page, `${prefix}04-drawer-new`);
     await drawer.getByRole('radio', { name: 'Command' }).click();
     await drawer.getByLabel('Command').fill('agent-farm run greenfield/bug-sweep --since 24h');
-    await drawer.getByLabel('Schedule (cron)').fill('*/15 * * * *');
+    await chooseRepeat(page, 'Weekly on Monday');
+    await drawer.getByRole('button', { name: 'Wednesday' }).click();
+    await drawer.getByRole('button', { name: 'Friday' }).click();
+    await expect(drawer.getByTestId('loop-schedule-preview')).toContainText('Weekly on Mon, Wed, Fri at 3:00 AM');
+    await shoot(page, `${prefix}04-drawer-weekly`);
+    await chooseRepeat(page, 'Monthly on day 1');
+    await expect(drawer.getByTestId('loop-schedule-preview')).toContainText('cron: 0 3 1 * *');
+    await shoot(page, `${prefix}05-drawer-monthly`);
+    await chooseRepeat(page, 'Custom cron');
+    await drawer.getByLabel('Cron', { exact: true }).fill('*/15 * * * *');
     await expect(drawer.getByRole('button', { name: 'Save' })).toBeDisabled();
-    await shoot(page, `${prefix}05-drawer-cron-error`);
+    await shoot(page, `${prefix}06-drawer-custom-cron-error`);
+    await drawer.getByRole('button', { name: 'Cancel' }).click();
+
+    // A saved weekly cron opens in the Weekly picker.
+    await page.getByTestId('loop-list-item').filter({ hasText: 'Weekly docs audit' }).click();
+    await detail.getByRole('button', { name: 'Edit' }).click();
+    await expect(drawer.getByRole('combobox', { name: 'Repeat' })).toHaveText('Weekly on Friday');
+    await expect(drawer.getByRole('button', { name: 'Friday' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(drawer.getByLabel('At', { exact: true })).toHaveValue('16:00');
+    await shoot(page, `${prefix}07-drawer-edit-weekly`);
     await drawer.getByRole('button', { name: 'Cancel' }).click();
 
     await page.getByTestId('loop-list-item').filter({ hasText: 'Nightly bug sweep' }).click();
     await detail.getByRole('button', { name: 'Edit' }).click();
     await expect(drawer.getByLabel('Command')).toHaveValue('agent-farm run greenfield/bug-sweep --since 24h');
-    await expect(drawer.getByText('Every day at 03:00')).toBeVisible();
+    await expect(drawer.getByRole('combobox', { name: 'Repeat' })).toHaveText('Daily');
     await drawer.getByRole('button', { name: 'Delete loop' }).click();
     await expect(drawer.getByText('Delete this loop? Its run Panes stay.')).toBeVisible();
-    await shoot(page, `${prefix}06-drawer-edit-delete-confirm`);
+    await shoot(page, `${prefix}08-drawer-edit-delete-confirm`);
     await drawer.getByRole('button', { name: 'Keep' }).click();
     await drawer.getByRole('button', { name: 'Cancel' }).click();
 
     await detail.getByRole('button', { name: /^Open run / }).first().click();
     const header = page.getByTestId('loop-run-header');
-    await expect(header).toContainText('running');
     await expect(page.getByTestId('loop-runs-rail').getByRole('button')).toHaveCount(6);
-    await shoot(page, `${prefix}07-run-pane`);
+    await expect(page.getByRole('button', { name: 'Show details' })).toBeVisible();
+    await shoot(page, `${prefix}09-run-pane`);
 
     // The rail switches between runs without leaving the run Pane.
     await page.getByTestId('loop-runs-rail').getByRole('button').nth(2).click();
     await expect(header.getByRole('navigation', { name: 'Breadcrumb' })).toContainText(new Date(sweepSlots[2]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-    await expect(header.getByText('ok', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('loop-runs-rail').getByRole('button').nth(2)).toHaveAttribute('aria-current', 'page');
+
+    // Opening the inspector in one run Pane keeps it open in the next.
+    await page.getByRole('button', { name: 'Show details' }).click();
+    await page.getByTestId('loop-runs-rail').getByRole('button').nth(3).click();
+    await expect(page.getByRole('button', { name: 'Hide details' })).toBeVisible();
   });
 }

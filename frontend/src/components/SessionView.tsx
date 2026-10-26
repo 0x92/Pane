@@ -708,13 +708,20 @@ export const SessionView = memo(() => {
   );
 
   // --- Inspector (right rail: Details / Files / Changes) ---
-  const [detailVisible, setDetailVisible] = useState(() => {
+  const [paneDetailVisible, setPaneDetailVisible] = useState(() => {
     const stored = localStorage.getItem('pane-detail-panel-visible');
     return stored !== null ? stored === 'true' : true;
   });
   useEffect(() => {
-    localStorage.setItem('pane-detail-panel-visible', String(detailVisible));
-  }, [detailVisible]);
+    localStorage.setItem('pane-detail-panel-visible', String(paneDetailVisible));
+  }, [paneDetailVisible]);
+  // Loop run Panes remember their own choice and start with the inspector closed.
+  const [loopRunDetailVisible, setLoopRunDetailVisible] = useState(() => localStorage.getItem('pane-loop-run-detail-panel-visible') === 'true');
+  useEffect(() => {
+    localStorage.setItem('pane-loop-run-detail-panel-visible', String(loopRunDetailVisible));
+  }, [loopRunDetailVisible]);
+  const detailVisible = loopRun ? loopRunDetailVisible : paneDetailVisible;
+  const setDetailVisible = loopRun ? setLoopRunDetailVisible : setPaneDetailVisible;
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>(() => {
     const stored = localStorage.getItem('pane-inspector-tab');
     return stored === 'files' || stored === 'details' ? stored : 'changes';
@@ -734,7 +741,7 @@ export const SessionView = memo(() => {
     setInspectorTab(tab);
     setDetailVisible(true);
     setIsDetailCollapsed(false);
-  }, []);
+  }, [setDetailVisible]);
 
   const handleCommitClick = useCallback(
     async (commitHash: string) => {
@@ -1646,7 +1653,7 @@ export const SessionView = memo(() => {
     } else {
       setDetailVisible(v => !v);
     }
-  }, [immersiveMode, swappedLayoutRendered, toggleDetailCollapse]);
+  }, [immersiveMode, setDetailVisible, swappedLayoutRendered, toggleDetailCollapse]);
 
   // Terminal collapse state with localStorage persistence (collapsed by default)
   const [isTerminalCollapsed, setIsTerminalCollapsed] = useState(() => {

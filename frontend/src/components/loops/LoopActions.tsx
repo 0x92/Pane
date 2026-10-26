@@ -3,7 +3,7 @@ import type { Loop } from '../../../../shared/types/loop';
 import { useLoopsStore } from '../../stores/loopsStore';
 import { Button } from '../ui/Button';
 
-/** Run now, Pause or Resume, and Edit: the same on the Loops page and a run Pane's header. */
+/** Run now, Pause or Resume, and Edit, on a loop's page. */
 export function LoopActions({ loop }: { loop: Loop }) {
   const runNow = useLoopsStore(state => state.runNow);
   const setEnabled = useLoopsStore(state => state.setEnabled);

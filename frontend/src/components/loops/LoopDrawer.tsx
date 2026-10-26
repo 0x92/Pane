@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react';
 import { LOOP_NAME_MAX_LENGTH, loopSlug, type Loop, type LoopAgent, type LoopInput, type LoopSchedulePreview } from '../../../../shared/types/loop';
 import { useLoopsStore } from '../../stores/loopsStore';
 import { API } from '../../utils/api';
+import { cn } from '../../utils/cn';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from '../ui/Modal';
@@ -10,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from '../ui/Textarea';
 import { SegmentedControl } from '../settings/SettingsControls';
 import { formatRunTime } from './loopRunView';
+import { WEEKDAYS, cronFromSchedule, describeSchedule, repeatLabel, scheduleFromCron, type LoopRepeat, type LoopSchedule } from './loopSchedule';
 import { useProjectList } from './useProjectList';
 
 type Runner = LoopAgent | 'command';
@@ -21,12 +23,9 @@ const RUNNERS = [
   { id: 'command', label: 'Command' },
 ] as const satisfies ReadonlyArray<{ id: Runner; label: string }>;
 
-const CRON_PRESETS = [
-  { label: 'hourly', cron: '0 * * * *' },
-  { label: 'daily', cron: '0 3 * * *' },
-  { label: 'weekdays', cron: '0 9 * * 1-5' },
-  { label: 'weekly', cron: '0 9 * * 1' },
-] as const;
+const REPEATS: readonly LoopRepeat[] = ['hourly', 'daily', 'weekdays', 'weekly', 'monthly', 'custom'];
+
+const DAYS_OF_MONTH = Array.from({ length: 31 }, (_, index) => String(index + 1));
 
 const PREVIEW_DEBOUNCE_MS = 250;
 
@@ -36,7 +35,7 @@ interface LoopForm {
   runner: Runner;
   toolCommand: string;
   initialInput: string;
-  cron: string;
+  schedule: LoopSchedule;
   worktreeTemplate: string;
 }
 
@@ -47,7 +46,7 @@ function formFrom(loop: Loop | undefined): LoopForm {
     runner: loop?.toolCommand ? 'command' : loop?.agent ?? 'claude',
     toolCommand: loop?.toolCommand ?? '',
     initialInput: loop?.initialInput ?? '',
-    cron: loop?.cron ?? '0 3 * * *',
+    schedule: scheduleFromCron(loop?.cron ?? '0 3 * * *'),
     worktreeTemplate: loop?.worktreeTemplate ?? '',
   };
 }
@@ -79,8 +78,13 @@ function LoopDrawerForm({ loop, onClose }: { loop: Loop | undefined; onClose: ()
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const preview = useSchedulePreview(form.cron);
+  const cron = cronFromSchedule(form.schedule);
+  const preview = useSchedulePreview(cron);
   const update = (fields: Partial<LoopForm>) => setForm(current => ({ ...current, ...fields }));
+  const updateSchedule = (fields: Partial<LoopSchedule>) => setForm(current => ({ ...current, schedule: { ...current.schedule, ...fields } }));
+  const { schedule } = form;
+  const summary = describeSchedule(schedule);
+  const time = `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`;
 
   // A new loop starts in the first project once the list arrives.
   const projectId = form.projectId ?? projects[0]?.id ?? null;
@@ -99,7 +103,7 @@ function LoopDrawerForm({ loop, onClose }: { loop: Loop | undefined; onClose: ()
     const input: LoopInput = {
       name: form.name.trim(),
       projectId,
-      cron: form.cron.trim(),
+      cron,
       // Editing keeps the loop paused or running as it was; a new loop starts on.
       enabled: loop?.enabled ?? true,
     };
@@ -165,34 +169,131 @@ function LoopDrawerForm({ loop, onClose }: { loop: Loop | undefined; onClose: ()
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <Input
-            label="Schedule (cron)"
-            value={form.cron}
-            onChange={event => update({ cron: event.target.value })}
-            placeholder="0 3 * * *"
-            className="font-mono text-sm"
-            spellCheck={false}
-            fullWidth
-          />
-          {/* One fixed-height block, so the form does not jump as the preview answers. */}
-          <div className="min-h-[2.5rem] text-xs" aria-live="polite" data-testid="loop-schedule-preview">
-            {preview?.ok === false && <p className="text-status-error">{preview.error}</p>}
-            {preview?.ok === true && (
+          <div className="grid grid-cols-[4rem_1fr] items-center gap-x-3 gap-y-2">
+            <p className="text-label font-medium text-text-primary" id="loop-repeat-label">Repeat</p>
+            <Select
+              value={schedule.repeat}
+              onValueChange={value => {
+                const repeat = REPEATS.find(candidate => candidate === value);
+                if (!repeat) return;
+                // Custom cron starts from the schedule the picker showed.
+                updateSchedule(repeat === 'custom' ? { repeat, cron } : { repeat });
+              }}
+            >
+              <SelectTrigger aria-labelledby="loop-repeat-label"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {REPEATS.map(repeat => <SelectItem key={repeat} value={repeat}>{repeatLabel(repeat, schedule)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+
+            {schedule.repeat === 'weekly' && (
               <>
-                <p className="text-sm font-medium text-interactive">{preview.scheduleText}</p>
-                <p className="text-text-secondary">Next runs: {preview.nextRunsAtMs.map(ms => formatRunTime(ms, true)).join(' · ')}</p>
+                <p className="text-label font-medium text-text-primary" id="loop-weekdays-label">On</p>
+                <div role="group" aria-labelledby="loop-weekdays-label" className="flex gap-1">
+                  {WEEKDAYS.map(({ day, short, name }) => {
+                    const on = schedule.weekdays.includes(day);
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        aria-label={name}
+                        aria-pressed={on}
+                        title={name}
+                        // A weekly loop keeps at least one day.
+                        onClick={() => {
+                          if (on && schedule.weekdays.length === 1) return;
+                          const weekdays = on ? schedule.weekdays.filter(other => other !== day) : [...schedule.weekdays, day];
+                          updateSchedule({ weekdays: weekdays.sort((a, b) => a - b) });
+                        }}
+                        className={cn(
+                          'h-8 w-8 rounded-full text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring-subtle',
+                          on ? 'bg-interactive text-text-on-interactive' : 'bg-surface-secondary text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+                        )}
+                      >
+                        {short[0]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {schedule.repeat === 'monthly' && (
+              <>
+                <p className="text-label font-medium text-text-primary" id="loop-day-label">On day</p>
+                <Select value={String(schedule.dayOfMonth)} onValueChange={value => updateSchedule({ dayOfMonth: Number(value) })}>
+                  <SelectTrigger aria-labelledby="loop-day-label" className="w-24"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {DAYS_OF_MONTH.map(day => <SelectItem key={day} value={day}>{day}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+
+            {schedule.repeat === 'hourly' && (
+              <>
+                <label className="text-label font-medium text-text-primary" htmlFor="loop-minute">At</label>
+                <div className="flex items-center gap-2 text-sm text-text-secondary">
+                  <Input
+                    id="loop-minute"
+                    type="number"
+                    min={0}
+                    max={59}
+                    value={schedule.minute}
+                    onChange={event => {
+                      const minute = event.target.valueAsNumber;
+                      if (Number.isInteger(minute) && minute >= 0 && minute <= 59) updateSchedule({ minute });
+                    }}
+                    className="w-20 text-sm"
+                  />
+                  minutes past each hour
+                </div>
+              </>
+            )}
+
+            {schedule.repeat !== 'hourly' && schedule.repeat !== 'custom' && (
+              <>
+                <label className="text-label font-medium text-text-primary" htmlFor="loop-time">At</label>
+                <Input
+                  id="loop-time"
+                  type="time"
+                  value={time}
+                  onChange={event => {
+                    const [hour, minute] = event.target.value.split(':').map(Number);
+                    // A cleared field keeps the last time.
+                    if (event.target.value) updateSchedule({ hour, minute });
+                  }}
+                  className="w-32 text-sm"
+                />
+              </>
+            )}
+
+            {schedule.repeat === 'custom' && (
+              <>
+                <label className="text-label font-medium text-text-primary" htmlFor="loop-cron">Cron</label>
+                <Input
+                  id="loop-cron"
+                  value={schedule.cron}
+                  onChange={event => updateSchedule({ cron: event.target.value })}
+                  placeholder="0 3 * * *"
+                  className="font-mono text-sm"
+                  spellCheck={false}
+                  fullWidth
+                />
               </>
             )}
           </div>
-          <p className="text-xs text-text-secondary">
-            Presets:{' '}
-            {CRON_PRESETS.map((preset, index) => (
-              <span key={preset.label}>
-                {index > 0 && ' · '}
-                <button type="button" className="text-text-primary underline underline-offset-2 hover:text-interactive" onClick={() => update({ cron: preset.cron })}>{preset.label}</button>
-              </span>
-            ))}
-          </p>
+          {/* One fixed-height block, so the form does not jump as the preview answers. */}
+          <div className="min-h-[3.75rem] text-xs" aria-live="polite" data-testid="loop-schedule-preview">
+            {preview?.ok === false && <p className="text-status-error">{preview.error}</p>}
+            {preview?.ok === true && (
+              <>
+                <p className="text-sm font-medium text-interactive">{summary ?? preview.scheduleText}</p>
+                <p className="text-text-secondary">Next runs: {preview.nextRunsAtMs.map(ms => formatRunTime(ms, true)).join(' · ')}</p>
+                {schedule.repeat !== 'custom' && <p className="text-text-secondary">cron: <span className="font-mono">{cron}</span></p>}
+              </>
+            )}
+          </div>
         </div>
 
         <Input
