@@ -22,7 +22,8 @@ describe('trustClaudeFolder', () => {
       userID: 'u1',
       projects: { '/repos/app': { hasTrustDialogAccepted: false }, '/pane/sessions/s1': { lastCost: 0.25, hasTrustDialogAccepted: true } },
     });
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // Windows reports no Unix permission bits.
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600);
     await expect(trustClaudeFolder('/pane/sessions/s1', file)).resolves.toBe(false);
   });
 
@@ -34,5 +35,8 @@ describe('trustClaudeFolder', () => {
     const broken = configIn('{ not json');
     await expect(trustClaudeFolder('/pane/sessions/s3', broken)).rejects.toThrow();
     expect(readFileSync(broken, 'utf8')).toBe('{ not json');
+    const odd = configIn('{"projects":["not an object"]}');
+    await expect(trustClaudeFolder('/pane/sessions/s4', odd)).rejects.toThrow();
+    expect(readFileSync(odd, 'utf8')).toBe('{"projects":["not an object"]}');
   });
 });

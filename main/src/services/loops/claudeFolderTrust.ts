@@ -8,15 +8,6 @@ function claudeConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(env.CLAUDE_CONFIG_DIR?.trim() || os.homedir(), '.claude.json');
 }
 
-/** A JSON object, or undefined for anything else, so a malformed entry is treated as absent. */
-function jsonObjectOf(value: JsonObject[string] | undefined): JsonObject | undefined {
-  try {
-    return decodeBoundary(value, boundary.jsonObject);
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Mark a folder trusted the way Claude Code's folder-trust prompt does: it sets
  * `projects[<folder>].hasTrustDialogAccepted` in its global config. Claude has
@@ -41,8 +32,9 @@ export async function trustClaudeFolder(folder: string, configPath = claudeConfi
     // A missing config is a first run: start from an empty one.
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
   }
-  const projects = jsonObjectOf(config.projects) ?? {};
-  const project = jsonObjectOf(projects[key]) ?? {};
+  // An entry that is not an object throws, so a config Pane does not understand is never rewritten.
+  const projects = config.projects === undefined ? {} : decodeBoundary(config.projects, boundary.jsonObject);
+  const project = projects[key] === undefined ? {} : decodeBoundary(projects[key], boundary.jsonObject);
   if (project.hasTrustDialogAccepted === true) return false;
   const next = { ...config, projects: { ...projects, [key]: { ...project, hasTrustDialogAccepted: true } } };
   const temporary = `${configPath}.pane-${process.pid}-${Date.now()}.tmp`;
