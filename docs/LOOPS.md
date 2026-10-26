@@ -1,16 +1,22 @@
 # Loops
 
-A loop runs an agent or command on a schedule. Each run gets its own Pane
-(workspace) in a fresh worktree and branch, so the result of a nightly bug sweep
-or a weekly dependency check is ready to review like any other Pane.
+A loop runs an agent or command on a schedule. It runs in one of two places:
 
-A loop is a cron schedule plus the same request `runpane panes create` takes:
+- **A project.** Each run gets its own Pane (workspace) in a fresh worktree and
+  branch, so the result of a nightly bug sweep or a weekly dependency check is
+  ready to review like any other Pane.
+- **A Session.** Each run sends the loop's prompt to that Session's agent, with
+  no new Pane, worktree or branch. Use it for a job that spans all your
+  projects, such as a morning standup summary. See [Session loops](#session-loops).
+
+A project loop is a cron schedule plus the same request `runpane panes create`
+takes:
 
 - the repository (`--repo`)
 - the agent (`--agent claude`, `codex` or `cursor`) or a custom command
-  (`--tool-command`, such as `agent-farm run <task>`)
-- an optional prompt sent when the run starts (`--prompt <text>`, or
-  `--prompt-file <path>` to read it from a file; `-` reads stdin)
+  (`--tool-command`, such as `./scripts/nightly-report.sh` or `pnpm test`)
+- optional text typed into the agent or command after it starts (`--prompt
+  <text>`, or `--prompt-file <path>` to read it from a file; `-` reads stdin)
 - a worktree and branch name template (`--worktree-name`, CLI and MCP only),
   `loop-<name>` by default. Each run adds its date and time, such as
   `loop-nightly-bug-sweep-20261024-0300`.
@@ -60,7 +66,7 @@ Run a custom command every Monday at 09:00:
 
 ```bash
 runpane loops create --repo my-app --name dependency-check \
-  --cron "0 9 * * 1" --tool-command "agent-farm run dependency-check" --yes
+  --cron "0 9 * * 1" --tool-command "./scripts/nightly-report.sh" --yes
 ```
 
 Check a schedule before saving it. `--dry-run` prints the schedule in words and
@@ -91,6 +97,32 @@ machine-readable output. The same commands are MCP tools: `loops_list`,
 `loops_create`, `loops_update`, `loops_run`, `loops_pause`, `loops_resume` and
 `loops_delete`, in the `loops` toolset (see
 [Pane MCP Server](PANE_MCP.md#toolsets)).
+
+## Session loops
+
+A Session loop targets a Session instead of a project. In the app, choose
+**Runs in: Session**, then pick **New Session for this loop** (named after the
+loop) or an existing Session. From the CLI, pass `--session` instead of `--repo`,
+with a Session id, its name, or `new`:
+
+```bash
+runpane loops create --session new --name morning-standup --cron "0 9 * * 1-5" \
+  --agent claude --prompt "Summarize what changed across my projects since yesterday." --yes
+```
+
+- **Agent only.** A Session loop runs Claude, Codex or Cursor; it has no
+  command, and it needs a prompt.
+- **Unattended for every message.** Saving the loop makes the Session's agent
+  skip permission prompts, with the same launch flags as project runs (`claude
+  --dangerously-skip-permissions`, `codex --yolo`, `cursor-agent --force
+  --trust`). That holds for every message the Session gets, not only loop
+  runs. On an existing Session the flags apply the next time its agent starts.
+  Picking an agent other than the Session's switches the Session to it.
+- **A run.** Pane starts the Session's agent if it is stopped, then sends the
+  prompt. If the agent is stopped at a prompt of its own, the loop's prompt is
+  not sent and the run shows as **needs attention**; open the Session and
+  answer it.
+- **Kept runs.** The last 10 runs are listed. There is no run Pane to archive.
 
 ## Rules
 
@@ -131,20 +163,23 @@ machine-readable output. The same commands are MCP tools: `loops_list`,
 
 ## Runs
 
-Each run is a new Pane in a fresh worktree branched from the repository's
-default base branch. It appears as a normal Pane under its project, and you
-review its work the way you review any Pane.
+Each project loop run is a new Pane in a fresh worktree branched from the
+repository's default base branch. It appears as a normal Pane under its
+project, and you review its work the way you review any Pane. A Session loop's
+runs happen in its Session; their `sessionId` is null.
 
 `runpane loops list --json` lists each loop's runs, newest first. A run's
 `status` is:
 
-- `started`: its Pane was created. `sessionId` is that Pane's id, so read its
+- `started`: its Pane was created, or a Session loop's prompt was sent. For a
+  project loop, `sessionId` is that Pane's id, so read its
   progress with `runpane agents status --pane <sessionId>`. When `error` is set
   too, something needed attention when the run started: the agent was stopped
   at a prompt such as folder trust, never became ready, or Pane could not
   confirm the prompt arrived. The app and plain `runpane loops list` show such
   a run as **needs attention**. On an older run, `error` can instead be the
   note that its Pane was kept for its uncommitted or unpushed work.
-- `failed`: the Pane could not be created; `error` says why.
+- `failed`: the Pane could not be created, or the Session could not be
+  reached; `error` says why.
 - `skipped`: the run came and went while Pane was not running or the computer
   was asleep.

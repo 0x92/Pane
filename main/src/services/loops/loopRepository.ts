@@ -10,7 +10,9 @@ import type { LoopAgent, LoopRun, LoopRunStatus, LoopRunTrigger } from '../../..
 export interface StoredLoop {
   id: string;
   name: string;
-  projectId: number;
+  /** Exactly one target is set. */
+  projectId?: number;
+  orchestrationSessionId?: string;
   cron: string;
   agent?: LoopAgent;
   toolCommand?: string;
@@ -25,7 +27,8 @@ export interface StoredLoop {
 interface LoopRow {
   id: string;
   name: string;
-  project_id: number;
+  project_id: number | null;
+  orchestration_session_id: string | null;
   cron: string;
   agent: string | null;
   tool_command: string | null;
@@ -50,7 +53,6 @@ function toLoop(row: LoopRow): StoredLoop {
   const loop: StoredLoop = {
     id: row.id,
     name: row.name,
-    projectId: row.project_id,
     cron: row.cron,
     enabled: row.enabled === 1,
     scheduleFromMs: row.schedule_from_ms,
@@ -58,6 +60,8 @@ function toLoop(row: LoopRow): StoredLoop {
   };
   // SAFETY: Loop writes persist only LoopAgent values.
   const agent = row.agent as LoopAgent | null;
+  if (row.project_id !== null) loop.projectId = row.project_id;
+  if (row.orchestration_session_id !== null) loop.orchestrationSessionId = row.orchestration_session_id;
   if (agent !== null) loop.agent = agent;
   if (row.tool_command !== null) loop.toolCommand = row.tool_command;
   if (row.initial_input !== null) loop.initialInput = row.initial_input;
@@ -102,12 +106,13 @@ export class LoopRepository {
   upsert(loop: StoredLoop): void {
     this.db.prepare(`
       INSERT INTO loops (
-        id, name, project_id, cron, agent, tool_command, initial_input,
-        worktree_template, enabled, schedule_from_ms, created_at_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, name, project_id, orchestration_session_id, cron, agent, tool_command,
+        initial_input, worktree_template, enabled, schedule_from_ms, created_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         project_id = excluded.project_id,
+        orchestration_session_id = excluded.orchestration_session_id,
         cron = excluded.cron,
         agent = excluded.agent,
         tool_command = excluded.tool_command,
@@ -118,7 +123,8 @@ export class LoopRepository {
     `).run(
       loop.id,
       loop.name,
-      loop.projectId,
+      loop.projectId ?? null,
+      loop.orchestrationSessionId ?? null,
       loop.cron,
       loop.agent ?? null,
       loop.toolCommand ?? null,

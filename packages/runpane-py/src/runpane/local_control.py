@@ -287,8 +287,8 @@ def format_lock_line(lock: Dict[str, Any]) -> str:
 LOOP_AGENTS = ("claude", "codex", "cursor")
 
 
-LOOP_KEYS = ("id", "name", "projectId", "cron", "enabled", "createdAtMs", "nextRunAtMs", "scheduleText", "runs")
-LOOP_OPTIONAL_KEYS = ("agent", "toolCommand", "initialInput", "worktreeTemplate")
+LOOP_KEYS = ("id", "name", "cron", "enabled", "createdAtMs", "nextRunAtMs", "scheduleText", "runs")
+LOOP_OPTIONAL_KEYS = ("projectId", "orchestrationSessionId", "agent", "toolCommand", "initialInput", "worktreeTemplate")
 LOOP_RUN_KEYS = ("id", "loopId", "slotAtMs", "trigger", "status", "error", "sessionId")
 
 
@@ -316,14 +316,30 @@ def run_loops_list(parsed: Any) -> int:
     if not loops:
         print("No loops. Create one with `runpane loops create`.")
         return 0
-    repos = invoke_daemon("runpane:repos:list", [], pane_dir=parsed.pane_dir).get("repos") or []
-    repo_names = {repo.get("id"): repo.get("name") for repo in repos}
+    repo_names: Dict[Any, Any] = {}
+    if any(loop.get("projectId") for loop in loops):
+        repos = invoke_daemon("runpane:repos:list", [], pane_dir=parsed.pane_dir).get("repos") or []
+        repo_names = {repo.get("id"): repo.get("name") for repo in repos}
+    session_names = _loop_session_names(parsed) if any(loop.get("orchestrationSessionId") for loop in loops) else {}
     for loop in loops:
-        repo = repo_names.get(loop.get("projectId")) or f"repo {loop.get('projectId')}"
+        if loop.get("orchestrationSessionId"):
+            target = _describe_loop_session(session_names, loop["orchestrationSessionId"])
+        else:
+            target = repo_names.get(loop.get("projectId")) or f"repo {loop.get('projectId')}"
         runs = loop.get("runs") or []
         last = f" · last {_describe_loop_run_status(runs[0])} {format_loop_time(runs[0].get('slotAtMs'))}" if runs else ""
-        print(f"{loop.get('name')} ({loop.get('id')}) · {repo} · {loop.get('scheduleText')} · {describe_next_run(loop)}{last}")
+        print(f"{loop.get('name')} ({loop.get('id')}) · {target} · {loop.get('scheduleText')} · {describe_next_run(loop)}{last}")
     return 0
+
+
+def _loop_session_names(parsed: Any) -> Dict[Any, Any]:
+    """Session names by id, for naming a Session loop's target."""
+    sessions = invoke_daemon("runpane:sessions:list", [], pane_dir=parsed.pane_dir).get("sessions") or []
+    return {session.get("id"): session.get("name") for session in sessions}
+
+
+def _describe_loop_session(session_names: Dict[Any, Any], session_id: str) -> str:
+    return f"Session {session_names.get(session_id) or session_id}"
 
 
 def run_loops_save(parsed: Any) -> int:
@@ -369,11 +385,13 @@ def run_loops_run(parsed: Any) -> int:
     elif failed:
         print(f"Run of {loop.get('name')} failed: {run.get('error') or 'unknown error'}")
     else:
-        where = f" in Pane {run.get('sessionId')}" if run.get("sessionId") else ""
-        if run.get("error"):
-            print(f"Started a run of {loop.get('name')}{where}; it needs attention: {run.get('error')}")
+        if loop.get("orchestrationSessionId"):
+            session = _describe_loop_session(_loop_session_names(parsed), loop["orchestrationSessionId"])
+            started = f"Sent a run of {loop.get('name')} to {session}"
         else:
-            print(f"Started a run of {loop.get('name')}{where}.")
+            where = f" in Pane {run.get('sessionId')}" if run.get("sessionId") else ""
+            started = f"Started a run of {loop.get('name')}{where}"
+        print(f"{started}; it needs attention: {run.get('error')}" if run.get("error") else f"{started}.")
     return 1 if failed else 0
 
 
@@ -424,8 +442,11 @@ def _resolve_loop_project_id(parsed: Any, repo: str) -> int:
 
 def build_loop_create(parsed: Any) -> Dict[str, Any]:
     name = (parsed.name or "").strip()
-    if not parsed.repo or not name or not parsed.cron:
-        raise ValueError("runpane loops create requires --repo <selector>, --name <name>, and --cron <expr>.")
+    session = (parsed.session_id or "").strip()
+    if parsed.repo and session:
+        raise ValueError("runpane loops create takes either --repo or --session, not both.")
+    if (not parsed.repo and not session) or not name or not parsed.cron:
+        raise ValueError("runpane loops create requires --repo <selector> or --session <id|name|new>, --name <name>, and --cron <expr>.")
     agent = _loop_agent(parsed)
     if agent and parsed.tool_command:
         raise ValueError("runpane loops create takes either --agent or --tool-command, not both.")
@@ -433,7 +454,8 @@ def build_loop_create(parsed: Any) -> Dict[str, Any]:
         raise ValueError("runpane loops create requires either --agent or --tool-command.")
     return _without_empty_loop_fields({
         "name": name,
-        "projectId": _resolve_loop_project_id(parsed, parsed.repo),
+        "projectId": _resolve_loop_project_id(parsed, parsed.repo) if parsed.repo else None,
+        "orchestrationSessionId": session,
         "cron": parsed.cron,
         "agent": agent,
         "toolCommand": parsed.tool_command,
@@ -444,13 +466,16 @@ def build_loop_create(parsed: Any) -> Dict[str, Any]:
 
 
 def merge_loop_update(parsed: Any) -> Dict[str, Any]:
-    """Reads the loop and replaces the fields the flags name; --agent and --tool-command replace each other."""
+    """Reads the loop and replaces the fields the flags name; --agent and --tool-command replace each other, as do --repo and --session."""
     loop_id = _require_loop_id(parsed)
     if parsed.paused:
         raise ValueError("runpane loops update does not take --paused. Use `runpane loops pause --loop <id>`.")
     agent = _loop_agent(parsed)
     if agent and parsed.tool_command:
         raise ValueError("Pass either --agent or --tool-command, not both.")
+    session = (parsed.session_id or "").strip()
+    if parsed.repo and session:
+        raise ValueError("Pass either --repo or --session, not both.")
     loops = _list_loops(parsed)
     loop = next((candidate for candidate in loops if candidate.get("id") == loop_id), None)
     if loop is None:
@@ -460,11 +485,13 @@ def merge_loop_update(parsed: Any) -> Dict[str, Any]:
             "See loop ids with `runpane loops list`.",
         )
     replaces_tool = bool(agent or parsed.tool_command)
+    replaces_target = bool(parsed.repo or session)
     initial_input = resolve_initial_input(parsed)
     return _without_empty_loop_fields({
         "id": loop_id,
         "name": (parsed.name or "").strip() or loop.get("name"),
-        "projectId": _resolve_loop_project_id(parsed, parsed.repo) if parsed.repo else loop.get("projectId"),
+        "projectId": _resolve_loop_project_id(parsed, parsed.repo) if parsed.repo else None if replaces_target else loop.get("projectId"),
+        "orchestrationSessionId": session if replaces_target else loop.get("orchestrationSessionId"),
         "cron": parsed.cron if parsed.cron is not None else loop.get("cron"),
         "agent": agent if replaces_tool else loop.get("agent"),
         "toolCommand": parsed.tool_command if replaces_tool else loop.get("toolCommand"),

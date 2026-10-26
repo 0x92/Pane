@@ -28,6 +28,7 @@ function setup(
   let nowMs = utc('2026-10-23T12:00:00Z');
   const archived: string[] = [];
   const started: string[] = [];
+  const preparedSessions: Array<{ target: string; name: string; agent: string }> = [];
   const manager = new LoopManager({
     repo: new LoopRepository((() => { const db = createLoopTestDb(); return () => db; })()),
     startRun: async (loop, slotAtMs) => {
@@ -40,12 +41,17 @@ function setup(
       return true;
     },
     projectExists: id => id === 1,
+    prepareSession: async (target, loop) => {
+      preparedSessions.push({ target, ...loop });
+      return target === 'new' ? 'session-new' : target;
+    },
     now: () => nowMs,
   });
   return {
     manager,
     started,
     archived,
+    preparedSessions,
     setNow: (iso: string) => { nowMs = utc(iso); },
   };
 }
@@ -59,28 +65,70 @@ afterEach(() => {
 });
 
 describe('LoopManager.save', () => {
-  it('rejects a cron that runs more than once an hour', () => {
+  it('rejects a cron that runs more than once an hour', async () => {
     const { manager } = setup();
-    expect(() => manager.save({ ...nightly, cron: '*/30 * * * *' })).toThrow(/60 minutes/);
+    await expect(manager.save({ ...nightly, cron: '*/30 * * * *' })).rejects.toThrow(/60 minutes/);
     expect(manager.list()).toEqual([]);
   });
 
-  it('rejects a project that does not exist', () => {
+  it('rejects a project that does not exist', async () => {
     const { manager } = setup();
-    expect(() => manager.save({ ...nightly, projectId: 7 })).toThrow(/Project 7 does not exist/);
+    await expect(manager.save({ ...nightly, projectId: 7 })).rejects.toThrow(/Project 7 does not exist/);
   });
 
-  it('shows the schedule and the next run', () => {
+  it('shows the schedule and the next run', async () => {
     const { manager } = setup();
-    const loop = manager.save(nightly);
+    const loop = await manager.save(nightly);
     expect(loop).toMatchObject({ scheduleText: 'Every day at 03:00', nextRunAtMs: utc('2026-10-24T07:00:00Z'), runs: [] });
+  });
+});
+
+describe('LoopManager Session loops', () => {
+  const standup: LoopInput = {
+    name: 'Morning standup',
+    orchestrationSessionId: 'new',
+    cron: '0 9 * * 1-5',
+    agent: 'codex',
+    initialInput: 'Summarize what changed across my projects since yesterday.',
+    worktreeTemplate: 'standup',
+    enabled: true,
+  };
+
+  it('targets exactly one of a project or a Session, sends a prompt, and runs no command', async () => {
+    const { manager, preparedSessions } = setup();
+    await expect(manager.save({ ...standup, projectId: 1 })).rejects.toThrow('A loop targets either a project or a Session.');
+    await expect(manager.save({ ...standup, orchestrationSessionId: undefined })).rejects.toThrow('A loop targets either a project or a Session.');
+    await expect(manager.save({ ...standup, agent: undefined, toolCommand: 'pnpm test' })).rejects.toThrow('cannot run a command');
+    await expect(manager.save({ ...standup, initialInput: '  ' })).rejects.toThrow('needs a prompt');
+    // Nothing invalid reaches the Session: a new one is created only for a loop that saves.
+    expect(preparedSessions).toEqual([]);
+    expect(manager.list()).toEqual([]);
+  });
+
+  it('stores the prepared Session as the target, with no project or worktree template', async () => {
+    const { manager, preparedSessions } = setup();
+    const loop = await manager.save(standup);
+    expect(preparedSessions).toEqual([{ target: 'new', name: 'Morning standup', agent: 'codex' }]);
+    expect(loop).toMatchObject({ orchestrationSessionId: 'session-new', scheduleText: 'Weekdays at 09:00' });
+    expect(loop.projectId).toBeUndefined();
+    expect(loop.worktreeTemplate).toBeUndefined();
+  });
+
+  it('keeps the last 10 runs by dropping rows, since a Session run has no Pane to archive', async () => {
+    const { manager, archived } = setup(async () => ({ sessionId: null }));
+    const { id } = await manager.save(standup);
+    for (let index = 0; index < 11; index += 1) await manager.runNow(id);
+    await settle();
+    expect(manager.list()[0].runs).toHaveLength(10);
+    expect(manager.list()[0].runs.every(run => run.status === 'started' && run.sessionId === null)).toBe(true);
+    expect(archived).toEqual([]);
   });
 });
 
 describe('LoopManager runs', () => {
   it('starts a due loop once and records the slot', async () => {
     const { manager, started, setNow } = setup(async () => ({ sessionId: 'pane-1' }));
-    const { id } = manager.save(nightly);
+    const { id } = await manager.save(nightly);
     manager.start();
 
     setNow('2026-10-24T07:02:00Z');
@@ -96,7 +144,7 @@ describe('LoopManager runs', () => {
 
   it('records a run missed while Pane was closed as skipped, at its slot time', async () => {
     const { manager, started, setNow } = setup();
-    manager.save(nightly);
+    await manager.save(nightly);
 
     // Pane comes back at 09:00 EDT, two hours after the 03:00 slot.
     setNow('2026-10-24T13:00:00Z');
@@ -115,8 +163,8 @@ describe('LoopManager runs', () => {
     const { manager, started, setNow } = setup(loop => loop.name === 'First'
       ? new Promise(resolve => { releaseFirst = () => resolve({ sessionId: 'pane-first' }); })
       : Promise.resolve({ sessionId: 'pane-second' }));
-    manager.save({ ...nightly, name: 'First' });
-    const second = manager.save({ ...nightly, name: 'Second' });
+    await manager.save({ ...nightly, name: 'First' });
+    const second = await manager.save({ ...nightly, name: 'Second' });
     manager.start();
     await manager.tick();
     setNow('2026-10-24T07:01:00Z');
@@ -135,7 +183,7 @@ describe('LoopManager runs', () => {
   it('runs now without moving the schedule, and never starts one loop twice at once', async () => {
     let release: () => void = () => {};
     const { manager } = setup(() => new Promise(resolve => { release = () => resolve({ sessionId: 'pane-now' }); }));
-    const { id, nextRunAtMs } = manager.save(nightly);
+    const { id, nextRunAtMs } = await manager.save(nightly);
 
     const first = manager.runNow(id);
     await expect(manager.runNow(id)).rejects.toThrow(/already starting/);
@@ -148,7 +196,7 @@ describe('LoopManager runs', () => {
 
   it('records a run whose Pane could not be created as failed', async () => {
     const { manager } = setup(async () => { throw new Error('No space left on device'); });
-    const { id } = manager.save(nightly);
+    const { id } = await manager.save(nightly);
     const loop = await manager.runNow(id);
     expect(loop.runs).toMatchObject([{ status: 'failed', error: 'No space left on device', sessionId: null }]);
   });
@@ -156,7 +204,7 @@ describe('LoopManager runs', () => {
   it('keeps the last 10 runs and archives older run Panes', async () => {
     let count = 0;
     const { manager, archived } = setup(async () => ({ sessionId: `pane-${++count}` }));
-    const { id } = manager.save(nightly);
+    const { id } = await manager.save(nightly);
     for (let index = 0; index < 12; index++) await manager.runNow(id);
     await settle();
 
@@ -169,7 +217,7 @@ describe('LoopManager runs', () => {
   it('keeps an old run listed, with a note, when its Pane has uncommitted or unpushed work', async () => {
     let count = 0;
     const { manager, archived } = setup(async () => ({ sessionId: `pane-${++count}` }), sessionId => sessionId === 'pane-1');
-    const { id } = manager.save(nightly);
+    const { id } = await manager.save(nightly);
     for (let index = 0; index < 11; index++) await manager.runNow(id);
     await settle();
 
@@ -188,7 +236,7 @@ describe('LoopManager runs', () => {
 describe('LoopManager timer', () => {
   it('starts a loop when its slot comes, and stops scheduling once stopped', async () => {
     const { manager, started, setNow } = setup();
-    manager.save(nightly);
+    await manager.save(nightly);
     manager.start();
     await manager.tick();
 
@@ -207,7 +255,7 @@ describe('LoopManager timer', () => {
 describe('LoopManager schedule restarts', () => {
   it('counts a resumed loop from the resume, so the slot it was paused over does not run', async () => {
     const { manager, started, setNow } = setup();
-    const { id } = manager.save(nightly);
+    const { id } = await manager.save(nightly);
     manager.setEnabled(id, false);
     manager.start();
 
@@ -224,12 +272,12 @@ describe('LoopManager schedule restarts', () => {
 
   it('counts an edited cron from the edit, so a slot it moved into the past does not run', async () => {
     const { manager, started, setNow } = setup();
-    const { id } = manager.save(nightly);
+    const { id } = await manager.save(nightly);
     manager.start();
 
     // At 03:10 EDT the cron moves to 03:05, which passed five minutes ago.
     setNow('2026-10-24T07:10:00Z');
-    const loop = manager.save({ ...nightly, id, cron: '5 3 * * *' });
+    const loop = await manager.save({ ...nightly, id, cron: '5 3 * * *' });
     await manager.tick();
 
     expect(started).toEqual([]);

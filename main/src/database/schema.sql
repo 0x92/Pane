@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS usage_rate_limits (
   PRIMARY KEY (provider, limit_id, scope)
 );
 
--- Loops (scheduled tasks): a cron plus the request `runpane panes create` takes.
+-- Loops (scheduled tasks): a cron plus what each run does.
 -- NOTE this file is split on the statement separator at startup, so a comment
 -- must never contain one.
 -- schedule_from_ms: only slots after this count. Set on create, resume and a
@@ -121,7 +121,9 @@ CREATE TABLE IF NOT EXISTS usage_rate_limits (
 CREATE TABLE IF NOT EXISTS loops (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  project_id INTEGER NOT NULL,
+  -- The target: a project (each run is a new Pane) or a Session (each run messages its agent).
+  project_id INTEGER,
+  orchestration_session_id TEXT,
   cron TEXT NOT NULL,
   agent TEXT,
   tool_command TEXT,
@@ -130,6 +132,7 @@ CREATE TABLE IF NOT EXISTS loops (
   enabled INTEGER NOT NULL DEFAULT 1,
   schedule_from_ms INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL,
+  CHECK ((project_id IS NULL) <> (orchestration_session_id IS NULL)),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 

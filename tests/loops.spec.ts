@@ -18,7 +18,8 @@ async function chooseRepeat(page: Page, option: string) {
   await page.getByRole('option', { name: option, exact: true }).click();
 }
 
-async function open(page: Page, options: ElectronApiMockOptions = {}) {
+/** `addElectronApi` runs after the mock is installed, to add APIs it lacks. */
+async function open(page: Page, options: ElectronApiMockOptions = {}, addElectronApi?: () => void) {
   await page.setViewportSize({ width: 1_440, height: 900 });
   await installElectronApiMock(page, {
     initialProjects: projects,
@@ -26,6 +27,7 @@ async function open(page: Page, options: ElectronApiMockOptions = {}) {
     initialConfig: { theme: 'light-rounded', appearanceMode: 'fixed' },
     ...options,
   });
+  if (addElectronApi) await page.addInitScript(addElectronApi);
   await page.goto('/', { waitUntil: 'domcontentloaded' });
 }
 
@@ -98,6 +100,51 @@ test('creates, runs, pauses, edits and deletes a loop', async ({ page }) => {
   await drawer.getByRole('button', { name: 'Delete loop' }).click();
   await drawer.getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(page.getByText('No loops yet')).toBeVisible();
+});
+
+test('creates a loop that messages a Session', async ({ page }) => {
+  await open(page, {}, () => {
+    const id = '__orchestration_session_standups__';
+    const at = new Date().toISOString();
+    const sessions = [{
+      id, name: 'Standups', agent: 'codex', archived: false, isPinned: false,
+      internalSessionId: `${id}terminal__`,
+      panelIds: { claude: `${id}claude`, codex: `${id}codex`, cursor: `${id}cursor` },
+      goal: '', context: '', decisions: [], blockers: [], nextAction: '', evidence: [], outputs: [], associations: [], activity: [],
+      revision: 1, createdAt: at, updatedAt: at,
+    }];
+    Object.assign(window.electronAPI, {
+      orchestrationSessions: {
+        list: async () => ({ success: true, data: { sessions, selectedSessionId: undefined } }),
+        select: async () => ({ success: true, data: { sessions, selectedSessionId: sessions[0].id } }),
+      },
+    });
+  });
+  await page.getByTestId('loops-nav').click();
+  await page.getByRole('button', { name: 'New loop' }).first().click();
+
+  const drawer = page.getByRole('dialog');
+  await drawer.getByRole('radio', { name: 'Session' }).click();
+  await drawer.getByLabel('Name').fill('Morning standup');
+  await expect(drawer.getByRole('combobox', { name: 'Session' })).toHaveText('New Session for this loop');
+  await expect(drawer.getByRole('note')).toHaveText('The new Session\'s agent will skip permission prompts for every message it gets, not only loop runs.');
+  // A Session loop messages the agent: no command, and a message is required.
+  await expect(drawer.getByRole('radio', { name: 'Command' })).toHaveCount(0);
+  await expect(drawer.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await drawer.getByLabel('Message').fill('Summarize what changed across my projects since yesterday.');
+  await shoot(page, '10-drawer-session-new');
+
+  await drawer.getByRole('combobox', { name: 'Session' }).click();
+  await page.getByRole('option', { name: 'Standups', exact: true }).click();
+  await expect(drawer.getByRole('note')).toHaveText('This Session\'s agent will skip permission prompts for every message it gets, not only loop runs.');
+  // The existing Session keeps its own agent.
+  await expect(drawer.getByRole('radio', { name: 'Codex' })).toHaveAttribute('aria-checked', 'true');
+  await shoot(page, '11-drawer-session-existing');
+  await drawer.getByRole('button', { name: 'Save' }).click();
+  await expect(drawer).toBeHidden();
+
+  await expect(page.getByTestId('loop-list-item')).toContainText('Session · Standups');
+  await expect(page.getByTestId('loop-detail').getByRole('button', { name: 'Open Session' })).toBeVisible();
 });
 
 const HOUR = 3_600_000;

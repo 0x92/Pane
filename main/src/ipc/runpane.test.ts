@@ -9451,6 +9451,7 @@ describe('runpane loops', () => {
       startRun: async () => ({ sessionId: 'run-pane' }),
       archiveRun: async () => true,
       projectExists: id => id === 1,
+      prepareSession: async target => target,
     });
     return services;
   }

@@ -1078,9 +1078,24 @@
       "--name=deps",
       "--cron=0 9 * * 1",
       "--tool-command",
-      "agent-farm run deps",
+      "./scripts/nightly-report.sh",
       "--prompt-file",
       "-"
+    ],
+    [
+      "loops",
+      "create",
+      "--session",
+      "new",
+      "--name",
+      "triage",
+      "--cron",
+      "0 9 * * 1-5",
+      "--agent",
+      "claude",
+      "--prompt",
+      "Triage",
+      "--yes"
     ],
     [
       "loops",
@@ -1089,6 +1104,15 @@
       "loop-1",
       "--cron",
       "0 4 * * *",
+      "--yes"
+    ],
+    [
+      "loops",
+      "update",
+      "--loop",
+      "loop-1",
+      "--session",
+      "Nightly",
       "--yes"
     ],
     [

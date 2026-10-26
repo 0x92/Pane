@@ -2227,10 +2227,13 @@ function formatLockLine(lock: LockRecord): string {
 const LOOP_AGENTS = ['claude', 'codex', 'cursor'] as const;
 type LoopAgent = typeof LOOP_AGENTS[number];
 
+/** Exactly one target: `projectId` (each run is a new Pane) or `orchestrationSessionId` (each run messages that Session's agent). */
 interface LoopInput {
   id?: string;
   name: string;
-  projectId: number;
+  projectId?: number;
+  /** A Session id; saving also accepts a Session name or `new`. */
+  orchestrationSessionId?: string;
   cron: string;
   agent?: LoopAgent;
   toolCommand?: string;
@@ -2274,7 +2277,8 @@ const loopRunSchema: BoundarySchema<LoopRun> = boundary.object({
 const loopFieldsSchema = boundary.object({
   id: boundary.string,
   name: boundary.string,
-  projectId: boundary.number,
+  projectId: boundary.optional(boundary.nullable(boundary.number)),
+  orchestrationSessionId: optionalLoopText,
   cron: boundary.string,
   agent: boundary.optional(boundary.nullable(boundary.enumeration(...LOOP_AGENTS))),
   toolCommand: optionalLoopText,
@@ -2289,8 +2293,10 @@ const loopFieldsSchema = boundary.object({
 /** Drops unset optional fields and puts the set ones last; the Python CLI prints loops in this same order. */
 const loopSchema: BoundarySchema<Loop> = {
   decode(cursor) {
-    const { agent, toolCommand, initialInput, worktreeTemplate, ...rest } = loopFieldsSchema.decode(cursor);
+    const { projectId, orchestrationSessionId, agent, toolCommand, initialInput, worktreeTemplate, ...rest } = loopFieldsSchema.decode(cursor);
     const loop: Loop = rest;
+    if (projectId) loop.projectId = projectId;
+    if (orchestrationSessionId) loop.orchestrationSessionId = orchestrationSessionId;
     if (agent) loop.agent = agent;
     if (toolCommand) loop.toolCommand = toolCommand;
     if (initialInput) loop.initialInput = initialInput;
@@ -2321,13 +2327,19 @@ export async function runLoopsList(parsed: ParsedArgs): Promise<number> {
     console.log('No loops. Create one with `runpane loops create`.');
     return 0;
   }
-  const repos = await invokeDaemon('runpane:repos:list', [], repoListResultSchema, { paneDir: parsed.paneDir });
-  const repoNames = new Map(repos.repos.map((repo) => [repo.id, repo.name]));
+  const repoNames = new Map<number, string>();
+  if (loops.some((loop) => loop.projectId)) {
+    const repos = await invokeDaemon('runpane:repos:list', [], repoListResultSchema, { paneDir: parsed.paneDir });
+    for (const repo of repos.repos) repoNames.set(repo.id, repo.name);
+  }
+  const sessionNames = loops.some((loop) => loop.orchestrationSessionId) ? await loopSessionNames(parsed) : new Map<string, string>();
   for (const loop of loops) {
-    const repo = repoNames.get(loop.projectId) ?? `repo ${loop.projectId}`;
+    const target = loop.orchestrationSessionId
+      ? describeLoopSession(sessionNames, loop.orchestrationSessionId)
+      : (loop.projectId && repoNames.get(loop.projectId)) || `repo ${loop.projectId}`;
     const [lastRun] = loop.runs;
     const last = lastRun ? ` · last ${describeLoopRunStatus(lastRun)} ${formatLoopTime(lastRun.slotAtMs)}` : '';
-    console.log(`${loop.name} (${loop.id}) · ${repo} · ${loop.scheduleText} · ${describeNextRun(loop)}${last}`);
+    console.log(`${loop.name} (${loop.id}) · ${target} · ${loop.scheduleText} · ${describeNextRun(loop)}${last}`);
   }
   return 0;
 }
@@ -2364,8 +2376,10 @@ export async function runLoopsRun(parsed: ParsedArgs): Promise<number> {
   } else if (run?.status === 'failed') {
     console.log(`Run of ${loop.name} failed: ${run.error ?? 'unknown error'}`);
   } else {
-    const where = run?.sessionId ? ` in Pane ${run.sessionId}` : '';
-    console.log(run?.error ? `Started a run of ${loop.name}${where}; it needs attention: ${run.error}` : `Started a run of ${loop.name}${where}.`);
+    const started = loop.orchestrationSessionId
+      ? `Sent a run of ${loop.name} to ${describeLoopSession(await loopSessionNames(parsed), loop.orchestrationSessionId)}`
+      : `Started a run of ${loop.name}${run?.sessionId ? ` in Pane ${run.sessionId}` : ''}`;
+    console.log(run?.error ? `${started}; it needs attention: ${run.error}` : `${started}.`);
   }
   return run?.status === 'failed' ? 1 : 0;
 }
@@ -2386,6 +2400,16 @@ export async function runLoopsDelete(parsed: ParsedArgs): Promise<number> {
   if (parsed.json) printJson({ ok: true, deleted: id });
   else console.log(`Deleted loop ${id}.`);
   return 0;
+}
+
+/** Session names by id, for naming a Session loop's target. */
+async function loopSessionNames(parsed: ParsedArgs): Promise<Map<string, string>> {
+  const { sessions } = await invokeDaemon('runpane:sessions:list', [], runpaneSessionListResultSchema, { paneDir: parsed.paneDir });
+  return new Map(sessions.map((session) => [session.id, session.name]));
+}
+
+function describeLoopSession(sessionNames: Map<string, string>, sessionId: string): string {
+  return `Session ${sessionNames.get(sessionId) ?? sessionId}`;
 }
 
 function requireLoopId(parsed: ParsedArgs): string {
@@ -2410,15 +2434,18 @@ async function resolveLoopProjectId(parsed: ParsedArgs, repo: string): Promise<n
 
 async function buildLoopCreate(parsed: ParsedArgs): Promise<LoopInput> {
   const name = parsed.name?.trim();
-  if (!parsed.repo || !name || !parsed.cron) {
-    throw new Error('runpane loops create requires --repo <selector>, --name <name>, and --cron <expr>.');
+  const session = parsed.sessionId?.trim();
+  if (parsed.repo && session) throw new Error('runpane loops create takes either --repo or --session, not both.');
+  if ((!parsed.repo && !session) || !name || !parsed.cron) {
+    throw new Error('runpane loops create requires --repo <selector> or --session <id|name|new>, --name <name>, and --cron <expr>.');
   }
   const agent = loopAgent(parsed);
   if (agent && parsed.toolCommand) throw new Error('runpane loops create takes either --agent or --tool-command, not both.');
   if (!agent && !parsed.toolCommand) throw new Error('runpane loops create requires either --agent or --tool-command.');
   return withoutEmptyLoopFields({
     name,
-    projectId: await resolveLoopProjectId(parsed, parsed.repo),
+    projectId: parsed.repo ? await resolveLoopProjectId(parsed, parsed.repo) : undefined,
+    orchestrationSessionId: session,
     cron: parsed.cron,
     agent,
     toolCommand: parsed.toolCommand,
@@ -2428,21 +2455,25 @@ async function buildLoopCreate(parsed: ParsedArgs): Promise<LoopInput> {
   });
 }
 
-/** Reads the loop and replaces the fields the flags name; --agent and --tool-command replace each other. */
+/** Reads the loop and replaces the fields the flags name; --agent and --tool-command replace each other, as do --repo and --session. */
 async function mergeLoopUpdate(parsed: ParsedArgs): Promise<LoopInput> {
   const id = requireLoopId(parsed);
   if (parsed.paused) throw new Error('runpane loops update does not take --paused. Use `runpane loops pause --loop <id>`.');
   const agent = loopAgent(parsed);
   if (agent && parsed.toolCommand) throw new Error('Pass either --agent or --tool-command, not both.');
+  const session = parsed.sessionId?.trim();
+  if (parsed.repo && session) throw new Error('Pass either --repo or --session, not both.');
   const loops = await listLoops(parsed);
   const loop = loops.find((candidate) => candidate.id === id);
   if (!loop) throw new RunpaneError('ERR_RUNPANE_LOOP_NOT_FOUND', `No loop found with id ${id}. Nothing was changed.`, 'See loop ids with `runpane loops list`.');
   const replacesTool = Boolean(agent || parsed.toolCommand);
+  const replacesTarget = Boolean(parsed.repo || session);
   const initialInput = resolveInitialInput(parsed);
   return withoutEmptyLoopFields({
     id,
     name: parsed.name?.trim() || loop.name,
-    projectId: parsed.repo ? await resolveLoopProjectId(parsed, parsed.repo) : loop.projectId,
+    projectId: parsed.repo ? await resolveLoopProjectId(parsed, parsed.repo) : replacesTarget ? undefined : loop.projectId,
+    orchestrationSessionId: replacesTarget ? session : loop.orchestrationSessionId,
     cron: parsed.cron ?? loop.cron,
     agent: replacesTool ? agent : loop.agent,
     toolCommand: replacesTool ? parsed.toolCommand : loop.toolCommand,
@@ -2454,8 +2485,10 @@ async function mergeLoopUpdate(parsed: ParsedArgs): Promise<LoopInput> {
 
 /** Leaves out the optional fields that are unset or blank, so the daemon stores them as absent. */
 function withoutEmptyLoopFields(input: LoopInput): LoopInput {
-  const { agent, toolCommand, initialInput, worktreeTemplate, ...rest } = input;
+  const { projectId, orchestrationSessionId, agent, toolCommand, initialInput, worktreeTemplate, ...rest } = input;
   const result: LoopInput = rest;
+  if (projectId) result.projectId = projectId;
+  if (orchestrationSessionId) result.orchestrationSessionId = orchestrationSessionId;
   if (agent) result.agent = agent;
   if (toolCommand?.trim()) result.toolCommand = toolCommand;
   if (initialInput?.trim()) result.initialInput = initialInput;

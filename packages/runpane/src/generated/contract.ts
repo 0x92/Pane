@@ -1524,9 +1524,9 @@ export const RUNPANE_CONTRACT = {
     },
     {
       "name": "loops create",
-      "summary": "Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
+      "summary": "Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run, or sends a prompt to a Session's agent. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
       "usage": [
-        "runpane loops create --repo <selector> --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]"
+        "runpane loops create (--repo <selector>|--session <id|name|new>) --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "additive": true,
@@ -1542,9 +1542,9 @@ export const RUNPANE_CONTRACT = {
     },
     {
       "name": "loops update",
-      "summary": "Change a loop's repo, name, schedule, agent or command, first input, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
+      "summary": "Change a loop's repo or Session, name, schedule, agent or command, prompt, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
       "usage": [
-        "runpane loops update --loop <id> [--repo <selector>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]"
+        "runpane loops update --loop <id> [--repo <selector>|--session <id|name|new>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]"
       ],
       "mutates": true,
       "idempotent": true,
@@ -2225,7 +2225,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
         "  runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
         "  runpane loops list [--json]",
-        "  runpane loops create --repo <selector> --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>] --yes",
+        "  runpane loops create (--repo <selector>|--session <id|name|new>) --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>] --yes",
         "  runpane loops update|run|pause|resume|delete --loop <id> --yes",
         "  runpane panes list [--repo <selector>] [--json]",
         "  runpane panes cost [--repo <selector>] [--pane <pane-id>] [--json]",
@@ -3416,14 +3416,15 @@ export const RUNPANE_CONTRACT = {
         "  runpane loops <list|create|update|run|pause|resume|delete> [options]",
         "",
         "Loops (scheduled tasks) start a new Pane in a fresh worktree on a cron schedule.",
+        "A Session loop instead sends its prompt to a Session's agent each run.",
         "Loops are for large recurring jobs and run at most once an hour.",
         "For short waits, use your agent harness's own sleep and wake.",
         "Runs start only while Pane is running, in this machine's local time zone.",
         "",
         "Commands:",
         "  runpane loops list [--json] [--pane-dir <path>]",
-        "  runpane loops create --repo <selector> --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]",
-        "  runpane loops update --loop <id> [--repo <selector>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "  runpane loops create (--repo <selector>|--session <id|name|new>) --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "  runpane loops update --loop <id> [--repo <selector>|--session <id|name|new>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]",
         "  runpane loops run --loop <id> --yes [--json] [--pane-dir <path>]",
         "  runpane loops pause --loop <id> --yes [--json] [--pane-dir <path>]",
         "  runpane loops resume --loop <id> --yes [--json] [--pane-dir <path>]",
@@ -3441,22 +3442,30 @@ export const RUNPANE_CONTRACT = {
       ],
       "loops create": [
         "Usage:",
-        "runpane loops create --repo <selector> --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "runpane loops create (--repo <selector>|--session <id|name|new>) --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]",
         "",
-        "Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
-        "Each run is a new Pane in a fresh worktree from the repo's default base branch.",
+        "Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run, or sends a prompt to a Session's agent. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
+        "With --repo, each run is a new Pane in a fresh worktree from the repo's default base branch.",
+        "A Session loop sends its prompt to that Session's agent each run instead of creating a new Pane.",
         "",
         "Options:",
         "  --repo <selector>               Repository: active, id, exact path, or saved name.",
+        "  --session <id|name|new>         Session whose agent gets the prompt each run, instead of",
+        "                                  a new Pane; `new` creates a Session named after the loop.",
+        "                                  That agent then skips permission prompts for every message",
+        "                                  it gets, not only loop runs.",
         "  --name <name>                   Loop name.",
         "  --cron <expr>                   Five-field cron in local time, such as \"0 3 * * *\"; at least 1 hour apart.",
-        "  --agent <claude|codex|cursor>   Agent each run starts. Runs skip permission prompts.",
-        "  --tool-command <command>        Command each run starts instead of an agent. On Windows it runs",
+        "  --agent <claude|codex|cursor>   Agent each run starts; for a Session loop, the Session's agent.",
+        "                                  Runs skip permission prompts.",
+        "  --tool-command <command>        Command each run starts instead of an agent, such as",
+        "                                  ./scripts/nightly-report.sh. Project loops only. On Windows it runs",
         "                                  in Pane's terminal shell, Git Bash by default, so write bash or",
         "                                  `cmd //c`: \"cmd //c echo hi > loop.txt\" works, \"cmd /c ...\" hangs.",
-        "  --prompt <text>                 First input sent to the agent or command.",
-        "  --prompt-file <path|->          Read the first input from a file or stdin.",
-        "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>.",
+        "  --prompt <text>                 Text typed into the agent or command after it starts; for a",
+        "                                  Session loop, the message sent to the Session's agent each run.",
+        "  --prompt-file <path|->          Read the prompt from a file or stdin.",
+        "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>. Project loops only.",
         "  --paused                        Create the loop paused.",
         "  --dry-run                       Check the schedule and print what would be saved.",
         "  --yes                           Confirm the change.",
@@ -3465,23 +3474,31 @@ export const RUNPANE_CONTRACT = {
       ],
       "loops update": [
         "Usage:",
-        "runpane loops update --loop <id> [--repo <selector>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "runpane loops update --loop <id> [--repo <selector>|--session <id|name|new>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]",
         "",
-        "Change a loop's repo, name, schedule, agent or command, first input, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
-        "Each run is a new Pane in a fresh worktree from the repo's default base branch.",
+        "Change a loop's repo or Session, name, schedule, agent or command, prompt, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
+        "With --repo, each run is a new Pane in a fresh worktree from the repo's default base branch.",
+        "A Session loop sends its prompt to that Session's agent each run instead of creating a new Pane.",
         "",
         "Options:",
         "  --loop <id>                     Loop to change; other flags replace its values.",
         "  --repo <selector>               Repository: active, id, exact path, or saved name.",
+        "  --session <id|name|new>         Session whose agent gets the prompt each run, instead of",
+        "                                  a new Pane; `new` creates a Session named after the loop.",
+        "                                  That agent then skips permission prompts for every message",
+        "                                  it gets, not only loop runs.",
         "  --name <name>                   Loop name.",
         "  --cron <expr>                   Five-field cron in local time, such as \"0 3 * * *\"; at least 1 hour apart.",
-        "  --agent <claude|codex|cursor>   Agent each run starts. Runs skip permission prompts.",
-        "  --tool-command <command>        Command each run starts instead of an agent. On Windows it runs",
+        "  --agent <claude|codex|cursor>   Agent each run starts; for a Session loop, the Session's agent.",
+        "                                  Runs skip permission prompts.",
+        "  --tool-command <command>        Command each run starts instead of an agent, such as",
+        "                                  ./scripts/nightly-report.sh. Project loops only. On Windows it runs",
         "                                  in Pane's terminal shell, Git Bash by default, so write bash or",
         "                                  `cmd //c`: \"cmd //c echo hi > loop.txt\" works, \"cmd /c ...\" hangs.",
-        "  --prompt <text>                 First input sent to the agent or command.",
-        "  --prompt-file <path|->          Read the first input from a file or stdin.",
-        "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>.",
+        "  --prompt <text>                 Text typed into the agent or command after it starts; for a",
+        "                                  Session loop, the message sent to the Session's agent each run.",
+        "  --prompt-file <path|->          Read the prompt from a file or stdin.",
+        "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>. Project loops only.",
         "  --dry-run                       Check the schedule and print what would be saved.",
         "  --yes                           Confirm the change.",
         "  --json                          Print JSON output.",
@@ -3751,7 +3768,7 @@ export const RUNPANE_CONTRACT = {
         "  runpane lock release --name <name> [--force] [--session <id|name>] [--note <text>] [--pane <pane-id>] [--panel <panel-id>] [--json] [--pane-dir <path>]",
         "  runpane lock list [--session <id|name>] [--json] [--pane-dir <path>]",
         "  python -m runpane loops list [--json]",
-        "  python -m runpane loops create --repo <selector> --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>] --yes",
+        "  python -m runpane loops create (--repo <selector>|--session <id|name|new>) --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>] --yes",
         "  python -m runpane loops update|run|pause|resume|delete --loop <id> --yes",
         "  runpane help [command]",
         "",
@@ -4849,14 +4866,15 @@ export const RUNPANE_CONTRACT = {
         "  python -m runpane loops <list|create|update|run|pause|resume|delete> [options]",
         "",
         "Loops (scheduled tasks) start a new Pane in a fresh worktree on a cron schedule.",
+        "A Session loop instead sends its prompt to a Session's agent each run.",
         "Loops are for large recurring jobs and run at most once an hour.",
         "For short waits, use your agent harness's own sleep and wake.",
         "Runs start only while Pane is running, in this machine's local time zone.",
         "",
         "Commands:",
         "  python -m runpane loops list [--json] [--pane-dir <path>]",
-        "  python -m runpane loops create --repo <selector> --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]",
-        "  python -m runpane loops update --loop <id> [--repo <selector>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "  python -m runpane loops create (--repo <selector>|--session <id|name|new>) --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "  python -m runpane loops update --loop <id> [--repo <selector>|--session <id|name|new>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]",
         "  python -m runpane loops run --loop <id> --yes [--json] [--pane-dir <path>]",
         "  python -m runpane loops pause --loop <id> --yes [--json] [--pane-dir <path>]",
         "  python -m runpane loops resume --loop <id> --yes [--json] [--pane-dir <path>]",
@@ -4874,22 +4892,30 @@ export const RUNPANE_CONTRACT = {
       ],
       "loops create": [
         "Usage:",
-        "python -m runpane loops create --repo <selector> --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "python -m runpane loops create (--repo <selector>|--session <id|name|new>) --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]",
         "",
-        "Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
-        "Each run is a new Pane in a fresh worktree from the repo's default base branch.",
+        "Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run, or sends a prompt to a Session's agent. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
+        "With --repo, each run is a new Pane in a fresh worktree from the repo's default base branch.",
+        "A Session loop sends its prompt to that Session's agent each run instead of creating a new Pane.",
         "",
         "Options:",
         "  --repo <selector>               Repository: active, id, exact path, or saved name.",
+        "  --session <id|name|new>         Session whose agent gets the prompt each run, instead of",
+        "                                  a new Pane; `new` creates a Session named after the loop.",
+        "                                  That agent then skips permission prompts for every message",
+        "                                  it gets, not only loop runs.",
         "  --name <name>                   Loop name.",
         "  --cron <expr>                   Five-field cron in local time, such as \"0 3 * * *\"; at least 1 hour apart.",
-        "  --agent <claude|codex|cursor>   Agent each run starts. Runs skip permission prompts.",
-        "  --tool-command <command>        Command each run starts instead of an agent. On Windows it runs",
+        "  --agent <claude|codex|cursor>   Agent each run starts; for a Session loop, the Session's agent.",
+        "                                  Runs skip permission prompts.",
+        "  --tool-command <command>        Command each run starts instead of an agent, such as",
+        "                                  ./scripts/nightly-report.sh. Project loops only. On Windows it runs",
         "                                  in Pane's terminal shell, Git Bash by default, so write bash or",
         "                                  `cmd //c`: \"cmd //c echo hi > loop.txt\" works, \"cmd /c ...\" hangs.",
-        "  --prompt <text>                 First input sent to the agent or command.",
-        "  --prompt-file <path|->          Read the first input from a file or stdin.",
-        "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>.",
+        "  --prompt <text>                 Text typed into the agent or command after it starts; for a",
+        "                                  Session loop, the message sent to the Session's agent each run.",
+        "  --prompt-file <path|->          Read the prompt from a file or stdin.",
+        "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>. Project loops only.",
         "  --paused                        Create the loop paused.",
         "  --dry-run                       Check the schedule and print what would be saved.",
         "  --yes                           Confirm the change.",
@@ -4898,23 +4924,31 @@ export const RUNPANE_CONTRACT = {
       ],
       "loops update": [
         "Usage:",
-        "python -m runpane loops update --loop <id> [--repo <selector>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]",
+        "python -m runpane loops update --loop <id> [--repo <selector>|--session <id|name|new>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]",
         "",
-        "Change a loop's repo, name, schedule, agent or command, first input, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
-        "Each run is a new Pane in a fresh worktree from the repo's default base branch.",
+        "Change a loop's repo or Session, name, schedule, agent or command, prompt, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
+        "With --repo, each run is a new Pane in a fresh worktree from the repo's default base branch.",
+        "A Session loop sends its prompt to that Session's agent each run instead of creating a new Pane.",
         "",
         "Options:",
         "  --loop <id>                     Loop to change; other flags replace its values.",
         "  --repo <selector>               Repository: active, id, exact path, or saved name.",
+        "  --session <id|name|new>         Session whose agent gets the prompt each run, instead of",
+        "                                  a new Pane; `new` creates a Session named after the loop.",
+        "                                  That agent then skips permission prompts for every message",
+        "                                  it gets, not only loop runs.",
         "  --name <name>                   Loop name.",
         "  --cron <expr>                   Five-field cron in local time, such as \"0 3 * * *\"; at least 1 hour apart.",
-        "  --agent <claude|codex|cursor>   Agent each run starts. Runs skip permission prompts.",
-        "  --tool-command <command>        Command each run starts instead of an agent. On Windows it runs",
+        "  --agent <claude|codex|cursor>   Agent each run starts; for a Session loop, the Session's agent.",
+        "                                  Runs skip permission prompts.",
+        "  --tool-command <command>        Command each run starts instead of an agent, such as",
+        "                                  ./scripts/nightly-report.sh. Project loops only. On Windows it runs",
         "                                  in Pane's terminal shell, Git Bash by default, so write bash or",
         "                                  `cmd //c`: \"cmd //c echo hi > loop.txt\" works, \"cmd /c ...\" hangs.",
-        "  --prompt <text>                 First input sent to the agent or command.",
-        "  --prompt-file <path|->          Read the first input from a file or stdin.",
-        "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>.",
+        "  --prompt <text>                 Text typed into the agent or command after it starts; for a",
+        "                                  Session loop, the message sent to the Session's agent each run.",
+        "  --prompt-file <path|->          Read the prompt from a file or stdin.",
+        "  --worktree-name <template>      Worktree and branch name; defaults to loop-<name>. Project loops only.",
         "  --dry-run                       Check the schedule and print what would be saved.",
         "  --yes                           Confirm the change.",
         "  --json                          Print JSON output.",
@@ -5235,7 +5269,7 @@ export const RUNPANE_CONTRACT = {
       "`sessions detach` detach a Pane from a named Session.",
       "`sessions overview` read a live status, activity, git, and pull request overview for a named Session. Each panel in `panes[].panels[]` carries its own latest `runpane report` as `report`, so one call shows what every worker last reported and when (`reportedAt`, next to the panel's `state` and `lastActivityAt`). When a report's summary is a complete JSON object, such as a status file sent with `--summary-file`, `report.data` holds it exactly as the worker gave it; Pane never reads, renames or validates its fields. A summary that is not a JSON object (plain text, an array, a scalar or invalid JSON), is nested more than 64 levels deep, or was truncated (`summaryTruncated`), has no `data`. A panel that never reported has no `report`. `panes[].report` is still the newest report among the Pane's panels.",
       "`runpane lock acquire|release|list` coordinate a resource shared between agents, such as one test account. The caller's Pane and panel own the lock; it is scoped to the owner's Session (or global outside one), renews for the same owner, and is released on TTL expiry, owner panel exit, or owner Pane archive. `--wait` blocks in the daemon until the lock comes free.",
-      "`runpane loops list|create|update|run|pause|resume|delete` manage loops (scheduled tasks): a cron schedule that starts a new Pane in a fresh worktree for each run. Loops are for large recurring jobs and run at most once an hour; for short waits, agents use their harness's own sleep and wake. See [LOOPS.md](LOOPS.md).",
+      "`runpane loops list|create|update|run|pause|resume|delete` manage loops (scheduled tasks): a cron schedule that starts a new Pane in a fresh worktree for each run, or sends a prompt to a Session's agent. Loops are for large recurring jobs and run at most once an hour; for short waits, agents use their harness's own sleep and wake. See [LOOPS.md](LOOPS.md).",
       "`runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task (a new tab in the work's Pane with `--pane <id>`, or a new Pane for new work), check on it, and send it a follow-up.",
       "`runpane report --state ready|blocked|failed|done` is how a worker hands back its result. It stores the latest report on the worker's panel (state, `--pr`, `--head`, up to 16,000 characters of `--summary` or `--summary-file`, and the `--question` a blocked worker needs answered), journals an opt-in `agent.report` watch event (`REPORT <pane-name> pane <pane-id> panel <panel-id> ready pr#747 fc5dce9`; it skips the `--min-interval` batch), records it as Session activity, and shows it in `agents status`, `panels list`, and `sessions overview` (each panel's own report as `panes[].panels[].report`, with a JSON object summary as `data`, and the Pane's newest as `panes[].report`). Inside a Pane terminal the panel comes from `PANE_SESSION_ID` and `PANE_PANEL_ID`; elsewhere pass `--pane` and `--panel`. It prints how many watches were waiting for the report and received it (`Delivered to 1 waiting watcher.`, `liveWatchers` in JSON). Zero means nobody was waiting right now, not that the report is lost: it stays on the panel, and a named-cursor watch receives it when it next waits.",
       "Work sent to an agent through `runpane panels create`, `panes create` (with a prompt), or `panels submit` records that the sender waits for a `runpane report`, unless the request says `--source user` (Pane's own UI does) or `--no-expect-report`; `--expect-report` asks for one anyway. Typing into a tab never does. If the agent then goes ready or its panel exits without a report, Pane journals one opt-in `agent.report.missing` entry (`MISSING REPORT <pane-name> pane <pane-id> panel <panel-id> ready|exited`) whose `lastOutput` is the agent's last transcript reply or last screen lines; it skips the `--min-interval` batch and reaches only watchers that list it in `--kinds`. While the agent's screen shows background work (Claude's `· 1 shell` footer or a running background subagent row, Codex's `background terminal running` line), Pane waits and looks again every 10 seconds instead. `agent.blocked` entries carry `screenLines`, the prompt the agent waits on, and are journalled once a panel has stayed blocked for 2 seconds.",
@@ -6349,9 +6383,24 @@ export const RUNPANE_CONTRACT = {
         "--name=deps",
         "--cron=0 9 * * 1",
         "--tool-command",
-        "agent-farm run deps",
+        "./scripts/nightly-report.sh",
         "--prompt-file",
         "-"
+      ],
+      [
+        "loops",
+        "create",
+        "--session",
+        "new",
+        "--name",
+        "triage",
+        "--cron",
+        "0 9 * * 1-5",
+        "--agent",
+        "claude",
+        "--prompt",
+        "Triage",
+        "--yes"
       ],
       [
         "loops",
@@ -6360,6 +6409,15 @@ export const RUNPANE_CONTRACT = {
         "loop-1",
         "--cron",
         "0 4 * * *",
+        "--yes"
+      ],
+      [
+        "loops",
+        "update",
+        "--loop",
+        "loop-1",
+        "--session",
+        "Nightly",
         "--yes"
       ],
       [
@@ -12103,7 +12161,6 @@ export const RUNPANE_CONTRACT = {
       "type": "object",
       "required": [
         "name",
-        "projectId",
         "cron",
         "enabled"
       ],
@@ -12117,6 +12174,9 @@ export const RUNPANE_CONTRACT = {
         },
         "projectId": {
           "type": "number"
+        },
+        "orchestrationSessionId": {
+          "type": "string"
         },
         "cron": {
           "type": "string"
@@ -12148,7 +12208,6 @@ export const RUNPANE_CONTRACT = {
       "required": [
         "id",
         "name",
-        "projectId",
         "cron",
         "enabled",
         "createdAtMs",
@@ -12166,6 +12225,9 @@ export const RUNPANE_CONTRACT = {
         },
         "projectId": {
           "type": "number"
+        },
+        "orchestrationSessionId": {
+          "type": "string"
         },
         "cron": {
           "type": "string"
@@ -12362,7 +12424,7 @@ export const RUNPANE_CONTRACT = {
         "Pane terminals draw inline images: sixel, iTerm2 inline images, and the kitty graphics protocol. Tools that need kitty graphics, such as terminal-browser and terminal-doom, run inside a Pane panel; `runpane doctor --json` reports the exact list under `terminal.graphicsProtocols`.",
         "After creating Panes or sending terminal input, validate with `panels wait` or bounded `panels screen`. For a harness that consumes streaming output, use `runpane watch --follow` (with `--session <id>` for a Session); its named consumer applies settling and batching. Adding numeric --since leaves it unnamed and bypasses cadence; --as cannot be combined with --since. A harness that wakes only when a process exits uses `runpane watch --as <name> --until-event --json` and runs it again after each event. Single-event waits deliver immediately without follow cadence. Never pipe `--follow` into `grep -m1` or `head`.",
         "When several agents share one resource, such as a test account, name a lock in their prompts: each worker runs `runpane lock acquire --name <name> --ttl 30m --wait 1800000 --json` before using it and `runpane lock release --name <name>` after.",
-        "Loops (`runpane loops create`) run a task on a cron schedule, each run in a new Pane. They are for large recurring jobs, such as a nightly bug sweep, and run at most once an hour. For a short wait, use your agent harness's own sleep and wake instead."
+        "Loops (`runpane loops create`) run a task on a cron schedule, each run in a new Pane or, with `--session`, as a message to a Session's agent. They are for large recurring jobs, such as a nightly bug sweep, and run at most once an hour. For a short wait, use your agent harness's own sleep and wake instead."
       ],
       "detailCommand": "runpane agent-context --command <command> [--json]",
       "tools": [
@@ -16791,7 +16853,7 @@ export const RUNPANE_CONTRACT = {
       "loops list": {
         "name": "loops list",
         "summary": "List loops (scheduled tasks) with their schedule, next run, and recent runs.",
-        "details": "Lists every loop: its id, repo (projectId), cron and scheduleText, enabled, nextRunAtMs (null while paused), and its newest runs. A run's sessionId is its Pane; read its progress with `runpane agents status --pane <id>`.",
+        "details": "Lists every loop: its id, target (projectId for a repo, or orchestrationSessionId for a Session), cron and scheduleText, enabled, nextRunAtMs (null while paused), and its newest runs. A run's sessionId is its Pane (null for a Session loop's runs); read its progress with `runpane agents status --pane <id>`.",
         "requiresPaneDaemon": true,
         "mutates": false,
         "arguments": [
@@ -16819,16 +16881,22 @@ export const RUNPANE_CONTRACT = {
       },
       "loops create": {
         "name": "loops create",
-        "summary": "Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
-        "details": "Each run is a new Pane in a fresh worktree branched from the repo's default base branch, started like `runpane panes create` with the agent or command and first input given here. Runs start only while Pane is running, in the host's local time zone. A run up to 15 minutes late still starts; a later one is recorded as skipped and never caught up. Runs may overlap. Unattended agent runs skip permission prompts. Pane keeps each loop's last 10 run Panes and archives older ones.",
+        "summary": "Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run, or sends a prompt to a Session's agent. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
+        "details": "With --repo, each run is a new Pane in a fresh worktree branched from the repo's default base branch, started like `runpane panes create` with the agent or command and prompt given here. With --session, each run sends the prompt to that Session's agent instead of creating a Pane; a Session loop needs --agent and --prompt and takes no --tool-command. `new` creates a Session named after the loop. The Session's agent then skips permission prompts for every message it gets, not only loop runs. Runs start only while Pane is running, in the host's local time zone. A run up to 15 minutes late still starts; a later one is recorded as skipped and never caught up. Runs may overlap. Unattended agent runs skip permission prompts. Pane keeps each loop's last 10 run Panes and archives older ones.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
           {
             "name": "--repo",
             "value": "<selector>",
-            "required": true,
-            "description": "Repository: active, id, exact path, or saved repository name."
+            "required": false,
+            "description": "Repository: active, id, exact path, or saved repository name. Each run is a new Pane in it. Pass this or --session."
+          },
+          {
+            "name": "--session",
+            "value": "<id|name|new>",
+            "required": false,
+            "description": "Session whose agent gets the prompt each run, by id or name, instead of a new Pane. `new` creates a Session named after the loop. The Session's agent then skips permission prompts for every message it gets, not only loop runs. Pass this or --repo."
           },
           {
             "name": "--name",
@@ -16846,31 +16914,31 @@ export const RUNPANE_CONTRACT = {
             "name": "--agent",
             "value": "<claude|codex|cursor>",
             "required": false,
-            "description": "Agent each run starts. Pass this or --tool-command."
+            "description": "Agent each run starts; for a Session loop, the Session's agent. Pass this or --tool-command."
           },
           {
             "name": "--tool-command",
             "value": "<command>",
             "required": false,
-            "description": "Command each run starts instead of a built-in agent, such as `agent-farm run <task>`. On Windows it runs in Pane's terminal shell, Git Bash by default: write bash, or `cmd //c echo hi > loop.txt` rather than `cmd /c`."
+            "description": "Command each run starts instead of a built-in agent, such as `./scripts/nightly-report.sh` or `pnpm test`. Project loops only. On Windows it runs in Pane's terminal shell, Git Bash by default: write bash, or `cmd //c echo hi > loop.txt` rather than `cmd /c`."
           },
           {
             "name": "--prompt",
             "value": "<text>",
             "required": false,
-            "description": "First input sent to the agent or command."
+            "description": "Text typed into the agent or command after it starts; for a Session loop, the message sent to the Session's agent each run."
           },
           {
             "name": "--prompt-file",
             "value": "<path|->",
             "required": false,
-            "description": "Read the first input from a file or stdin."
+            "description": "Read the prompt from a file or stdin."
           },
           {
             "name": "--worktree-name",
             "value": "<template>",
             "required": false,
-            "description": "Worktree and branch name template; defaults to loop-<name>."
+            "description": "Worktree and branch name template; defaults to loop-<name>. Project loops only."
           },
           {
             "name": "--paused",
@@ -16901,7 +16969,8 @@ export const RUNPANE_CONTRACT = {
         ],
         "examples": [
           "runpane loops create --repo active --name nightly-bug-sweep --cron \"0 3 * * *\" --agent claude --prompt \"Fix one bug from yesterday's issues\" --yes --json",
-          "runpane loops create --repo <repo> --name dependency-check --cron \"0 9 * * 1\" --tool-command \"agent-farm run dependency-check\" --yes --json"
+          "runpane loops create --repo <repo> --name dependency-check --cron \"0 9 * * 1\" --tool-command \"pnpm test\" --yes --json",
+          "runpane loops create --session new --name morning-triage --cron \"0 9 * * 1-5\" --agent claude --prompt \"Triage the new issues\" --yes --json"
         ],
         "jsonSchemas": [
           "loopInput",
@@ -16914,8 +16983,8 @@ export const RUNPANE_CONTRACT = {
       },
       "loops update": {
         "name": "loops update",
-        "summary": "Change a loop's repo, name, schedule, agent or command, first input, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
-        "details": "Reads the loop, replaces the values you pass, and saves it. Passing --agent clears --tool-command and the other way round. Pause and resume with `loops pause` and `loops resume`. Runs start only while Pane is running, in the host's local time zone. A run up to 15 minutes late still starts; a later one is recorded as skipped and never caught up. Runs may overlap. Unattended agent runs skip permission prompts. Pane keeps each loop's last 10 run Panes and archives older ones.",
+        "summary": "Change a loop's repo or Session, name, schedule, agent or command, prompt, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.",
+        "details": "Reads the loop, replaces the values you pass, and saves it. Passing --agent clears --tool-command and the other way round; --repo and --session replace each other the same way. Pause and resume with `loops pause` and `loops resume`. Runs start only while Pane is running, in the host's local time zone. A run up to 15 minutes late still starts; a later one is recorded as skipped and never caught up. Runs may overlap. Unattended agent runs skip permission prompts. Pane keeps each loop's last 10 run Panes and archives older ones.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -16929,7 +16998,13 @@ export const RUNPANE_CONTRACT = {
             "name": "--repo",
             "value": "<selector>",
             "required": false,
-            "description": "Repository: active, id, exact path, or saved repository name."
+            "description": "Repository: active, id, exact path, or saved repository name. Each run is a new Pane in it. Pass this or --session."
+          },
+          {
+            "name": "--session",
+            "value": "<id|name|new>",
+            "required": false,
+            "description": "Session whose agent gets the prompt each run, by id or name, instead of a new Pane. `new` creates a Session named after the loop. The Session's agent then skips permission prompts for every message it gets, not only loop runs. Pass this or --repo."
           },
           {
             "name": "--name",
@@ -16947,31 +17022,31 @@ export const RUNPANE_CONTRACT = {
             "name": "--agent",
             "value": "<claude|codex|cursor>",
             "required": false,
-            "description": "Agent each run starts. Pass this or --tool-command."
+            "description": "Agent each run starts; for a Session loop, the Session's agent. Pass this or --tool-command."
           },
           {
             "name": "--tool-command",
             "value": "<command>",
             "required": false,
-            "description": "Command each run starts instead of a built-in agent, such as `agent-farm run <task>`. On Windows it runs in Pane's terminal shell, Git Bash by default: write bash, or `cmd //c echo hi > loop.txt` rather than `cmd /c`."
+            "description": "Command each run starts instead of a built-in agent, such as `./scripts/nightly-report.sh` or `pnpm test`. Project loops only. On Windows it runs in Pane's terminal shell, Git Bash by default: write bash, or `cmd //c echo hi > loop.txt` rather than `cmd /c`."
           },
           {
             "name": "--prompt",
             "value": "<text>",
             "required": false,
-            "description": "First input sent to the agent or command."
+            "description": "Text typed into the agent or command after it starts; for a Session loop, the message sent to the Session's agent each run."
           },
           {
             "name": "--prompt-file",
             "value": "<path|->",
             "required": false,
-            "description": "Read the first input from a file or stdin."
+            "description": "Read the prompt from a file or stdin."
           },
           {
             "name": "--worktree-name",
             "value": "<template>",
             "required": false,
-            "description": "Worktree and branch name template; defaults to loop-<name>."
+            "description": "Worktree and branch name template; defaults to loop-<name>. Project loops only."
           },
           {
             "name": "--dry-run",
@@ -17008,7 +17083,7 @@ export const RUNPANE_CONTRACT = {
       "loops run": {
         "name": "loops run",
         "summary": "Start a run of a loop now. The schedule stays the same.",
-        "details": "Starts a run now, as a new Pane, even while the loop is paused or another run is still going. The schedule stays the same, and the run counts toward the 10 kept runs.",
+        "details": "Starts a run now, as a new Pane or a message to the loop's Session, even while the loop is paused or another run is still going. The schedule stays the same, and the run counts toward the 10 kept runs.",
         "requiresPaneDaemon": true,
         "mutates": true,
         "arguments": [
@@ -17042,7 +17117,7 @@ export const RUNPANE_CONTRACT = {
           "loopResult"
         ],
         "notes": [
-          "The result is the loop; `runs[0]` is the new run, with `status` started or failed and `sessionId` its Pane.",
+          "The result is the loop; `runs[0]` is the new run, with `status` started or failed and `sessionId` its Pane (null for a Session loop).",
           "Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake."
         ]
       },

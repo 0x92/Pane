@@ -61,7 +61,7 @@ import { WorkspaceJournal } from '../services/workspaceJournal';
 import { SessionPrMonitor } from '../services/sessionPrMonitor';
 import { LoopManager } from '../services/loops/loopManager';
 import { LoopRepository } from '../services/loops/loopRepository';
-import { archiveLoopRun, startLoopRun } from '../ipc/loops';
+import { archiveLoopRun, prepareLoopSession, startLoopRun } from '../ipc/loops';
 import { NamedLockService } from '../services/namedLockService';
 import { NamedLockStore } from '../services/namedLockStore';
 import { WorkspaceStateReader } from '../services/workspaceStateReader';
@@ -326,6 +326,7 @@ export async function createPaneDaemonHost(options: PaneDaemonHostOptions): Prom
     startRun: (loop, slotAtMs) => startLoopRun(commandRegistry, loop, slotAtMs),
     archiveRun: sessionId => archiveLoopRun(commandRegistry, sessionId),
     projectExists: projectId => Boolean(databaseService.getProject(projectId)),
+    prepareSession: (target, loop) => prepareLoopSession(commandRegistry, target, loop),
     onChange: () => getPaneEventSink().send('loops:changed'),
     logger,
   });

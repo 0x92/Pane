@@ -3,6 +3,7 @@ import {
   LOOP_KEPT_RUNS,
   LOOP_NAME_MAX_LENGTH,
   type Loop,
+  type LoopAgent,
   type LoopInput,
   type LoopRun,
   type LoopRunTrigger,
@@ -18,8 +19,11 @@ const KEPT_RUN_NOTE = 'Kept because the run Pane has uncommitted or unpushed wor
 /** The longest the timer sleeps, so a changed clock or a slept laptop is noticed within the grace period. */
 const MAX_SLEEP_MS = 60 * 1000;
 
-/** Starts one run's Pane, as `runpane panes create`, and returns its id. */
-export type LoopRunStarter = (loop: StoredLoop, slotAtMs: number) => Promise<{ sessionId: string; warning?: string }>;
+/**
+ * Starts one run: a project loop's Pane, as `runpane panes create`, returning
+ * its id; or a Session loop's message to its agent, returning no Pane.
+ */
+export type LoopRunStarter = (loop: StoredLoop, slotAtMs: number) => Promise<{ sessionId: string | null; warning?: string }>;
 
 export interface LoopManagerOptions {
   repo: LoopRepository;
@@ -27,6 +31,11 @@ export interface LoopManagerOptions {
   /** Archive a run Pane that fell out of the kept runs. False when Pane refused, to keep uncommitted or unpushed work. */
   archiveRun: (sessionId: string) => Promise<boolean>;
   projectExists: (projectId: number) => boolean;
+  /**
+   * Resolve a Session loop's target (an id, a name or `LOOP_NEW_SESSION`) to a
+   * Session id, and make that Session's agent run `agent` without permission prompts.
+   */
+  prepareSession: (target: string, loop: { name: string; agent: LoopAgent }) => Promise<string>;
   /** Called after any loop or run changes, so clients refetch. */
   onChange?: () => void;
   now?: () => number;
@@ -67,7 +76,7 @@ export class LoopManager {
     return this.options.repo.list().map(loop => this.present(loop));
   }
 
-  save(input: LoopInput): Loop {
+  async save(input: LoopInput): Promise<Loop> {
     const { repo } = this.options;
     const name = input.name.trim();
     const cron = input.cron.trim().replace(/\s+/g, ' ');
@@ -76,11 +85,22 @@ export class LoopManager {
     if (name.length > LOOP_NAME_MAX_LENGTH) {
       throw new PaneError('ERR_LOOP_INVALID', `A loop name can be at most ${LOOP_NAME_MAX_LENGTH} characters; this one has ${name.length}. Nothing was saved.`, 'Shorten the name, then save again.');
     }
-    if (!this.options.projectExists(input.projectId)) {
+    const sessionTarget = input.orchestrationSessionId?.trim() || undefined;
+    if ((input.projectId === undefined) === (sessionTarget === undefined)) {
+      throw new PaneError('ERR_LOOP_INVALID', 'A loop targets either a project or a Session. Nothing was saved.', 'Give exactly one of projectId or orchestrationSessionId (`--repo` or `--session`).');
+    }
+    if (input.projectId !== undefined && !this.options.projectExists(input.projectId)) {
       throw new PaneError('ERR_LOOP_INVALID', `Project ${input.projectId} does not exist. Nothing was saved.`, 'Pick a saved project (`runpane repos list`), then save again.');
     }
     if (Boolean(input.agent) === Boolean(toolCommand)) {
       throw new PaneError('ERR_LOOP_INVALID', 'A loop runs either an agent or a command. Nothing was saved.', 'Give exactly one of agent or toolCommand.');
+    }
+    const initialInput = input.initialInput?.trim() ? input.initialInput : undefined;
+    if (sessionTarget && toolCommand) {
+      throw new PaneError('ERR_LOOP_INVALID', 'A Session loop sends its prompt to the Session\'s agent, so it cannot run a command. Nothing was saved.', 'Choose claude, codex or cursor as the agent, or target a project to run a command.');
+    }
+    if (sessionTarget && !initialInput) {
+      throw new PaneError('ERR_LOOP_INVALID', 'A Session loop needs a prompt to send to the Session\'s agent. Nothing was saved.', 'Add the prompt (`--prompt`), then save again.');
     }
     const nowMs = this.now();
     const preview = previewLoopSchedule(cron, nowMs);
@@ -88,17 +108,23 @@ export class LoopManager {
 
     const existing = input.id ? repo.get(input.id) : null;
     if (input.id && !existing) throw loopNotFound(input.id);
+    // Last, since a new Session is created here: everything else about the loop is valid.
+    const orchestrationSessionId = sessionTarget && input.agent
+      ? await this.options.prepareSession(sessionTarget, { name, agent: input.agent })
+      : undefined;
     // A new cron or a resume counts from now, so it never replays older slots.
     const restartsSchedule = !existing || existing.cron !== cron || (!existing.enabled && input.enabled);
     const loop: StoredLoop = {
       id: existing?.id ?? randomUUID(),
       name,
-      projectId: input.projectId,
+      projectId: orchestrationSessionId ? undefined : input.projectId,
+      orchestrationSessionId,
       cron,
       agent: toolCommand ? undefined : input.agent,
       toolCommand,
-      initialInput: input.initialInput?.trim() ? input.initialInput : undefined,
-      worktreeTemplate: input.worktreeTemplate?.trim() || undefined,
+      initialInput,
+      // A Session loop's runs have no worktree.
+      worktreeTemplate: orchestrationSessionId ? undefined : input.worktreeTemplate?.trim() || undefined,
       enabled: input.enabled,
       scheduleFromMs: restartsSchedule ? nowMs : existing.scheduleFromMs,
       createdAtMs: existing?.createdAtMs ?? nowMs,
@@ -182,7 +208,7 @@ export class LoopManager {
       this.options.onChange?.();
       const { sessionId, warning } = await this.options.startRun(loop, slotAtMs);
       repo.finishRun(run.id, { status: 'started', error: warning ?? null, sessionId });
-      this.options.logger?.info(`[Loops] Started "${loop.name}" as Pane ${sessionId}.`);
+      this.options.logger?.info(sessionId ? `[Loops] Started "${loop.name}" as Pane ${sessionId}.` : `[Loops] Sent "${loop.name}" to Session ${loop.orchestrationSessionId}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       repo.finishRun(run.id, { status: 'failed', error: message, sessionId: null });
@@ -196,7 +222,7 @@ export class LoopManager {
 
   /**
    * Archive the Panes of runs past the kept ten, and drop each row once its Pane
-   * is gone. A Pane kept for its uncommitted or unpushed work keeps its row, with a note, so the
+   * is gone. Rows without a Pane (Session loop runs, failures, skips) just go. A Pane kept for its uncommitted or unpushed work keeps its row, with a note, so the
    * loop still links to it. Trimming never fails a run.
    */
   private trim(loopId: string): void {

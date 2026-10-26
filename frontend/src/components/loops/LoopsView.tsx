@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Plus, Repeat } from 'lucide-react';
 import { LOOP_KEPT_RUNS, type Loop } from '../../../../shared/types/loop';
-import { openLoopRun, useLoopsStore } from '../../stores/loopsStore';
+import { openLoopRun, openLoopSession, useLoopsStore } from '../../stores/loopsStore';
+import { useOrchestrationSessionStore } from '../../stores/orchestrationSessionStore';
 import { cn } from '../../utils/cn';
 import { Button } from '../ui/Button';
 import { LoopActions } from './LoopActions';
@@ -82,6 +83,7 @@ function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) 
     failedCount > 0 && `${failedCount} failed`,
   ].filter(Boolean).join(' · ') || 'No runs yet';
   const latestSessionId = views.find(view => view.session)?.session?.id;
+  const sessionTarget = loop.orchestrationSessionId;
 
   return (
     <div className="flex min-w-0 flex-col gap-4" data-testid="loop-detail">
@@ -91,6 +93,9 @@ function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) 
         <span className="rounded-full border border-border-primary px-2 py-0.5 text-[11px] text-text-secondary">{projectName}</span>
         {!loop.enabled && <span className="rounded-full border border-border-primary px-2 py-0.5 text-[11px] text-text-tertiary">paused</span>}
         <div className="ml-auto flex items-center gap-2">
+          {sessionTarget && (
+            <Button size="sm" variant="secondary" onClick={() => openLoopSession(sessionTarget)}>Open Session</Button>
+          )}
           {latestSessionId && (
             <Button size="sm" variant="secondary" onClick={() => openLoopRun(latestSessionId)}>Open latest run</Button>
           )}
@@ -166,9 +171,16 @@ export function LoopsView() {
   const selectLoop = useLoopsStore(state => state.selectLoop);
   const openDrawer = useLoopsStore(state => state.openDrawer);
   const projects = useProjectList();
+  const sessions = useOrchestrationSessionStore(state => state.sessions);
+  const loadSessions = useOrchestrationSessionStore(state => state.load);
+  useEffect(() => { void loadSessions().catch(() => undefined); }, [loadSessions]);
   const projectNames = useMemo(() => new Map(projects.map(project => [project.id, project.name])), [projects]);
+  const sessionNames = useMemo(() => new Map(sessions.map(session => [session.id, session.name])), [sessions]);
   const selected = loops.find(loop => loop.id === selectedLoopId) ?? loops[0];
-  const projectName = (loop: Loop) => projectNames.get(loop.projectId) ?? '';
+  // Where a loop runs: its project, or the Session it messages.
+  const projectName = (loop: Loop) => loop.orchestrationSessionId
+    ? `Session · ${sessionNames.get(loop.orchestrationSessionId) ?? 'missing'}`
+    : projectNames.get(loop.projectId ?? -1) ?? '';
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 bg-surface-primary" data-testid="loops-view">
@@ -197,7 +209,7 @@ export function LoopsView() {
             <Repeat className="h-6 w-6 text-text-tertiary" aria-hidden="true" />
             <p className="text-sm font-medium text-text-primary">No loops yet</p>
             <p className="text-xs text-text-secondary">
-              A loop starts a new Pane on a schedule, for large recurring jobs such as a nightly bug sweep. Loops run at most once an hour.
+              A loop runs an agent on a schedule, in a new Pane or in a Session, for large recurring jobs such as a nightly bug sweep. Loops run at most once an hour.
             </p>
             <Button size="sm" onClick={() => openDrawer(null)}><Plus className="mr-1 h-3.5 w-3.5" aria-hidden="true" />New loop</Button>
           </div>

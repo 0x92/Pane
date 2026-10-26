@@ -240,7 +240,7 @@ The desktop app treats one consumer name specially: while a `runpane watch --as 
 
 `runpane lock acquire|release|list` coordinate a resource shared between agents, such as one test account. The caller's Pane and panel own the lock; it is scoped to the owner's Session (or global outside one), renews for the same owner, and is released on TTL expiry, owner panel exit, or owner Pane archive. `--wait` blocks in the daemon until the lock comes free.
 
-`runpane loops list|create|update|run|pause|resume|delete` manage loops (scheduled tasks): a cron schedule that starts a new Pane in a fresh worktree for each run. Loops are for large recurring jobs and run at most once an hour; for short waits, agents use their harness's own sleep and wake. See [LOOPS.md](LOOPS.md).
+`runpane loops list|create|update|run|pause|resume|delete` manage loops (scheduled tasks): a cron schedule that starts a new Pane in a fresh worktree for each run, or sends a prompt to a Session's agent. Loops are for large recurring jobs and run at most once an hour; for short waits, agents use their harness's own sleep and wake. See [LOOPS.md](LOOPS.md).
 
 `runpane agents start|status|send` finish the three common agent jobs in one call each: start an agent on a task (a new tab in the work's Pane with `--pane <id>`, or a new Pane for new work), check on it, and send it a follow-up.
 
@@ -358,8 +358,8 @@ Every command and its options, from `commands` in `contracts/runpane/contract.js
 - `pr unwatch`: Remove a Pane’s explicit PR registration.
 - `pr list`: List PR registrations and stopped watches.
 - `loops list`: List loops (scheduled tasks) with their schedule, next run, and recent runs.
-- `loops create`: Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.
-- `loops update`: Change a loop's repo, name, schedule, agent or command, first input, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.
+- `loops create`: Create a loop: a cron schedule that starts a new Pane in a fresh worktree for each run, or sends a prompt to a Session's agent. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.
+- `loops update`: Change a loop's repo or Session, name, schedule, agent or command, prompt, or worktree template. Loops are for large recurring jobs and run at most once an hour; for short waits, use your agent harness's own sleep and wake.
 - `loops run`: Start a run of a loop now. The schedule stays the same.
 - `loops pause`: Pause a loop: it starts no scheduled runs until resumed.
 - `loops resume`: Resume a paused loop from its next scheduled time.
@@ -464,8 +464,8 @@ runpane pr watch [--pane <id>] --url <PR URL> [--head <full-sha>] [--json] [--pa
 runpane pr unwatch [--pane <id>] --url <PR URL> [--json] [--pane-dir <path>]
 runpane pr list [--pane <id>] [--json] [--pane-dir <path>]
 runpane loops list [--json] [--pane-dir <path>]
-runpane loops create --repo <selector> --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]
-runpane loops update --loop <id> [--repo <selector>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]
+runpane loops create (--repo <selector>|--session <id|name|new>) --name <name> --cron <expr> (--agent <claude|codex|cursor>|--tool-command <command>) [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--paused] [--dry-run] --yes [--json] [--pane-dir <path>]
+runpane loops update --loop <id> [--repo <selector>|--session <id|name|new>] [--name <name>] [--cron <expr>] [--agent <claude|codex|cursor>|--tool-command <command>] [--prompt <text>|--prompt-file <path|->] [--worktree-name <template>] [--dry-run] --yes [--json] [--pane-dir <path>]
 runpane loops run --loop <id> --yes [--json] [--pane-dir <path>]
 runpane loops pause --loop <id> --yes [--json] [--pane-dir <path>]
 runpane loops resume --loop <id> --yes [--json] [--pane-dir <path>]

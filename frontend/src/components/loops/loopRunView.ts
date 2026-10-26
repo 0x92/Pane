@@ -38,7 +38,8 @@ function isRunning(session: Session, agentState: AgentState): boolean {
 function viewRun(run: LoopRun, session: Session | undefined, agentState: AgentState, nowMs: number): LoopRunView {
   if (run.status !== 'started') return { run, outcome: run.status, session: undefined, durationMs: null, branch: null, waitingForAnswer: false };
   const running = session ? isRunning(session, agentState) : false;
-  const waitingForAnswer = session !== undefined && agentState === 'blocked';
+  // A Session loop's run has no Pane of its own, so its start-up warning is all Pane knows.
+  const waitingForAnswer = run.sessionId === null ? Boolean(run.error) : session !== undefined && agentState === 'blocked';
   // Only a working run has a trustworthy end (now): a session's lastActivity is not when its agent finished.
   const durationMs = running && nowMs > run.slotAtMs ? nowMs - run.slotAtMs : null;
   const branch = session?.worktreePath ? session.worktreePath.split(/[\\/]/).filter(Boolean).pop() ?? null : null;

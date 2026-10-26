@@ -1960,8 +1960,8 @@ export function registerRunpaneHandlers(
   });
 
   commandRegistry.register('runpane:loops:save', async (request: PaneCommandValue): Promise<RunpaneLoopResult> => {
-    return withRunpaneAction(services, 'loops:save', {}, () =>
-      ({ ok: true, loop: requireLoopManager(services).save(decodeBoundary(request, loopInputSchema)) }));
+    return withRunpaneAction(services, 'loops:save', {}, async () =>
+      ({ ok: true, loop: await requireLoopManager(services).save(decodeBoundary(request, loopInputSchema)) }));
   });
 
   commandRegistry.register('runpane:loops:delete', async (request: PaneCommandValue): Promise<RunpaneLoopDeleteResult> => {

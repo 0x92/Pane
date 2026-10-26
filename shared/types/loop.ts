@@ -2,8 +2,9 @@ import { boundary } from '../validation/boundaryDecoder';
 import type { BoundarySchema } from '../validation/boundaryDecoder';
 
 /**
- * Loops (scheduled tasks): a cron schedule plus the request `runpane panes
- * create` takes. Each run is a new Pane in a fresh worktree.
+ * Loops (scheduled tasks): a cron schedule plus what each run does. A project
+ * loop runs the request `runpane panes create` takes, so each run is a new
+ * Pane in a fresh worktree. A Session loop sends its prompt to a Session's agent.
  *
  * Loops are for large recurring jobs and run at most once an hour. Agents that
  * only need to wait a few minutes use their own harness's sleep and wake.
@@ -12,20 +13,32 @@ import type { BoundarySchema } from '../validation/boundaryDecoder';
 export const LOOP_AGENTS = ['claude', 'codex', 'cursor'] as const;
 export type LoopAgent = typeof LOOP_AGENTS[number];
 
-/** What a loop stores and can be saved with. Exactly one of `agent` or `toolCommand`. */
+/** Saving a Session loop with this target creates a new Session named after the loop. */
+export const LOOP_NEW_SESSION = 'new';
+
+/**
+ * What a loop stores and can be saved with. Exactly one target (`projectId` or
+ * `orchestrationSessionId`), and exactly one of `agent` or `toolCommand`.
+ */
 export interface LoopInput {
   /** Present when updating an existing loop. */
   id?: string;
   name: string;
-  projectId: number;
+  /** A project loop: each run is a new Pane in this project. */
+  projectId?: number;
+  /**
+   * A Session loop: each run sends `initialInput` to this Session's agent. Saving
+   * also accepts a Session name or `LOOP_NEW_SESSION`, and stores the Session's id.
+   */
+  orchestrationSessionId?: string;
   /** Five-field cron, in the host machine's local time zone. */
   cron: string;
   agent?: LoopAgent;
-  /** A custom command to run instead of a built-in agent, as `--tool-command`. */
+  /** A custom command to run instead of a built-in agent, as `--tool-command`. Project loops only. */
   toolCommand?: string;
-  /** Sent to the agent or command as its first input. */
+  /** Typed into the agent or command after it starts; a Session loop's message to its agent. */
   initialInput?: string;
-  /** Worktree and branch name template; defaults to `loop-<name>`. */
+  /** Worktree and branch name template; defaults to `loop-<name>`. Project loops only. */
   worktreeTemplate?: string;
   enabled: boolean;
 }
@@ -33,9 +46,10 @@ export interface LoopInput {
 export type LoopRunTrigger = 'schedule' | 'manual';
 
 /**
- * `started`: the run's Pane was created (whether its agent is still working is
- * read from the Pane). `failed`: Pane creation failed. `skipped`: the slot came
- * and went while Pane was not running.
+ * `started`: the run's Pane was created, or a Session loop's prompt was sent
+ * (whether the agent is still working is read from the Pane). `failed`: the
+ * Pane could not be created or the Session could not be reached. `skipped`:
+ * the slot came and went while Pane was not running.
  */
 export type LoopRunStatus = 'started' | 'failed' | 'skipped';
 
@@ -47,7 +61,7 @@ export interface LoopRun {
   trigger: LoopRunTrigger;
   status: LoopRunStatus;
   error: string | null;
-  /** The run's Pane, once created. */
+  /** The run's Pane, once created. Null for a Session loop's runs, which go to the loop's Session. */
   sessionId: string | null;
 }
 
@@ -70,7 +84,8 @@ export type LoopSchedulePreview =
 export const loopInputSchema = boundary.object({
   id: boundary.optional(boundary.string),
   name: boundary.string,
-  projectId: boundary.number,
+  projectId: boundary.optional(boundary.number),
+  orchestrationSessionId: boundary.optional(boundary.string),
   cron: boundary.string,
   agent: boundary.optional(boundary.enumeration(...LOOP_AGENTS)),
   toolCommand: boundary.optional(boundary.string),

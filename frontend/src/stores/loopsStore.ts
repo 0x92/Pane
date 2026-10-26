@@ -4,6 +4,7 @@ import type { Loop, LoopInput, LoopRun } from '../../../shared/types/loop';
 import { API } from '../utils/api';
 import { showActionError } from './errorStore';
 import { useNavigationStore } from './navigationStore';
+import { useOrchestrationSessionStore } from './orchestrationSessionStore';
 import { useSessionStore } from './sessionStore';
 
 export interface LoopRunRef {
@@ -122,6 +123,12 @@ export function openLoopRun(sessionId: string): void {
   navigation.setSidebarNavigationScope('repositories');
   void useSessionStore.getState().setActiveSession(sessionId);
   navigation.navigateToSessions();
+}
+
+/** Opens a Session loop's Session, as a pane:// Session link does. */
+export function openLoopSession(sessionId: string): void {
+  useNavigationStore.getState().navigateToPaneChat();
+  void useOrchestrationSessionStore.getState().select({ sessionId }).catch(() => undefined);
 }
 
 const REFRESH_INTERVAL_MS = 60_000;

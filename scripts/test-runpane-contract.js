@@ -3649,7 +3649,7 @@ print(json.dumps({"calls": calls, "codes": codes, "errors": errors}))
   assert.deepStrictEqual(python.errors, [true, true, true]);
 }
 
-/** Both wrappers send the same loops requests: --repo resolves through the daemon, update merges onto the saved loop. */
+/** Both wrappers send the same loops requests: --repo resolves through the daemon, --session passes through, update merges onto the saved loop. */
 async function checkLoopsParity() {
   const { decodeBoundary } = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'boundaryDecoder.js'));
   const daemonClient = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'daemonClient.js'));
@@ -3662,6 +3662,20 @@ async function checkLoopsParity() {
   const failedRun = { id: 'run-1', loopId: 'loop-1', slotAtMs: 3, trigger: 'manual', status: 'failed', error: 'boom', sessionId: null };
   const warnedRun = { ...failedRun, id: 'run-2', status: 'started', error: 'Stopped at the trust prompt.', sessionId: 'pane-2' };
   const repoList = { ok: true, repo: { id: 7, name: 'Pane', path: '/repo', active: true, sessionCount: 0 }, panes: [] };
+  const sessionLoop = {
+    id: 'loop-2', name: 'triage', orchestrationSessionId: '__orchestration_session_a', cron: '0 9 * * *', agent: 'claude', initialInput: 'Triage',
+    enabled: true, createdAtMs: 1, nextRunAtMs: 2, scheduleText: 'Every day at 09:00', runs: [],
+  };
+  const sessionRun = { ...failedRun, id: 'run-3', loopId: 'loop-2', status: 'started', error: null };
+  const sessionList = {
+    ok: true,
+    sessions: [{
+      id: '__orchestration_session_a', name: 'Inbox', agent: 'claude', internalSessionId: 'owner',
+      panelIds: { claude: 'claude-panel', codex: 'codex-panel', cursor: 'cursor-panel' },
+      goal: '', context: '', decisions: [], blockers: [], nextAction: '', evidence: [], outputs: [], associations: [],
+      activity: [], revision: 1, createdAt: '2026-10-06T03:00:00Z', updatedAt: '2026-10-06T03:00:00Z',
+    }],
+  };
   const scripted = [
     repoList, { ok: true, loop },
     { ok: true, loops: [loop] }, { ok: true, loop: { ...loop, cron: '0 4 * * *' } },
@@ -3672,6 +3686,11 @@ async function checkLoopsParity() {
     { ok: true, deleted: 'loop-1' },
     { ok: true, loops: [{ ...loop, runs: [warnedRun] }] }, { ok: true, repos: [repoList.repo] },
     { ok: true, loop: { ...loop, runs: [warnedRun] } },
+    { ok: true, loop: sessionLoop },
+    { ok: true, loops: [loop] }, { ok: true, loop: sessionLoop },
+    { ok: true, loops: [sessionLoop] },
+    { ok: true, loops: [sessionLoop] }, sessionList,
+    { ok: true, loop: { ...sessionLoop, runs: [sessionRun] } }, sessionList,
     { throws: 'No loop has id loop-9. Nothing was changed.' },
   ];
   const argvs = [
@@ -3685,6 +3704,12 @@ async function checkLoopsParity() {
     // Plain text: a run started with a warning needs attention.
     ['loops', 'list'],
     ['loops', 'run', '--loop', 'loop-1', '--yes'],
+    // Session loops: --session passes through, and replaces the repo on update.
+    ['loops', 'create', '--session', 'new', '--name', 'triage', '--cron', '0 9 * * *', '--agent', 'claude', '--prompt', 'Triage', '--yes', '--json'],
+    ['loops', 'update', '--loop', 'loop-1', '--session', 'Inbox', '--yes', '--json'],
+    ['loops', 'list', '--json'],
+    ['loops', 'list'],
+    ['loops', 'run', '--loop', 'loop-2', '--yes'],
   ];
   const handlers = {
     'loops create': localControl.runLoopsSave,
@@ -3715,12 +3740,13 @@ async function checkLoopsParity() {
     await assert.rejects(localControl.runLoopsRun(parseRunpaneArgs(['loops', 'run', '--loop', 'loop-9', '--yes'])), /No loop has id loop-9/);
     await assert.rejects(localControl.runLoopsSave(parseRunpaneArgs(['loops', 'create', '--repo', 'active', '--name', 'x', '--cron', '0 3 * * *', '--agent', 'claude', '--tool-command', 'x'])), /takes either --agent or --tool-command, not both/);
     await assert.rejects(localControl.runLoopsSave(parseRunpaneArgs(['loops', 'create', '--repo', 'active', '--name', 'x', '--cron', '0 3 * * *', '--agent', 'opencode'])), /Loops run claude, codex, cursor/);
+    await assert.rejects(localControl.runLoopsSave(parseRunpaneArgs(['loops', 'create', '--repo', 'active', '--session', 'new', '--name', 'x', '--cron', '0 3 * * *', '--agent', 'claude'])), /takes either --repo or --session, not both/);
   } finally {
     daemonClient.invokeDaemon = originalInvokeDaemon;
     console.log = originalConsoleLog;
   }
 
-  assert.deepStrictEqual(codes, [0, 0, 0, 1, 0, 0, 0, 0, 0]);
+  assert.deepStrictEqual(codes, [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   assert.deepStrictEqual(calls, [
     { channel: 'runpane:panes:list', args: [{ repo: 'active' }] },
     { channel: 'runpane:loops:save', args: [{ name: 'nightly', projectId: 7, cron: '0 3 * * *', agent: 'claude', initialInput: 'Sweep', enabled: true }] },
@@ -3735,6 +3761,14 @@ async function checkLoopsParity() {
     { channel: 'runpane:loops:list', args: [] },
     { channel: 'runpane:repos:list', args: [] },
     { channel: 'runpane:loops:run-now', args: [{ loopId: 'loop-1' }] },
+    { channel: 'runpane:loops:save', args: [{ name: 'triage', orchestrationSessionId: 'new', cron: '0 9 * * *', agent: 'claude', initialInput: 'Triage', enabled: true }] },
+    { channel: 'runpane:loops:list', args: [] },
+    { channel: 'runpane:loops:save', args: [{ id: 'loop-1', name: 'nightly', orchestrationSessionId: 'Inbox', cron: '0 3 * * *', agent: 'claude', initialInput: 'Sweep', enabled: true }] },
+    { channel: 'runpane:loops:list', args: [] },
+    { channel: 'runpane:loops:list', args: [] },
+    { channel: 'runpane:sessions:list', args: [] },
+    { channel: 'runpane:loops:run-now', args: [{ loopId: 'loop-2' }] },
+    { channel: 'runpane:sessions:list', args: [] },
     { channel: 'runpane:loops:run-now', args: [{ loopId: 'loop-9' }] },
   ]);
 
@@ -3768,6 +3802,7 @@ with contextlib.redirect_stdout(stdout):
         ["loops", "run", "--loop", "loop-9", "--yes"],
         ["loops", "create", "--repo", "active", "--name", "x", "--cron", "0 3 * * *", "--agent", "claude", "--tool-command", "x"],
         ["loops", "create", "--repo", "active", "--name", "x", "--cron", "0 3 * * *", "--agent", "opencode"],
+        ["loops", "create", "--repo", "active", "--session", "new", "--name", "x", "--cron", "0 3 * * *", "--agent", "claude"],
     ):
         try:
             parsed = parse_args(argv)
@@ -3781,10 +3816,15 @@ print(json.dumps({"calls": calls, "codes": codes, "errors": errors, "stdout": st
   // Both wrappers print the same --json bytes.
   assert.strictEqual(python.stdout, lines.map((line) => `${line}\n`).join(''));
   assert.match(python.errors[0], /No loop has id loop-9/);
-  assert.match(lines.at(-2), /^nightly \(loop-1\) · Pane · Every day at 03:00 · next run .+ · last needs attention /);
-  assert.strictEqual(lines.at(-1), 'Started a run of nightly in Pane pane-2; it needs attention: Stopped at the trust prompt.');
+  assert.match(lines[7], /^nightly \(loop-1\) · Pane · Every day at 03:00 · next run .+ · last needs attention /);
+  assert.strictEqual(lines[8], 'Started a run of nightly in Pane pane-2; it needs attention: Stopped at the trust prompt.');
+  // A Session loop's JSON carries orchestrationSessionId and no projectId, after the required fields.
+  assert.strictEqual(lines[11], '{\n  "ok": true,\n  "loops": [\n    {\n      "id": "loop-2",\n      "name": "triage",\n      "cron": "0 9 * * *",\n      "enabled": true,\n      "createdAtMs": 1,\n      "nextRunAtMs": 2,\n      "scheduleText": "Every day at 09:00",\n      "runs": [],\n      "orchestrationSessionId": "__orchestration_session_a",\n      "agent": "claude",\n      "initialInput": "Triage"\n    }\n  ]\n}');
+  assert.match(lines[12], /^triage \(loop-2\) · Session Inbox · Every day at 09:00 · next run /);
+  assert.strictEqual(lines[13], 'Sent a run of triage to Session Inbox.');
   assert.match(python.errors[1], /takes either --agent or --tool-command, not both/);
   assert.match(python.errors[2], /Loops run claude, codex, cursor/);
+  assert.match(python.errors[3], /takes either --repo or --session, not both/);
 }
 
 /** `sessions overview` carries both a Pane's worker report (#839) and the Session's named locks (#834). */
