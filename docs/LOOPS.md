@@ -11,8 +11,8 @@ A loop is a cron schedule plus the same request `runpane panes create` takes:
   (`--tool-command`, such as `agent-farm run <task>`)
 - an optional prompt sent when the run starts (`--prompt <text>`, or
   `--prompt-file <path>` to read it from a file; `-` reads stdin)
-- a worktree and branch name template (`--worktree-name`), `loop-<name>` by
-  default. Each run adds its date and time, such as
+- a worktree and branch name template (`--worktree-name`, CLI and MCP only),
+  `loop-<name>` by default. Each run adds its date and time, such as
   `loop-nightly-bug-sweep-20261024-0300`.
 
 ## When to use a loop
@@ -30,7 +30,8 @@ Open **Loops** in the sidebar, under Home and Pane Chat. The Loops page lists
 every loop across your projects. Select one to see its schedule, next run, the
 strip of its last 10 runs and a table of those runs. **+ New** and **Edit** open
 a side drawer where you pick the project, what runs (Claude, Codex, Cursor or a
-command), and the schedule.
+command), and the schedule. Each run's branch is named after the loop, as
+above.
 
 The schedule works like Google Calendar's Repeat field. Pick **Hourly**,
 **Daily**, **Every weekday (Monday to Friday)**, **Weekly** (choose the days),

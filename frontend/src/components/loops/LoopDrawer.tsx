@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { LOOP_NAME_MAX_LENGTH, loopSlug, type Loop, type LoopAgent, type LoopInput, type LoopSchedulePreview } from '../../../../shared/types/loop';
+import { LOOP_NAME_MAX_LENGTH, type Loop, type LoopAgent, type LoopInput, type LoopSchedulePreview } from '../../../../shared/types/loop';
 import { useLoopsStore } from '../../stores/loopsStore';
 import { API } from '../../utils/api';
 import { cn } from '../../utils/cn';
@@ -36,7 +36,6 @@ interface LoopForm {
   toolCommand: string;
   initialInput: string;
   schedule: LoopSchedule;
-  worktreeTemplate: string;
 }
 
 function formFrom(loop: Loop | undefined): LoopForm {
@@ -47,7 +46,6 @@ function formFrom(loop: Loop | undefined): LoopForm {
     toolCommand: loop?.toolCommand ?? '',
     initialInput: loop?.initialInput ?? '',
     schedule: scheduleFromCron(loop?.cron ?? '0 3 * * *'),
-    worktreeTemplate: loop?.worktreeTemplate ?? '',
   };
 }
 
@@ -111,7 +109,8 @@ function LoopDrawerForm({ loop, onClose }: { loop: Loop | undefined; onClose: ()
     if (form.runner === 'command') input.toolCommand = form.toolCommand.trim();
     else input.agent = form.runner;
     if (form.initialInput.trim()) input.initialInput = form.initialInput.trim();
-    if (form.worktreeTemplate.trim()) input.worktreeTemplate = form.worktreeTemplate.trim();
+    // The branch template is set from the CLI or MCP only; saving keeps it.
+    if (loop?.worktreeTemplate) input.worktreeTemplate = loop.worktreeTemplate;
     const failure = await save(input);
     setBusy(false);
     if (failure) setError(failure);
@@ -295,16 +294,6 @@ function LoopDrawerForm({ loop, onClose }: { loop: Loop | undefined; onClose: ()
             )}
           </div>
         </div>
-
-        <Input
-          label="Branch template"
-          value={form.worktreeTemplate}
-          onChange={event => update({ worktreeTemplate: event.target.value })}
-          placeholder={loopSlug(`loop-${form.name}`)}
-          helperText="Each run gets a new worktree from the project's default branch."
-          className="font-mono text-sm"
-          fullWidth
-        />
 
         <div className="flex gap-2 rounded-md border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-xs text-text-primary">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-status-warning" aria-hidden="true" />
