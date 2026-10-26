@@ -280,14 +280,15 @@ export async function installElectronApiMock(page: Page, options: ElectronApiMoc
       if (fields.length !== 5) return { ok: false, error: 'A cron has five fields' };
       const [minute, hour, , , weekday] = fields;
       if (!/^\d+$/.test(minute)) return { ok: false, error: 'Loops run at most once an hour' };
-      const at = (h: string) => `${h.padStart(2, '0')}:${minute.padStart(2, '0')}`;
-      const days = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+      // Main's wording (`describeSchedule`): "Daily at 3:00 AM".
+      const at = (h: string) => `${Number(h) % 12 || 12}:${minute.padStart(2, '0')} ${Number(h) < 12 ? 'AM' : 'PM'}`;
+      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const step = /^\*\/(\d+)$/.exec(hour);
-      const scheduleText = hour === '*' ? 'Every hour'
+      const scheduleText = hour === '*' ? 'Hourly, on the hour'
         : step ? `Every ${step[1]} hours`
-        : weekday === '1-5' ? `Weekdays at ${at(hour)}`
-        : weekday !== '*' ? `${days[Number(weekday) % 7] ?? `Days ${weekday}`} at ${at(hour)}`
-        : `Every day at ${at(hour)}`;
+        : weekday === '1-5' ? `Every weekday (Monday to Friday) at ${at(hour)}`
+        : weekday !== '*' ? `Weekly on ${days[Number(weekday) % 7] ?? weekday} at ${at(hour)}`
+        : `Daily at ${at(hour)}`;
       // Daily shapes repeat at their time each day; hourly ones on the hour.
       const next = new Date();
       next.setSeconds(0, 0);

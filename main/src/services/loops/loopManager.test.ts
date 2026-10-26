@@ -79,7 +79,7 @@ describe('LoopManager.save', () => {
   it('shows the schedule and the next run', async () => {
     const { manager } = setup();
     const loop = await manager.save(nightly);
-    expect(loop).toMatchObject({ scheduleText: 'Every day at 03:00', nextRunAtMs: utc('2026-10-24T07:00:00Z'), runs: [] });
+    expect(loop).toMatchObject({ scheduleText: 'Daily at 3:00 AM', nextRunAtMs: utc('2026-10-24T07:00:00Z'), runs: [] });
   });
 });
 
@@ -109,7 +109,7 @@ describe('LoopManager Session loops', () => {
     const { manager, preparedSessions } = setup();
     const loop = await manager.save(standup);
     expect(preparedSessions).toEqual([{ target: 'new', name: 'Morning standup', agent: 'codex' }]);
-    expect(loop).toMatchObject({ orchestrationSessionId: 'session-new', scheduleText: 'Weekdays at 09:00' });
+    expect(loop).toMatchObject({ orchestrationSessionId: 'session-new', scheduleText: 'Every weekday (Monday to Friday) at 9:00 AM' });
     expect(loop.projectId).toBeUndefined();
     expect(loop.worktreeTemplate).toBeUndefined();
   });

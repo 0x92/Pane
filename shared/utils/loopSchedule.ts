@@ -1,3 +1,8 @@
+/**
+ * A loop's cron as the form's picker shows it, and the one sentence every
+ * surface (the form, the Loops page, `runpane loops`) uses for a schedule.
+ */
+
 /** How often a loop repeats, as the form's picker shows it. */
 export type LoopRepeat = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'custom';
 

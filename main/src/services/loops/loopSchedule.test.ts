@@ -14,12 +14,15 @@ describe('previewLoopSchedule', () => {
       const preview = previewLoopSchedule(cron, now);
       return preview.ok ? preview.scheduleText : preview.error;
     };
-    expect(text('0 3 * * *')).toBe('Every day at 03:00');
-    expect(text('30 9 * * 1')).toBe('Mondays at 09:30');
-    expect(text('0 9 * * 1-5')).toBe('Weekdays at 09:00');
-    expect(text('0 * * * *')).toBe('Every hour');
+    // The picker's words, as the form, the Loops page and `runpane loops` all show them.
+    expect(text('0 3 * * *')).toBe('Daily at 3:00 AM');
+    expect(text('30 9 * * 1')).toBe('Weekly on Monday at 9:30 AM');
+    expect(text('0 8 * * 0,6')).toBe('Weekly on Sat, Sun at 8:00 AM');
+    expect(text('30 9 * * 1-5')).toBe('Every weekday (Monday to Friday) at 9:30 AM');
+    expect(text('15 16 1 * *')).toBe('Monthly on day 1 at 4:15 PM');
+    expect(text('0 * * * *')).toBe('Hourly, on the hour');
     expect(text('0 */6 * * *')).toBe('Every 6 hours');
-    expect(text('15 4 1 * *')).toBe('Cron 15 4 1 * *');
+    expect(text('0 9 1 * 1')).toBe('Cron 0 9 1 * 1');
   });
 
   it('gives the next run in local time', () => {
@@ -41,7 +44,7 @@ describe('previewLoopSchedule', () => {
     const preview = previewLoopSchedule('0 * * * *', utc('2026-03-08T05:30:00Z'));
     expect(preview).toEqual({
       ok: true,
-      scheduleText: 'Every hour',
+      scheduleText: 'Hourly, on the hour',
       nextRunAtMs: utc('2026-03-08T06:00:00Z'),
       nextRunsAtMs: [utc('2026-03-08T06:00:00Z'), utc('2026-03-08T07:00:00Z'), utc('2026-03-08T07:00:00Z')],
     });

@@ -145,7 +145,8 @@ function LoopDetail({ loop, projectName }: { loop: Loop; projectName: string }) 
                 <span className="truncate">{formatRunTime(view.run.slotAtMs, true)}</span>
               </span>
               <span role="cell" className="truncate text-text-secondary">{describeRun(view)}</span>
-              <span role="cell" className={cn('truncate text-xs', view.outcome === 'warning' ? 'text-status-warning' : 'font-mono text-text-secondary')}>
+              {/* Only a branch name is code; warnings and errors read as text. */}
+              <span role="cell" className={cn('truncate text-xs', view.outcome === 'warning' ? 'text-status-warning' : 'text-text-secondary', !runWarning(view) && view.branch && 'font-mono')}>
                 {runWarning(view) ?? view.branch ?? view.run.error ?? ''}
               </span>
               <span role="cell" className="flex w-16 justify-end">

@@ -9461,7 +9461,7 @@ describe('runpane loops', () => {
     const registry = createRegistry(services);
 
     await expect(registry.invoke('runpane:loops:save', [{ name: 'Nightly', projectId: 1, cron: '0 3 * * *', agent: 'claude', enabled: true }]))
-      .resolves.toMatchObject({ ok: true, loop: { name: 'Nightly', scheduleText: 'Every day at 03:00' } });
+      .resolves.toMatchObject({ ok: true, loop: { name: 'Nightly', scheduleText: 'Daily at 3:00 AM' } });
     const [loop] = services.loopManager?.list() ?? [];
     if (!loop) throw new Error('runpane:loops:save stored no loop');
 

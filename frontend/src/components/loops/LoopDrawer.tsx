@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from '../ui/Textarea';
 import { SegmentedControl } from '../settings/SettingsControls';
 import { formatRunTime } from './loopRunView';
-import { WEEKDAYS, cronFromSchedule, describeSchedule, repeatLabel, scheduleFromCron, type LoopRepeat, type LoopSchedule } from './loopSchedule';
+import { WEEKDAYS, cronFromSchedule, describeSchedule, repeatLabel, scheduleFromCron, type LoopRepeat, type LoopSchedule } from '../../../../shared/utils/loopSchedule';
 import { useProjectList } from './useProjectList';
 
 type Runner = LoopAgent | 'command';

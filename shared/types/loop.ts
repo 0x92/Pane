@@ -70,7 +70,7 @@ export interface Loop extends Omit<LoopInput, 'id'> {
   createdAtMs: number;
   /** Computed from the cron on read; null while paused. */
   nextRunAtMs: number | null;
-  /** The schedule as a sentence, such as "Every day at 03:00". */
+  /** The schedule as a sentence, such as "Daily at 3:00 AM" (`describeSchedule`, or the cron when no picker mode matches). */
   scheduleText: string;
   /** Newest first: the last `LOOP_KEPT_RUNS`, plus older runs whose Pane was kept for its unsaved work. */
   runs: LoopRun[];

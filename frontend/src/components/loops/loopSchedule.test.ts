@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cronFromSchedule, describeSchedule, scheduleFromCron } from './loopSchedule';
+import { cronFromSchedule, describeSchedule, scheduleFromCron } from '../../../../shared/utils/loopSchedule';
 
 describe('scheduleFromCron', () => {
   it('opens each picker shape in its mode', () => {

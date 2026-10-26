@@ -67,7 +67,7 @@ test('creates, runs, pauses, edits and deletes a loop', async ({ page }) => {
   await expect(drawer).toBeHidden();
 
   const detail = page.getByTestId('loop-detail');
-  await expect(page.getByTestId('loop-list-item')).toContainText('Every day at 09:30 · no runs yet');
+  await expect(page.getByTestId('loop-list-item')).toContainText('Daily at 9:30 AM · no runs yet');
   await expect(detail.getByRole('heading', { name: 'Nightly bug sweep' })).toBeVisible();
   await expect(detail.getByText('agent-farm run greenfield/bug-sweep --since 24h')).toBeVisible();
   await expect(page.getByTestId('loops-nav')).toContainText('1');
@@ -194,7 +194,7 @@ const seededLoops: Loop[] = [
     enabled: true,
     createdAtMs: sweepSlots[5],
     nextRunAtMs: today3am.getTime() + DAY,
-    scheduleText: 'Every day at 03:00',
+    scheduleText: 'Daily at 3:00 AM',
     runs: [
       { id: 'r24', loopId: 'loop-sweep', slotAtMs: manualRunAtMs, trigger: 'manual', status: 'started', error: null, sessionId: 'sweep-run-24' },
       { id: 'r23', loopId: 'loop-sweep', slotAtMs: sweepSlots[1], trigger: 'schedule', status: 'failed', error: 'git worktree add failed: branch already exists', sessionId: null },
@@ -214,7 +214,7 @@ const seededLoops: Loop[] = [
     enabled: true,
     createdAtMs: sweepSlots[5],
     nextRunAtMs: today3am.getTime() + 3 * DAY + 6 * HOUR,
-    scheduleText: 'Mondays at 09:00',
+    scheduleText: 'Weekly on Monday at 9:00 AM',
     runs: [],
   },
   {
@@ -227,7 +227,7 @@ const seededLoops: Loop[] = [
     enabled: false,
     createdAtMs: sweepSlots[5],
     nextRunAtMs: null,
-    scheduleText: 'Fridays at 16:00',
+    scheduleText: 'Weekly on Friday at 4:00 PM',
     runs: [],
   },
 ];

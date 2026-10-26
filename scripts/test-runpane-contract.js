@@ -3657,14 +3657,14 @@ async function checkLoopsParity() {
   const localControl = require(path.join(rootDir, 'packages', 'runpane', 'dist', 'localControl.js'));
   const loop = {
     id: 'loop-1', name: 'nightly', projectId: 7, cron: '0 3 * * *', agent: 'claude', initialInput: 'Sweep',
-    enabled: true, createdAtMs: 1, nextRunAtMs: 2, scheduleText: 'Every day at 03:00', runs: [],
+    enabled: true, createdAtMs: 1, nextRunAtMs: 2, scheduleText: 'Daily at 3:00 AM', runs: [],
   };
   const failedRun = { id: 'run-1', loopId: 'loop-1', slotAtMs: 3, trigger: 'manual', status: 'failed', error: 'boom', sessionId: null };
   const warnedRun = { ...failedRun, id: 'run-2', status: 'started', error: 'Stopped at the trust prompt.', sessionId: 'pane-2' };
   const repoList = { ok: true, repo: { id: 7, name: 'Pane', path: '/repo', active: true, sessionCount: 0 }, panes: [] };
   const sessionLoop = {
     id: 'loop-2', name: 'triage', orchestrationSessionId: '__orchestration_session_a', cron: '0 9 * * *', agent: 'claude', initialInput: 'Triage',
-    enabled: true, createdAtMs: 1, nextRunAtMs: 2, scheduleText: 'Every day at 09:00', runs: [],
+    enabled: true, createdAtMs: 1, nextRunAtMs: 2, scheduleText: 'Daily at 9:00 AM', runs: [],
   };
   const sessionRun = { ...failedRun, id: 'run-3', loopId: 'loop-2', status: 'started', error: null };
   const sessionList = {
@@ -3679,7 +3679,7 @@ async function checkLoopsParity() {
   const scripted = [
     repoList, { ok: true, loop },
     { ok: true, loops: [loop] }, { ok: true, loop: { ...loop, cron: '0 4 * * *' } },
-    repoList, { ok: true, scheduleText: 'Every day at 03:00', nextRunAtMs: 2 },
+    repoList, { ok: true, scheduleText: 'Daily at 3:00 AM', nextRunAtMs: 2 },
     { ok: true, loop: { ...loop, runs: [failedRun] } },
     { ok: true, loop: { ...loop, enabled: false, nextRunAtMs: null } },
     { ok: true, loop },
@@ -3816,11 +3816,11 @@ print(json.dumps({"calls": calls, "codes": codes, "errors": errors, "stdout": st
   // Both wrappers print the same --json bytes.
   assert.strictEqual(python.stdout, lines.map((line) => `${line}\n`).join(''));
   assert.match(python.errors[0], /No loop has id loop-9/);
-  assert.match(lines[7], /^nightly \(loop-1\) · Pane · Every day at 03:00 · next run .+ · last needs attention /);
+  assert.match(lines[7], /^nightly \(loop-1\) · Pane · Daily at 3:00 AM · next run .+ · last needs attention /);
   assert.strictEqual(lines[8], 'Started a run of nightly in Pane pane-2; it needs attention: Stopped at the trust prompt.');
   // A Session loop's JSON carries orchestrationSessionId and no projectId, after the required fields.
-  assert.strictEqual(lines[11], '{\n  "ok": true,\n  "loops": [\n    {\n      "id": "loop-2",\n      "name": "triage",\n      "cron": "0 9 * * *",\n      "enabled": true,\n      "createdAtMs": 1,\n      "nextRunAtMs": 2,\n      "scheduleText": "Every day at 09:00",\n      "runs": [],\n      "orchestrationSessionId": "__orchestration_session_a",\n      "agent": "claude",\n      "initialInput": "Triage"\n    }\n  ]\n}');
-  assert.match(lines[12], /^triage \(loop-2\) · Session Inbox · Every day at 09:00 · next run /);
+  assert.strictEqual(lines[11], '{\n  "ok": true,\n  "loops": [\n    {\n      "id": "loop-2",\n      "name": "triage",\n      "cron": "0 9 * * *",\n      "enabled": true,\n      "createdAtMs": 1,\n      "nextRunAtMs": 2,\n      "scheduleText": "Daily at 9:00 AM",\n      "runs": [],\n      "orchestrationSessionId": "__orchestration_session_a",\n      "agent": "claude",\n      "initialInput": "Triage"\n    }\n  ]\n}');
+  assert.match(lines[12], /^triage \(loop-2\) · Session Inbox · Daily at 9:00 AM · next run /);
   assert.strictEqual(lines[13], 'Sent a run of triage to Session Inbox.');
   assert.match(python.errors[1], /takes either --agent or --tool-command, not both/);
   assert.match(python.errors[2], /Loops run claude, codex, cursor/);

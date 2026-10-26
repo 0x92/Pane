@@ -4,6 +4,7 @@ import {
   LOOP_MISS_GRACE_MS,
   type LoopSchedulePreview,
 } from '../../../../shared/types/loop';
+import { describeSchedule, scheduleFromCron } from '../../../../shared/utils/loopSchedule';
 
 /**
  * When a loop runs. Cron in the host's local time zone, read by croner, which
@@ -13,8 +14,6 @@ import {
 
 /** Enough upcoming runs to catch a pair closer than an hour in any weekly pattern. */
 const MIN_INTERVAL_SAMPLE = 24;
-
-const WEEKDAYS = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
 
 function parseCron(cron: string): Cron {
   return new Cron(cron.trim(), { paused: true, mode: '5-part' });
@@ -64,26 +63,16 @@ export function previewLoopSchedule(cron: string, nowMs: number): LoopSchedulePr
   };
 }
 
-/** The preset shapes as sentences; anything else as its cron. */
+/** A picker shape in the picker's words; an hourly step or anything else as its cron. */
 function describeCron(cron: string): string {
   const text = cron.trim().replace(/\s+/g, ' ');
+  const picked = describeSchedule(scheduleFromCron(text));
+  if (picked) return picked;
   const [minute, hour, day, month, weekday] = text.split(' ');
-  const isNumber = (value: string) => /^\d{1,2}$/.test(value);
-  const pad = (value: string) => value.padStart(2, '0');
-
-  if (day === '*' && month === '*' && weekday === '*' && minute === '0') {
-    if (hour === '*') return 'Every hour';
-    const step = /^\*\/(\d{1,2})$/.exec(hour);
-    if (step) return step[1] === '1' ? 'Every hour' : `Every ${step[1]} hours`;
+  const step = /^\*\/(\d{1,2})$/.exec(hour ?? '');
+  if (step && minute === '0' && day === '*' && month === '*' && weekday === '*') {
+    return step[1] === '1' ? 'Hourly, on the hour' : `Every ${step[1]} hours`;
   }
-
-  if (day === '*' && month === '*' && isNumber(minute) && isNumber(hour)) {
-    const time = `${pad(hour)}:${pad(minute)}`;
-    if (weekday === '*') return `Every day at ${time}`;
-    if (weekday === '1-5') return `Weekdays at ${time}`;
-    if (isNumber(weekday) && Number(weekday) <= 7) return `${WEEKDAYS[Number(weekday) % 7]} at ${time}`;
-  }
-
   return `Cron ${text}`;
 }
 

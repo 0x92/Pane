@@ -57,10 +57,10 @@ const panelResumeResultSchema = boundary.object({
     ok: boundary.boolean,
     blocked: failureSchema,
     reason: boundary.optional(boundary.object({ code: boundary.string, message: boundary.string })),
-    state: boundary.object({ running: boundary.boolean, agentType: boundary.optional(boundary.string) }),
+    state: boundary.object({ running: boundary.boolean, agentType: boundary.optional(boundary.string), activityStatus: boundary.optional(boundary.string) }),
   })),
 });
-const panelSubmitResultSchema = boundary.object({ ok: boundary.boolean, blocked: failureSchema });
+const panelSubmitResultSchema = boundary.object({ ok: boundary.boolean });
 
 type LoopResponse<T> = { success: true; data?: T } | { success: false; error: string };
 
@@ -174,37 +174,45 @@ export interface SessionRunContext {
   launchedCommand: (panelId: string) => string | undefined;
 }
 
-const SESSION_NOT_SENT = 'When the run came due, the Session\'s agent';
+/** The words a launch error printed, as `panels wait` quotes them. */
+const PRINTED = /It printed: "(.+?)"\./;
 
 /**
  * A Session loop run: start the Session's agent tab if it is stopped, as
  * `runpane panels resume --wait-ready`, then send the prompt as `panels submit`.
  * No Pane, worktree or branch is created. The prompt goes only to a live agent
- * of the Session's kind that was launched without permission prompts; anything
- * else is reported, never typed into.
+ * of the Session's kind that was launched without permission prompts: ready,
+ * or working on a turn (it queues the prompt). Anything else is reported in
+ * the app's words, never typed into.
  */
 async function sendSessionLoopRun(commandRegistry: PaneCommandRegistry, context: SessionRunContext, sessionId: string, prompt: string): Promise<{ sessionId: null; warning?: string }> {
   const session = await getLoopSession(commandRegistry, sessionId);
   if (session.archived) throw new Error(`Session ${session.name} is archived, so the prompt was not sent. Restore it, or point the loop at another Session.`);
   const panelId = session.panelIds[session.agent];
   const { readiness } = decodeBoundary(await commandRegistry.invoke('runpane:panels:resume', [{ panelId, waitReady: true }]), panelResumeResultSchema);
-  const notSent = (why: string, next: string) => ({ sessionId: null, warning: `${SESSION_NOT_SENT} ${why}, so the loop's prompt was not sent. ${next}` });
-  if (readiness?.blocked) return notSent('was stopped at a prompt', 'Open the Session and answer it.');
-  // Ready, or busy: an agent working on a turn queues the prompt after it.
-  const agentUp = readiness !== undefined && readiness.state.running && readiness.state.agentType === session.agent
-    && (readiness.ok || readiness.reason?.code === 'agent-not-ready');
-  if (!agentUp) {
-    const detail = readiness?.reason?.message ? ` (${readiness.reason.message.trim()})` : '';
-    return notSent(`was not running${detail}`, 'Open the Session, check its agent\'s launch command and start it, then run the loop again.');
+  // Each warning is read later, so it says what was true when this run started.
+  const held = (what: string, next: string) => ({ sessionId: null, warning: `When this run started, ${what}. The loop's prompt was not sent. ${next}` });
+  if (readiness?.blocked) return held('the Session\'s agent was stopped at a prompt', 'Open the Session and answer it.');
+  const ofKind = readiness !== undefined && readiness.state.running && readiness.state.agentType === session.agent;
+  const working = readiness?.reason?.code === 'agent-not-ready' && readiness.state.activityStatus === 'active';
+  if (!ofKind || !(readiness.ok || working)) {
+    if (readiness?.reason?.code === 'command-exited') {
+      const printed = PRINTED.exec(readiness.reason.message)?.[1];
+      return held(`the Session's agent was not running: its launch command exited back to the shell${printed ? `, printing "${printed}"` : ''}`,
+        'Open the Session, fix the agent\'s launch command, and start the agent again in its tab; the next run sends the prompt.');
+    }
+    return held('no ready agent was found in the Session\'s tab; its launch may have failed and left a plain shell',
+      'Open the Session and start the agent again in its tab; the next run sends the prompt.');
   }
   // The flags a loop adds reach a running agent only when it starts again; Pane never restarts it under you.
   const launched = context.launchedCommand(panelId);
   if (launched !== undefined && missingUnattendedFlags(launched, session.agent).length > 0) {
-    return notSent('was still running from before it was set to skip permission prompts', 'Exit the agent in the Session\'s tab and start it again (it resumes the same conversation), then run the loop again.');
+    return held('the Session\'s agent was still running from before it was set to skip permission prompts',
+      'Exit the agent in the Session\'s tab and start it again (it resumes the same conversation); the next run sends the prompt.');
   }
   const submitted = decodeBoundary(await commandRegistry.invoke('runpane:panels:submit', [{ panelId, input: prompt, source: 'agent', expectReport: false }]), panelSubmitResultSchema);
   if (submitted.ok) return { sessionId: null };
-  return { sessionId: null, warning: `Pane could not confirm the Session's agent got the prompt. ${submitted.blocked?.message ?? ''}`.trim() };
+  return { sessionId: null, warning: 'When this run started, Pane could not confirm the Session\'s agent got the prompt. Open the Session to check whether it arrived.' };
 }
 
 /** The flags a built-in agent template launches with, such as `--yolo`. */
@@ -259,7 +267,12 @@ function unattendedLaunchCommand(sessionName: string, command: string, agent: Lo
  * the agent's program. A running agent picks them up when it next starts;
  * until then runs are held (see `sendSessionLoopRun`).
  */
-export async function prepareLoopSession(commandRegistry: PaneCommandRegistry, target: string, loop: { name: string; agent: LoopAgent }): Promise<string> {
+export async function prepareLoopSession(
+  commandRegistry: PaneCommandRegistry,
+  target: string,
+  loop: { name: string; agent: LoopAgent },
+  trustClaudeSessionFolder: (sessionId: string) => Promise<void>,
+): Promise<string> {
   // An empty launch command means the template, whatever the app's default Session command is.
   const session = target === LOOP_NEW_SESSION
     ? decodeBoundary(await commandRegistry.invoke('runpane:sessions:create', [{ name: loop.name, agent: loop.agent, launchCommand: '' }]), loopSessionSchema).session
@@ -270,14 +283,16 @@ export async function prepareLoopSession(commandRegistry: PaneCommandRegistry, t
   // Changing the agent drops the old command, so the new agent launches its template.
   if (session.agent !== loop.agent) {
     await commandRegistry.invoke('runpane:sessions:update', [{ selector: { sessionId: session.id }, input: { agent: loop.agent, source: 'user' } }]);
-    return session.id;
+  } else if (session.launchCommand?.trim()) {
+    const command = session.launchCommand.trim();
+    const unattended = unattendedLaunchCommand(session.name, command, loop.agent);
+    if (unattended !== command) {
+      await commandRegistry.invoke('runpane:sessions:update', [{ selector: { sessionId: session.id }, input: { launchCommand: unattended, source: 'user' } }]);
+    }
   }
-  const command = session.launchCommand?.trim();
-  if (!command) return session.id;
-  const unattended = unattendedLaunchCommand(session.name, command, loop.agent);
-  if (unattended !== command) {
-    await commandRegistry.invoke('runpane:sessions:update', [{ selector: { sessionId: session.id }, input: { launchCommand: unattended, source: 'user' } }]);
-  }
+  // Claude asks whether to trust every folder it has not seen, and a Session's
+  // folder is Pane's own, with no project code. Cursor's template trusts with --trust.
+  if (loop.agent === 'claude') await trustClaudeSessionFolder(session.id);
   return session.id;
 }
 

@@ -1459,16 +1459,16 @@ export class TerminalPanelManager extends EventEmitter {
     return relaunch;
   }
 
-  /**
-   * Run the panel's saved launch command again in its live shell, once
-   * hasLaunchCommandExited says the last one exited. It resolves the way a
-   * fresh start does, so an agent relaunches with its resume command.
-   */
   /** The command line Pane last launched in a live panel's shell; undefined when none is live. */
   launchedCommand(panelId: string): string | undefined {
     return this.terminals.get(panelId)?.launchedCommand;
   }
 
+  /**
+   * Run the panel's saved launch command again in its live shell, once
+   * hasLaunchCommandExited says the last one exited. It resolves the way a
+   * fresh start does, so an agent relaunches with its resume command.
+   */
   async relaunchInShell(panelId: string): Promise<void> {
     const terminal = this.terminals.get(panelId);
     const panel = panelManager.getPanel(panelId);

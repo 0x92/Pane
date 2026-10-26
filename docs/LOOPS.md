@@ -121,6 +121,11 @@ runpane loops create --session new --name morning-standup --cron "0 9 * * 1-5" \
   `env` or variable prefix, or `&&`, `;`, a pipe or a redirect) is refused
   when you save. Picking an agent other than the Session's switches the
   Session to it.
+- **The Session's folder is trusted.** For a Claude loop, saving marks the
+  Session's own folder (Pane's Session directory, never a project) as trusted
+  in Claude's project trust setting, the record its "trust this folder" prompt
+  writes, so the first run is not stopped there. Codex can still stop at its
+  update menu when a new version is out; answer it once in the Session.
 - **Restart a running agent once.** An agent that is already running keeps
   the flags it started with. Until you exit it and start it again (it resumes
   the same conversation), runs are held and show as **needs attention**. Pane
@@ -135,8 +140,9 @@ runpane loops create --session new --name morning-standup --cron "0 9 * * 1-5" \
 ## Rules
 
 - **Schedule.** One five-field cron expression, in the local time zone of the
-  machine running Pane. `0 3 * * *` is every day at 03:00; `0 9 * * 1` is
-  Mondays at 09:00.
+  machine running Pane. `0 3 * * *` is "Daily at 3:00 AM"; `0 9 * * 1` is
+  "Weekly on Monday at 9:00 AM". The app and `runpane loops` describe a
+  schedule in these same words.
 - **At most once an hour.** Saving rejects a cron whose runs fall less than 60
   minutes apart.
 - **Pane must be running.** Runs start only while Pane is running on that
@@ -161,10 +167,11 @@ runpane loops create --session new --name morning-standup --cron "0 9 * * 1-5" \
   `cmd //c echo hi > loop.txt` works. With `cmd /c`, Git Bash turns `/c` into a
   path, so cmd starts interactively and the run hangs.
 - **Folder trust.** Claude and Codex ask whether to trust a folder they have
-  not seen, and each run is a new worktree. A run stopped at that prompt shows
+  not seen, and each project run is a new worktree. A run stopped at that prompt shows
   as **needs attention**. Open the run and answer it, or open the project
   folder in the agent once and trust it so later runs start on their own. Pane
-  never answers a trust prompt for you.
+  never answers a trust prompt for you, and only pre-trusts a Session loop's own
+  folder (see [Session loops](#session-loops)).
 - **Run now.** `runpane loops run` starts a run immediately, even while the
   loop is paused. The schedule stays the same, and the run counts toward the 10
   kept runs.
